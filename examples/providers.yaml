@@ -1,0 +1,82 @@
+# ============================================================
+# CodeRouter providers.yaml — sample
+#
+# Default behavior:
+#   - allow_paid: false  (paid providers are skipped unless ALLOW_PAID=true)
+#   - default_profile: 'default'
+#
+# To use:
+#   1. cp examples/providers.yaml ~/.coderouter/providers.yaml
+#   2. Edit base_url / model to match your local stack
+#   3. cp examples/.env.example .env  and fill in OPENROUTER_API_KEY if you want fallback
+#   4. coderouter serve
+# ============================================================
+
+allow_paid: false
+default_profile: default
+
+providers:
+  # --- Tier 1: local (free, top priority) ---
+  - name: local-llamacpp
+    kind: openai_compat
+    base_url: http://localhost:8080/v1     # llama.cpp --api-server default
+    model: qwen2.5-coder
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false              # set to true once your local model is reliable
+
+  - name: local-ollama
+    kind: openai_compat
+    base_url: http://localhost:11434/v1    # ollama serve
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+
+  # --- Tier 2: free cloud (escape hatch) ---
+  - name: openrouter-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen-2.5-coder-32b-instruct:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false                # OpenRouter free tier — no charge
+    timeout_s: 30
+    capabilities:
+      chat: true
+      streaming: true
+
+  # --- Tier 3: paid cloud (last resort, blocked unless ALLOW_PAID=true) ---
+  - name: openrouter-claude
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+profiles:
+  - name: default
+    providers:
+      - local-llamacpp
+      - openrouter-free
+      - openrouter-claude
+
+  - name: coding
+    providers:
+      - local-llamacpp
+      - openrouter-free
+      - openrouter-claude
+
+  - name: free-only
+    providers:
+      - local-llamacpp
+      - openrouter-free

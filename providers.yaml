@@ -1,0 +1,142 @@
+# ============================================================
+# CodeRouter providers.yaml — zephel01's local rig (2026-04-20)
+#
+# Model selection notes:
+#   - qwen2.5-coder:14b    : rock-solid coder, best tool-call reliability
+#   - qwen3.6:35b-a3b-q4_K_M : MoE, A3B active — strong but thinks
+#   - qwen2.5:1.5b / gemma3:1b : non-thinking, truly fast for the `fast` profile
+#   - gemma4:e4b           : alt small model
+#
+# Thinking-mode lesson (from 2026-04-19 session):
+#   We tried to suppress Qwen3.x thinking two ways and both failed:
+#     1) extra_body: {think: false} — Ollama's OpenAI-compat layer drops it.
+#     2) append_system_prompt: "/no_think" — qwen3.5:4b's alignment explicitly
+#        identifies /no_think as prompt injection and refuses to honor it.
+#   So qwen3.x lives only in profiles where thinking is acceptable (coding),
+#   and the `fast` profile uses genuinely non-thinking small models.
+# ============================================================
+
+allow_paid: false
+default_profile: default
+
+providers:
+  # --- Tier 1: local coding (primary) ---
+  - name: ollama-qwen-coder-14b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:14b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true               # qwen2.5-coder is reliable enough to claim this
+
+  # --- Tier 1 alt: bigger / newer ---
+  # qwen3.x IS thinking-capable and we can't reliably turn it off
+  # (see header note). Use it only where thinking is acceptable.
+  - name: ollama-qwen36-moe
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6:35b-a3b-q4_K_M
+    paid: false
+    timeout_s: 180           # thinks before answering — give it room
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # --- Tier 1 fast: genuinely non-thinking small models ---
+  - name: ollama-qwen25-15b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:1.5b
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+
+  - name: ollama-gemma3-1b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma3:1b
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+
+  - name: ollama-gemma4-e4b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:e4b
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+
+  # --- Tier 2: free cloud (escape hatch) ---
+  # OpenRouter free tier — needs OPENROUTER_API_KEY in env
+  - name: openrouter-free-coder
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen-2.5-coder-32b-instruct:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # --- Tier 3: paid cloud (blocked unless ALLOW_PAID=true) ---
+  - name: openrouter-claude
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    paid: true
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+profiles:
+  # General — coding-grade model first, escalate
+  - name: default
+    providers:
+      - ollama-qwen-coder-14b
+      - openrouter-free-coder
+      - openrouter-claude
+
+  # Heavy coding — solid coder first, MoE as backup, then cloud
+  - name: coding
+    providers:
+      - ollama-qwen-coder-14b
+      - ollama-qwen36-moe
+      - openrouter-free-coder
+      - openrouter-claude
+
+  # Snappy responses — strictly non-thinking small models
+  - name: fast
+    providers:
+      - ollama-qwen25-15b
+      - ollama-gemma3-1b
+      - ollama-gemma4-e4b
+      - openrouter-free-coder
+
+  # Thinking allowed — for hard problems where reasoning tokens are welcome
+  - name: think
+    providers:
+      - ollama-qwen36-moe
+      - openrouter-claude
+
+  # Pure free — never even tries paid (ignores ALLOW_PAID setting just by chain)
+  - name: free-only
+    providers:
+      - ollama-qwen-coder-14b
+      - ollama-qwen25-15b
+      - openrouter-free-coder
