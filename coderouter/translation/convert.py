@@ -33,6 +33,7 @@ from coderouter.translation.anthropic import (
     AnthropicStreamEvent,
     AnthropicUsage,
 )
+from coderouter.translation.tool_repair import repair_tool_calls_in_text
 
 # ============================================================
 # Anthropic → internal (OpenAI-shaped)
@@ -297,8 +298,20 @@ def _tool_call_to_tool_use_block(tool_call: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def to_anthropic_response(resp: ChatResponse) -> AnthropicResponse:
-    """Internal ChatResponse (OpenAI-shaped) → Anthropic response."""
+def to_anthropic_response(
+    resp: ChatResponse,
+    *,
+    allowed_tool_names: list[str] | None = None,
+) -> AnthropicResponse:
+    """Internal ChatResponse (OpenAI-shaped) → Anthropic response.
+
+    `allowed_tool_names`, when provided, enables v0.3 tool-call repair:
+    if the upstream model did not populate `tool_calls` but wrote a tool
+    invocation into the text body (a failure mode of qwen2.5-coder and
+    similar), the JSON is extracted and surfaced as a structured
+    `tool_use` content block. Without the allow-list, repair falls back
+    to accepting any tool-shaped JSON (higher false-positive risk).
+    """
     choices = resp.choices or []
     message: dict[str, Any] = {}
     finish_reason: str | None = None
@@ -306,9 +319,22 @@ def to_anthropic_response(resp: ChatResponse) -> AnthropicResponse:
         message = choices[0].get("message", {}) or {}
         finish_reason = choices[0].get("finish_reason")
 
+    tool_calls = list(message.get("tool_calls") or [])
+    text = message.get("content")
+
+    # v0.3 tool-call repair: only attempt if the model didn't already emit
+    # structured tool_calls (otherwise the text is just narration).
+    if not tool_calls and isinstance(text, str) and text:
+        cleaned, extracted = repair_tool_calls_in_text(text, allowed_tool_names)
+        if extracted:
+            text = cleaned
+            tool_calls = extracted
+            # Re-map finish_reason so Anthropic reports stop_reason=tool_use.
+            if finish_reason in (None, "stop"):
+                finish_reason = "tool_calls"
+
     content_blocks: list[dict[str, Any]] = []
 
-    text = message.get("content")
     if isinstance(text, str) and text:
         content_blocks.append({"type": "text", "text": text})
     elif isinstance(text, list):
@@ -319,7 +345,7 @@ def to_anthropic_response(resp: ChatResponse) -> AnthropicResponse:
                     {"type": "text", "text": part.get("text", "")}
                 )
 
-    for tc in message.get("tool_calls") or []:
+    for tc in tool_calls:
         content_blocks.append(_tool_call_to_tool_use_block(tc))
 
     # Empty response guard: Anthropic requires at least one content block.
@@ -367,7 +393,20 @@ class _StreamState:
         self.tool_call_block_map: dict[int, int] = {}
         self.message_id: str = f"msg_{uuid.uuid4().hex[:24]}"
         self.model: str = "unknown"
-        self.output_tokens: int = 0
+        # Usage accounting (v0.3-C). The translator's job is to make sure
+        # that message_delta.usage carries SOMETHING meaningful even when
+        # the upstream provider doesn't emit a usage chunk (Ollama without
+        # stream_options.include_usage, older OpenAI-compat servers, etc.).
+        # Policy:
+        #   - If we receive chunk.usage.completion_tokens from upstream,
+        #     it is authoritative and we use it verbatim.
+        #   - Otherwise we fall back to a char-based estimate accumulated
+        #     from the actual bytes we emitted (text_delta + input_json).
+        # prompt_tokens is pure passthrough from upstream — without it we
+        # report 0 rather than guess (the ingress doesn't see the prompt).
+        self.upstream_output_tokens: int | None = None
+        self.upstream_input_tokens: int | None = None
+        self.emitted_chars: int = 0
 
 
 def _event(type_: str, data: dict[str, Any]) -> AnthropicStreamEvent:
@@ -463,6 +502,7 @@ def _handle_delta(
                 },
             )
         )
+        state.emitted_chars += len(text)
 
     # Tool calls
     for tc in delta.get("tool_calls") or []:
@@ -481,6 +521,10 @@ def _handle_delta(
                     tool_name=fn.get("name", ""),
                 )
             )
+            # Function name itself is generated output even though it rides on
+            # content_block_start, not on a delta. Include it in the estimate
+            # so we don't under-count tool-heavy responses.
+            state.emitted_chars += len(fn.get("name", "") or "")
         block_idx = state.tool_call_block_map[tc_index]
         if args_fragment:
             out.append(
@@ -495,8 +539,40 @@ def _handle_delta(
                     },
                 )
             )
+            state.emitted_chars += len(args_fragment)
 
     return out
+
+
+def _estimate_output_tokens(state: _StreamState) -> int:
+    """Fallback output-token estimate when upstream didn't report usage.
+
+    Uses the well-known ~4 chars/token heuristic (accurate enough for
+    cost-tracking clients; not a billing source of truth). Always returns
+    at least 1 if anything was emitted, so a tiny non-empty response
+    doesn't get reported as 0 tokens.
+    """
+    if state.emitted_chars <= 0:
+        return 0
+    return max(1, (state.emitted_chars + 3) // 4)
+
+
+def _finalize_usage(state: _StreamState) -> dict[str, int]:
+    """Build the usage dict for the terminal message_delta event.
+
+    Always includes output_tokens. Also includes input_tokens when the
+    upstream provided prompt_tokens (otherwise we don't fabricate it —
+    the translator has no access to the prompt).
+    """
+    if state.upstream_output_tokens is not None:
+        out_tokens = state.upstream_output_tokens
+    else:
+        out_tokens = _estimate_output_tokens(state)
+
+    usage: dict[str, int] = {"output_tokens": out_tokens}
+    if state.upstream_input_tokens is not None:
+        usage["input_tokens"] = state.upstream_input_tokens
+    return usage
 
 
 async def stream_chat_to_anthropic_events(
@@ -531,10 +607,18 @@ async def stream_chat_to_anthropic_events(
             if choice.get("finish_reason"):
                 stop_reason_openai = choice["finish_reason"]
 
-        # Some providers put usage on the last chunk.
+        # Some providers put usage on the last chunk (OpenAI with
+        # stream_options.include_usage=true, and anything that honors that
+        # flag). When it's there, trust it — otherwise we fall back to the
+        # char-based estimate computed inside _handle_delta.
         usage = getattr(chunk, "usage", None)
-        if isinstance(usage, dict) and usage.get("completion_tokens"):
-            state.output_tokens = int(usage["completion_tokens"])
+        if isinstance(usage, dict):
+            ct = usage.get("completion_tokens")
+            if isinstance(ct, int) and ct >= 0:
+                state.upstream_output_tokens = ct
+            pt = usage.get("prompt_tokens")
+            if isinstance(pt, int) and pt >= 0:
+                state.upstream_input_tokens = pt
 
     # Terminator sequence
     for evt in _close_current_block(state):
@@ -545,7 +629,120 @@ async def stream_chat_to_anthropic_events(
         "message_delta",
         {
             "delta": {"stop_reason": stop_reason, "stop_sequence": None},
-            "usage": {"output_tokens": state.output_tokens},
+            "usage": _finalize_usage(state),
+        },
+    )
+    yield _event("message_stop", {})
+
+
+# ============================================================
+# Synthesize Anthropic stream events from a non-stream response
+# ============================================================
+#
+# v0.3-D: for tool-using turns we cannot repair mid-stream (the partial
+# JSON hasn't been closed yet), so the ingress downgrades the request to
+# non-streaming internally, runs repair on the completed response, and
+# replays it as a spec-compliant Anthropic SSE event sequence via the
+# function below.
+#
+# From the client's point of view the stream is just slower to start —
+# all content arrives in a single burst — but every event is wire-legal
+# and tool_use blocks are structurally correct (not emitted as text that
+# the client has to post-parse).
+
+
+async def synthesize_anthropic_stream_from_response(
+    resp: AnthropicResponse,
+) -> AsyncIterator[AnthropicStreamEvent]:
+    """Replay a finalized AnthropicResponse as a sequence of stream events.
+
+    Emits, in order:
+        message_start
+        for each content block:
+            content_block_start
+            content_block_delta  (text_delta OR input_json_delta)
+            content_block_stop
+        message_delta   (carries stop_reason + usage)
+        message_stop
+
+    For tool_use blocks the input dict is serialized and delivered as a
+    single input_json_delta — Anthropic's wire spec permits the entire
+    JSON to ride on one partial_json fragment.
+    """
+    yield _event(
+        "message_start",
+        {
+            "message": {
+                "id": resp.id,
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": resp.model,
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {
+                    "input_tokens": resp.usage.input_tokens,
+                    "output_tokens": 0,
+                },
+            }
+        },
+    )
+
+    for idx, block in enumerate(resp.content):
+        btype = block.get("type")
+        if btype == "text":
+            yield _event(
+                "content_block_start",
+                {
+                    "index": idx,
+                    "content_block": {"type": "text", "text": ""},
+                },
+            )
+            text = block.get("text", "") or ""
+            if text:
+                yield _event(
+                    "content_block_delta",
+                    {
+                        "index": idx,
+                        "delta": {"type": "text_delta", "text": text},
+                    },
+                )
+            yield _event("content_block_stop", {"index": idx})
+        elif btype == "tool_use":
+            yield _event(
+                "content_block_start",
+                {
+                    "index": idx,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "input": {},
+                    },
+                },
+            )
+            input_json = json.dumps(block.get("input", {}), ensure_ascii=False)
+            yield _event(
+                "content_block_delta",
+                {
+                    "index": idx,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": input_json,
+                    },
+                },
+            )
+            yield _event("content_block_stop", {"index": idx})
+        # Unknown block types are skipped silently (v0.3 scope).
+
+    yield _event(
+        "message_delta",
+        {
+            "delta": {
+                "stop_reason": resp.stop_reason or "end_turn",
+                "stop_sequence": None,
+            },
+            "usage": {"output_tokens": resp.usage.output_tokens},
         },
     )
     yield _event("message_stop", {})

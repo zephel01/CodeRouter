@@ -281,3 +281,77 @@ async def test_extra_body_is_merged_and_overridable(
     assert captured["temperature"] == 0.2  # request won
     assert captured["model"] == "qwen2.5-coder:14b"  # never overridden
     assert captured["stream"] is False  # never overridden
+
+
+@pytest.mark.asyncio
+async def test_streaming_payload_requests_upstream_usage(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v0.3-C: streaming calls must include stream_options.include_usage=true
+    so the translator can pass real token counts through to the client.
+    Providers that don't honor the flag ignore it — it's always safe to send.
+    """
+    sse_body = (
+        'data: {"id":"x","object":"chat.completion.chunk","created":0,'
+        '"model":"qwen2.5-coder:14b","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n'
+        'data: [DONE]\n\n'
+    )
+    captured_body: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=sse_body.encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    httpx_mock.add_callback(
+        _capture, url="http://localhost:11434/v1/chat/completions", method="POST"
+    )
+
+    adapter = OpenAICompatAdapter(_provider())
+    req = _request()
+    req.stream = True
+    chunks = [c async for c in adapter.stream(req)]
+    assert chunks  # got at least one chunk back
+
+    assert captured_body.get("stream") is True
+    assert captured_body.get("stream_options") == {"include_usage": True}
+
+
+@pytest.mark.asyncio
+async def test_streaming_respects_extra_body_stream_options_override(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """If a provider sets its own stream_options via extra_body (e.g. to
+    disable include_usage for a misbehaving upstream), the adapter must
+    NOT clobber it. `setdefault` is the contract.
+    """
+    sse_body = 'data: [DONE]\n\n'
+    captured_body: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured_body.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            content=sse_body.encode("utf-8"),
+            headers={"content-type": "text/event-stream"},
+        )
+
+    httpx_mock.add_callback(
+        _capture, url="http://localhost:11434/v1/chat/completions", method="POST"
+    )
+
+    provider = ProviderConfig(
+        name="picky-provider",
+        base_url="http://localhost:11434/v1",
+        model="qwen2.5-coder:14b",
+        extra_body={"stream_options": {"include_usage": False}},
+    )
+    adapter = OpenAICompatAdapter(provider)
+    req = ChatRequest(messages=[Message(role="user", content="hi")])
+    req.stream = True
+    _ = [c async for c in adapter.stream(req)]
+
+    assert captured_body["stream_options"] == {"include_usage": False}

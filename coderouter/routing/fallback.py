@@ -35,6 +35,21 @@ class NoProvidersAvailableError(Exception):
         super().__init__(f"profile={profile!r}: all providers failed: {detail}")
 
 
+class MidStreamError(Exception):
+    """Raised when a provider fails AFTER it has already emitted at least
+    one chunk to the client. Fallback is not attempted (the client has
+    received partial content, so switching providers would corrupt the
+    stream). Callers should surface this as a terminal error event.
+    """
+
+    def __init__(self, provider: str, original: AdapterError) -> None:
+        self.provider = provider
+        self.original = original
+        super().__init__(
+            f"provider {provider!r} failed mid-stream: {original}"
+        )
+
+
 class FallbackEngine:
     def __init__(self, config: CodeRouterConfig) -> None:
         self.config = config
@@ -143,8 +158,23 @@ class FallbackEngine:
                 extra={"provider": adapter.name, "stream": True},
             )
             yield first
-            async for chunk in stream_iter:
-                yield chunk
+            # Mid-stream fallback guard: once the first byte is out the door,
+            # any subsequent adapter exception is terminal — we cannot fall
+            # back without risking duplicate / interleaved content reaching
+            # the client.
+            try:
+                async for chunk in stream_iter:
+                    yield chunk
+            except AdapterError as exc:
+                logger.warning(
+                    "provider-failed-midstream",
+                    extra={
+                        "provider": adapter.name,
+                        "status": exc.status_code,
+                        "retryable": exc.retryable,
+                    },
+                )
+                raise MidStreamError(adapter.name, exc) from exc
             return
 
         raise NoProvidersAvailableError(

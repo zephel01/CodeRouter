@@ -95,6 +95,13 @@ class OpenAICompatAdapter(BaseAdapter):
             value = getattr(request, field, None)
             if value is not None:
                 body[field] = value
+        if stream:
+            # Request a terminal usage chunk. Providers that honor this
+            # (OpenAI, OpenRouter, Ollama >=0.x) will send one extra chunk
+            # with `choices: []` and `usage: {prompt_tokens, completion_tokens, ...}`
+            # at the end of the stream. Providers that don't understand the
+            # flag silently ignore it — so it's safe to always send.
+            body.setdefault("stream_options", {"include_usage": True})
         return body
 
     def _url(self) -> str:

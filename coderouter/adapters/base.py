@@ -20,7 +20,10 @@ class Message(BaseModel):
     model_config = ConfigDict(extra="allow")
 
     role: Literal["system", "user", "assistant", "tool"]
-    content: str | list[dict[str, Any]]
+    # OpenAI spec allows content: null on assistant messages that carry only
+    # tool_calls. Anthropic → OpenAI translation also produces this when an
+    # assistant turn has only tool_use blocks (no text).
+    content: str | list[dict[str, Any]] | None = None
     name: str | None = None
     tool_call_id: str | None = None
     tool_calls: list[dict[str, Any]] | None = None

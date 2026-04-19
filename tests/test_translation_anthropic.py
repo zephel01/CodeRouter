@@ -17,11 +17,13 @@ import pytest
 from coderouter.adapters.base import ChatResponse, StreamChunk
 from coderouter.translation import (
     AnthropicRequest,
+    AnthropicResponse,
+    AnthropicUsage,
     stream_chat_to_anthropic_events,
+    synthesize_anthropic_stream_from_response,
     to_anthropic_response,
     to_chat_request,
 )
-
 
 # ============================================================
 # Request translation
@@ -127,6 +129,62 @@ def test_tool_use_and_tool_result_round_trip() -> None:
     tool_msg = chat.messages[2]
     assert tool_msg.tool_call_id == "toolu_abc"
     assert tool_msg.content == "Sunny, 20C"
+
+
+def test_assistant_message_with_only_tool_use_has_null_content() -> None:
+    """Regression for v0.3-E crash:
+
+    When an assistant turn in the Anthropic request carries ONLY a tool_use
+    block (no text), translation must produce an OpenAI assistant message
+    with `content: null` and a populated `tool_calls`. Previously the
+    internal `Message` model rejected None — which blew up the route with
+    pydantic ValidationError the moment Claude Code's multi-turn history
+    included a tool_use-only assistant turn.
+    """
+    req = AnthropicRequest.model_validate(
+        {
+            "model": "claude",
+            "max_tokens": 100,
+            "messages": [
+                {"role": "user", "content": "run pwd"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "toolu_xyz",
+                            "name": "Bash",
+                            "input": {"command": "pwd"},
+                        }
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_xyz",
+                            "content": "/home/user",
+                        }
+                    ],
+                },
+            ],
+        }
+    )
+    chat = to_chat_request(req)
+    # Sequence: user → assistant(tool_use) → tool(result)
+    assert [m.role for m in chat.messages] == ["user", "assistant", "tool"]
+    assistant = chat.messages[1]
+    assert assistant.content is None
+    assert assistant.tool_calls is not None
+    assert assistant.tool_calls[0]["function"]["name"] == "Bash"
+
+    # Serialization with exclude_none must strip the None content so upstream
+    # sees `{"role": "assistant", "tool_calls": [...]}` — the OpenAI-compatible
+    # shape every upstream accepts.
+    dumped = assistant.model_dump(exclude_none=True)
+    assert "content" not in dumped
+    assert "tool_calls" in dumped
 
 
 def test_tools_array_is_converted() -> None:
@@ -314,6 +372,70 @@ def test_empty_response_emits_empty_text_block() -> None:
         _make_chat_response(content="", tool_calls=None, finish_reason="stop")
     )
     assert resp.content == [{"type": "text", "text": ""}]
+
+
+# ============================================================
+# Tool-call repair (v0.3)
+# ============================================================
+
+
+def test_repair_extracts_bare_json_tool_call_from_text() -> None:
+    """qwen2.5-coder failure mode: tool call written as JSON in message body."""
+    chat_resp = _make_chat_response(
+        content=(
+            "Let me check the current working directory.\n"
+            '{"name": "Bash", "arguments": {"command": "pwd"}}'
+        ),
+        tool_calls=None,
+        finish_reason="stop",
+    )
+    resp = to_anthropic_response(chat_resp, allowed_tool_names=["Bash", "Read"])
+    # Preamble survives as text, tool call is extracted as tool_use block.
+    types = [b["type"] for b in resp.content]
+    assert types == ["text", "tool_use"]
+    assert resp.content[0]["text"] == "Let me check the current working directory."
+    assert resp.content[1]["name"] == "Bash"
+    assert resp.content[1]["input"] == {"command": "pwd"}
+    # stop_reason should be remapped from "end_turn" → "tool_use".
+    assert resp.stop_reason == "tool_use"
+
+
+def test_repair_skipped_when_structured_tool_calls_already_present() -> None:
+    """If the model did its job and populated tool_calls, don't double-extract."""
+    chat_resp = _make_chat_response(
+        content='Describing the call: {"name": "Bash", "arguments": {}}',
+        tool_calls=[
+            {
+                "id": "call_1",
+                "type": "function",
+                "function": {"name": "Bash", "arguments": '{"command": "pwd"}'},
+            }
+        ],
+        finish_reason="tool_calls",
+    )
+    resp = to_anthropic_response(chat_resp, allowed_tool_names=["Bash"])
+    # Structured call wins. The text (including its embedded JSON) is
+    # preserved as-is — we don't attempt repair on narration that coexists
+    # with a real tool_calls entry.
+    types = [b["type"] for b in resp.content]
+    assert types == ["text", "tool_use"]
+    assert '"name": "Bash"' in resp.content[0]["text"]
+    assert resp.content[1]["input"] == {"command": "pwd"}
+
+
+def test_repair_respects_allowlist() -> None:
+    """A JSON object whose name isn't in the request's tool list stays as text."""
+    chat_resp = _make_chat_response(
+        content='{"name": "NukeEverything", "arguments": {}}',
+        tool_calls=None,
+        finish_reason="stop",
+    )
+    resp = to_anthropic_response(chat_resp, allowed_tool_names=["Bash", "Read"])
+    # Not repaired — falls through to text content block unchanged.
+    assert resp.content == [
+        {"type": "text", "text": '{"name": "NukeEverything", "arguments": {}}'}
+    ]
+    assert resp.stop_reason == "end_turn"
 
 
 # ============================================================
@@ -545,3 +667,289 @@ async def test_stream_multiple_tool_calls_get_distinct_block_indices() -> None:
     assert [s.data["index"] for s in starts] == [0, 1]
     assert starts[0].data["content_block"]["name"] == "f1"
     assert starts[1].data["content_block"]["name"] == "f2"
+
+
+# ----------------------------------------------------------------------
+# v0.3-C: Usage aggregation in streaming translation
+# ----------------------------------------------------------------------
+
+
+def _message_delta_usage(events: list[Any]) -> dict[str, Any]:
+    md = next(e for e in events if e.type == "message_delta")
+    return md.data["usage"]
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_uses_upstream_completion_tokens_when_present() -> None:
+    """If the provider sends a usage chunk (stream_options.include_usage), the
+    translator must use it verbatim — it's authoritative and typically
+    matches what the client will be billed for.
+    """
+    chunks = [
+        _chunk(choices=[{"index": 0, "delta": {"content": "Hi"}}]),
+        _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+        # Terminal usage-only chunk (OpenAI include_usage pattern).
+        _chunk(
+            choices=[],
+            usage={
+                "prompt_tokens": 42,
+                "completion_tokens": 7,
+                "total_tokens": 49,
+            },
+        ),
+    ]
+    events = [
+        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
+    ]
+    usage = _message_delta_usage(events)
+    assert usage["output_tokens"] == 7
+    assert usage["input_tokens"] == 42
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_estimates_when_upstream_silent() -> None:
+    """Without an upstream usage chunk (e.g. Ollama ignoring include_usage),
+    the translator must fall back to a char-based estimate so clients don't
+    see 0 tokens for a clearly non-empty response.
+    """
+    # 4 + 6 + 7 = 17 chars → (17+3)//4 = 5 tokens
+    chunks = [
+        _chunk(choices=[{"index": 0, "delta": {"content": "Hell"}}]),
+        _chunk(choices=[{"index": 0, "delta": {"content": "o, wo"}}]),
+        _chunk(choices=[{"index": 0, "delta": {"content": "rld!!!"}}]),
+        _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+    # Chars = 4 + 5 + 6 = 15  -> (15 + 3) // 4 = 4
+    events = [
+        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
+    ]
+    usage = _message_delta_usage(events)
+    assert usage["output_tokens"] == 4
+    # input_tokens is only reported when upstream provides it.
+    assert "input_tokens" not in usage
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_estimate_counts_tool_call_arguments() -> None:
+    """Tool-call JSON arguments are generated output too, so they must be
+    rolled into the estimator. Otherwise tool-heavy responses under-report.
+    """
+    chunks = [
+        _chunk(
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "c1",
+                                "function": {
+                                    "name": "search",
+                                    "arguments": '{"q":"hello world"}',
+                                },
+                            }
+                        ]
+                    },
+                }
+            ]
+        ),
+        _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
+    ]
+    events = [
+        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
+    ]
+    usage = _message_delta_usage(events)
+    # name "search" (6) + arguments '{"q":"hello world"}' (19) = 25 chars
+    # → (25 + 3) // 4 = 7
+    assert usage["output_tokens"] == 7
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_empty_response_reports_zero() -> None:
+    """No content chunks at all → output_tokens must be exactly 0 (not 1).
+    Guards against the `max(1, …)` fallback being too aggressive.
+    """
+    chunks = [
+        _chunk(choices=[{"index": 0, "delta": {"role": "assistant"}}]),
+        _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+    ]
+    events = [
+        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
+    ]
+    usage = _message_delta_usage(events)
+    assert usage["output_tokens"] == 0
+
+
+@pytest.mark.asyncio
+async def test_stream_usage_upstream_wins_over_estimate() -> None:
+    """Even when the translator has emitted many chars, a trailing upstream
+    usage value MUST override the estimate — the provider's own count is
+    always more accurate than our heuristic.
+    """
+    chunks = [
+        _chunk(
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {
+                        "content": "x" * 400  # estimate would be ~100 tokens
+                    },
+                }
+            ]
+        ),
+        _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
+        _chunk(
+            choices=[],
+            usage={"prompt_tokens": 10, "completion_tokens": 3},
+        ),
+    ]
+    events = [
+        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
+    ]
+    usage = _message_delta_usage(events)
+    assert usage["output_tokens"] == 3
+    assert usage["input_tokens"] == 10
+
+
+# ----------------------------------------------------------------------
+# v0.3-D: Synthesize Anthropic stream from finalized response
+# ----------------------------------------------------------------------
+
+
+def _mk_anth_response(
+    content: list[dict[str, Any]],
+    *,
+    stop_reason: str = "end_turn",
+    input_tokens: int = 5,
+    output_tokens: int = 8,
+) -> AnthropicResponse:
+    return AnthropicResponse(
+        id="msg_test",
+        model="qwen-coder",
+        content=content,
+        stop_reason=stop_reason,
+        usage=AnthropicUsage(
+            input_tokens=input_tokens, output_tokens=output_tokens
+        ),
+        coderouter_provider="local",
+    )
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_text_only_response() -> None:
+    """A text-only response must emit the full Anthropic event sequence:
+    message_start, content_block_start, one text_delta, content_block_stop,
+    message_delta (with stop_reason + usage), message_stop.
+    """
+    resp = _mk_anth_response(
+        [{"type": "text", "text": "Hello, world!"}],
+        stop_reason="end_turn",
+        input_tokens=4,
+        output_tokens=4,
+    )
+    events = [
+        e async for e in synthesize_anthropic_stream_from_response(resp)
+    ]
+    types = [e.type for e in events]
+    assert types == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    # message_start carries initial usage with input_tokens + output_tokens=0.
+    start = events[0]
+    assert start.data["message"]["usage"] == {
+        "input_tokens": 4,
+        "output_tokens": 0,
+    }
+    # The single delta has the full text.
+    delta = events[2]
+    assert delta.data["delta"] == {"type": "text_delta", "text": "Hello, world!"}
+    # Final message_delta carries stop_reason and output_tokens.
+    md = events[4]
+    assert md.data["delta"]["stop_reason"] == "end_turn"
+    assert md.data["usage"]["output_tokens"] == 4
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_tool_use_response() -> None:
+    """Tool-use blocks must surface as content_block_start(tool_use) +
+    input_json_delta carrying the JSON-serialized input.
+    """
+    resp = _mk_anth_response(
+        [
+            {
+                "type": "tool_use",
+                "id": "toolu_123",
+                "name": "get_weather",
+                "input": {"location": "Tokyo", "unit": "C"},
+            }
+        ],
+        stop_reason="tool_use",
+    )
+    events = [
+        e async for e in synthesize_anthropic_stream_from_response(resp)
+    ]
+    # Exactly one tool_use block — so one start, one delta, one stop.
+    starts = [e for e in events if e.type == "content_block_start"]
+    assert len(starts) == 1
+    assert starts[0].data["index"] == 0
+    assert starts[0].data["content_block"] == {
+        "type": "tool_use",
+        "id": "toolu_123",
+        "name": "get_weather",
+        "input": {},
+    }
+    deltas = [e for e in events if e.type == "content_block_delta"]
+    assert len(deltas) == 1
+    assert deltas[0].data["delta"]["type"] == "input_json_delta"
+    # The partial_json must decode back to the original input dict.
+    import json as _json
+    assert _json.loads(deltas[0].data["delta"]["partial_json"]) == {
+        "location": "Tokyo",
+        "unit": "C",
+    }
+    md = next(e for e in events if e.type == "message_delta")
+    assert md.data["delta"]["stop_reason"] == "tool_use"
+
+
+@pytest.mark.asyncio
+async def test_synthesize_stream_mixed_text_and_tool_use() -> None:
+    """Text block followed by tool_use block — both must close cleanly
+    with contiguous indices 0, 1.
+    """
+    resp = _mk_anth_response(
+        [
+            {"type": "text", "text": "Let me check."},
+            {
+                "type": "tool_use",
+                "id": "toolu_a",
+                "name": "search",
+                "input": {"q": "x"},
+            },
+        ],
+        stop_reason="tool_use",
+    )
+    events = [
+        e async for e in synthesize_anthropic_stream_from_response(resp)
+    ]
+    types = [e.type for e in events]
+    assert types == [
+        "message_start",
+        "content_block_start",    # text idx 0
+        "content_block_delta",
+        "content_block_stop",
+        "content_block_start",    # tool_use idx 1
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    starts = [e for e in events if e.type == "content_block_start"]
+    assert [s.data["index"] for s in starts] == [0, 1]
+    assert starts[0].data["content_block"]["type"] == "text"
+    assert starts[1].data["content_block"]["type"] == "tool_use"

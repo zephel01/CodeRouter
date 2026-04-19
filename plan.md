@@ -733,21 +733,22 @@ claude-code-local の "数字で見せる" を踏襲。
 
 ## 18. 次のアクション (v0.3 候補、優先度順)
 
-v0.1 / v0.2 は完了（リリース履歴と §7 / §8 を参照）。ここからは Claude Code 実運用に耐えるための品質改善フェーズ。
+v0.1 / v0.2 は完了（リリース履歴と §7 / §8 を参照）。v0.3-A〜D の実装は完了済み（詳細は下の「v0.3 実装状況」節）。
+ここからは Claude Code 実運用に耐えるための品質改善フェーズ。
 
-### 高優先 (v0.3 本命)
+### v0.3 実装状況 (2026-04-20 時点)
 
-1. [ ] **Tool-call repair** — qwen2.5-coder など "tool_calls を text で返してしまう" モデルへの救済。
-   - assistant text content を JSON ブロックの有無で scan
-   - 見つかれば `{name, arguments}` を抜き出して `tool_calls` に引き剥がす
-   - 元 text は削除 or 空欄化（Claude Code の tool_use block に翻訳された時に重複しないように）
-   - ユニットテスト: v0.2 の `test_malformed_tool_call_json_preserved_in_raw` の延長で
-     "text中に完成形 JSON" / "text中に code fence 付き JSON" / "text中に複数 JSON ブロック" の 3 ケース
-2. [ ] **Mid-stream fallback guard** — fallback engine が初バイト送出後の provider 切替を禁止するフラグを持つ。
-   - 切替が必要になった場合は Anthropic wire なら `event: error`、OpenAI wire なら SSE ERROR で閉じる
-   - Claude Code に部分 SSE + 重複コンテンツが届く事故を防ぐ
-3. [ ] **Usage 集計** — `message_delta.usage.output_tokens` を正しく埋める。stream 終端 chunk の `usage` が
-   手元の upstream で取れる場合はそれを、取れない場合は `content_block_delta` 数から近似。
+| ID | 項目 | 状態 | 概要 |
+| --- | --- | --- | --- |
+| v0.3-A | Tool-call repair (non-stream) | ✅ | `translation/tool_repair.py` 新設。balanced-brace scanner + fenced JSON 検出 + allowlist。`to_anthropic_response(..., allowed_tool_names=)` で text 埋め込み JSON を tool_use block に昇格。13 ユニットテスト + 3 連携テスト。 |
+| v0.3-B | Mid-stream fallback guard | ✅ | `MidStreamError` を新設し `FallbackEngine.stream()` が first-byte 送出後の AdapterError をこれで包む。`_anthropic_sse_iterator` が捕まえて `event: error` / `type: api_error` を emit（「どの provider も開始できない」overloaded_error と区別）。2 + 1 テスト追加。 |
+| v0.3-C | Usage 集計 | ✅ | `_StreamState` に emitted_chars 累積 + upstream_input/output_tokens を持たせ、上流 usage が来ればそれを、来なければ `(chars + 3) // 4` 概算を `message_delta.usage.output_tokens` に入れる。OpenAI-compat adapter が `stream_options.include_usage=true` を自動付与（`extra_body` で override 可）。5 + 2 テスト追加。 |
+| v0.3-D | Tool-call repair (streaming) | ✅ | `tools` を宣言した streaming リクエストは内部で `stream=false` に downgrade し、v0.3-A の repair を通してから `synthesize_anthropic_stream_from_response` で spec 準拠の SSE イベントに再構築。tool-less streaming は従来通り real streaming。3 synthesizer テスト + 3 ingress テスト。 |
+| v0.3-E | 実機 Claude Code 再検証 | ✅ | Ollama + qwen2.5-coder:14b + Claude Code で疎通。(a) tool なし text streaming は real path で `usage` 両パス (upstream authoritative / char estimate fallback) を実機確認、(b) tool 付き streaming は downgrade path で `tool_use` block が Claude Code UI に正しく描画、(c) mid-stream guard は unit test でカバー（実機 pkill timing は困難のため optional）。疎通中に `Message.content=None` クラッシュを発見 → `coderouter/adapters/base.py` で型拡張 + regression test 追加。 |
+| v0.3-F | Commit + tag v0.3.0 | ⏳ pending | CHANGELOG 追記済み → commit → `git tag v0.3.0`。|
+
+テスト合計: 87 passed (v0.2 完了時点 54 → v0.3 で +33。v0.3-E 実機疎通中に発見した `Message.content=None` クラッシュの regression test 1 件を含む)。
+ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.2 由来の既知事項）。
 
 ### 中優先 (v0.3.x)
 

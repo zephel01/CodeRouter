@@ -17,7 +17,11 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.config.schemas import CodeRouterConfig
-from coderouter.routing import FallbackEngine, NoProvidersAvailableError
+from coderouter.routing import (
+    FallbackEngine,
+    MidStreamError,
+    NoProvidersAvailableError,
+)
 
 
 class FakeAdapter(BaseAdapter):
@@ -30,12 +34,18 @@ class FakeAdapter(BaseAdapter):
         fail_with: AdapterError | None = None,
         text: str = "ok",
         chunks: list[str] | None = None,
+        fail_after_chunks: int | None = None,
+        midstream_error: AdapterError | None = None,
     ) -> None:
         super().__init__(config)
         self.fail_with = fail_with
         self.text = text
         self.chunks = chunks or [text]
         self.call_count = 0
+        # When set, stream() yields `fail_after_chunks` chunks then raises
+        # `midstream_error` (defaults to a generic retryable AdapterError).
+        self.fail_after_chunks = fail_after_chunks
+        self.midstream_error = midstream_error
 
     async def healthcheck(self) -> bool:
         return self.fail_with is None
@@ -62,7 +72,16 @@ class FakeAdapter(BaseAdapter):
         self.call_count += 1
         if self.fail_with:
             raise self.fail_with
-        for piece in self.chunks:
+        for i, piece in enumerate(self.chunks):
+            if (
+                self.fail_after_chunks is not None
+                and i >= self.fail_after_chunks
+            ):
+                raise self.midstream_error or AdapterError(
+                    "midstream failure",
+                    provider=self.name,
+                    retryable=True,
+                )
             yield StreamChunk(
                 id=f"fake-{self.name}-stream",
                 created=int(time.time()),
@@ -226,4 +245,82 @@ async def test_streaming_falls_back_when_first_errors_immediately(
     req.stream = True
     chunks = [c async for c in engine.stream(req)]
     assert len(chunks) == 1
+    assert fakes["paid-cloud"].call_count == 0
+
+
+# ----------------------------------------------------------------------
+# v0.3-B: Mid-stream fallback guard
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_midstream_failure_raises_midstream_error(
+    basic_config: CodeRouterConfig,
+) -> None:
+    """If the active provider fails AFTER emitting chunks, the engine must
+    NOT fall back — it raises MidStreamError so the caller can surface a
+    terminal error to the client instead of silently switching providers
+    (which would corrupt the partial stream the client has already seen).
+    """
+    fakes = {
+        "local": FakeAdapter(
+            basic_config.provider_by_name("local"),
+            chunks=["hel", "lo", "_never_"],
+            fail_after_chunks=2,
+            midstream_error=AdapterError(
+                "connection reset", provider="local", retryable=True
+            ),
+        ),
+        "free-cloud": FakeAdapter(
+            basic_config.provider_by_name("free-cloud"), chunks=["shouldnt-see"]
+        ),
+        "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
+    }
+    engine = _engine_with(basic_config, fakes)
+    req = _request()
+    req.stream = True
+
+    received: list[Any] = []
+    with pytest.raises(MidStreamError) as exc_info:
+        async for c in engine.stream(req):
+            received.append(c)
+
+    # The client saw exactly the chunks that were emitted before the failure.
+    assert len(received) == 2
+    # The error carries the failing provider name + original AdapterError.
+    assert exc_info.value.provider == "local"
+    assert isinstance(exc_info.value.original, AdapterError)
+    # Fallback did NOT happen — next provider was never called.
+    assert fakes["free-cloud"].call_count == 0
+    assert fakes["paid-cloud"].call_count == 0
+
+
+@pytest.mark.asyncio
+async def test_streaming_initial_error_still_falls_back(
+    basic_config: CodeRouterConfig,
+) -> None:
+    """Sanity check: an error raised BEFORE the first chunk is emitted is
+    still handled by the normal fallback path (it is not a mid-stream error).
+    """
+    fakes = {
+        "local": FakeAdapter(
+            basic_config.provider_by_name("local"),
+            chunks=[],
+            fail_after_chunks=0,  # fails before yielding anything
+            midstream_error=AdapterError(
+                "immediate failure", provider="local", retryable=True
+            ),
+        ),
+        "free-cloud": FakeAdapter(
+            basic_config.provider_by_name("free-cloud"), chunks=["ok"]
+        ),
+        "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
+    }
+    engine = _engine_with(basic_config, fakes)
+    req = _request()
+    req.stream = True
+    chunks = [c async for c in engine.stream(req)]
+    # Fell back cleanly to free-cloud.
+    assert len(chunks) == 1
+    assert fakes["free-cloud"].call_count == 1
     assert fakes["paid-cloud"].call_count == 0
