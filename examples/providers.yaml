@@ -10,47 +10,97 @@
 #   2. Edit base_url / model to match your local stack
 #   3. cp examples/.env.example .env  and fill in OPENROUTER_API_KEY if you want fallback
 #   4. coderouter serve
+#
+# Profiles provided (see the `profiles:` section at the bottom):
+#   - default       generic chain, 7b local → free cloud → (paid if allowed)
+#   - claude-code   tuned for Claude Code (see README "Use it with Claude Code")
+#                   — 7b first for latency, 14b as quality fallback, 14b has
+#                     timeout_s=300 because Claude Code sends 15-20K-token
+#                     system prompts every turn that take ~100s to prefill.
+#   - coding        alias of default, kept for backward compat
+#   - free-only     skips paid tier entirely
 # ============================================================
 
 allow_paid: false
 default_profile: default
 
 providers:
-  # --- Tier 1: local (free, top priority) ---
+  # ------------------------------------------------------------
+  # Tier 1: local (free, top priority)
+  # ------------------------------------------------------------
+
+  # llama.cpp --api-server — fastest if you have a GGUF loaded
   - name: local-llamacpp
     kind: openai_compat
-    base_url: http://localhost:8080/v1     # llama.cpp --api-server default
+    base_url: http://localhost:8080/v1
     model: qwen2.5-coder
     paid: false
     timeout_s: 60
     capabilities:
       chat: true
       streaming: true
-      tools: false              # set to true once your local model is reliable
+      tools: false              # toggle true once your local model is reliable
 
-  - name: local-ollama
+  # Ollama — convenient for trying multiple models
+  # Small & fast (1-2s/turn on M-series for non-Claude-Code traffic,
+  # but tool selection is weak — not recommended as Claude Code's primary).
+  - name: ollama-qwen-coder-1_5b
     kind: openai_compat
-    base_url: http://localhost:11434/v1    # ollama serve
-    model: qwen2.5-coder:7b
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:1.5b
     paid: false
     timeout_s: 60
     capabilities:
       chat: true
       streaming: true
+      tools: false              # 1.5b is below the reliable tool-calling threshold
 
-  # --- Tier 2: free cloud (escape hatch) ---
+  # Balanced default for interactive coding. This is the sweet spot for
+  # Claude Code: tool selection mostly works, prompt eval ~30s on M-series.
+  - name: ollama-qwen-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Highest-quality local option. Timeout bumped to 300s because Claude Code's
+  # system prompt (15-20K tokens) takes ~100s to prefill on 14b even on M3 Max.
+  # Use as a quality fallback when 7b misfires, not as the primary — first-byte
+  # latency is felt by the user.
+  - name: ollama-qwen-coder-14b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:14b
+    paid: false
+    timeout_s: 300
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # Tier 2: free cloud (escape hatch)
+  # ------------------------------------------------------------
   - name: openrouter-free
     kind: openai_compat
     base_url: https://openrouter.ai/api/v1
     model: qwen/qwen-2.5-coder-32b-instruct:free
     api_key_env: OPENROUTER_API_KEY
     paid: false                # OpenRouter free tier — no charge
-    timeout_s: 30
+    timeout_s: 60
     capabilities:
       chat: true
       streaming: true
+      tools: true
 
-  # --- Tier 3: paid cloud (last resort, blocked unless ALLOW_PAID=true) ---
+  # ------------------------------------------------------------
+  # Tier 3: paid cloud (last resort, blocked unless ALLOW_PAID=true)
+  # ------------------------------------------------------------
   - name: openrouter-claude
     kind: openai_compat
     base_url: https://openrouter.ai/api/v1
@@ -64,19 +114,36 @@ providers:
       tools: true
 
 profiles:
+  # Generic chain — safe default for curl / OpenAI SDK / non-Claude-Code use.
   - name: default
     providers:
-      - local-llamacpp
+      - ollama-qwen-coder-7b
       - openrouter-free
       - openrouter-claude
 
+  # Tuned for `ANTHROPIC_BASE_URL=http://localhost:8088 claude`.
+  # Claude Code declares all its tools (Bash/Glob/Read/Write/...) every turn,
+  # so the router always engages the v0.3-D tool-downgrade path. That means
+  # user-felt latency ≈ upstream total response time. Keep the first provider
+  # fast and capable of tool-calling; put 14b second for retries when 7b
+  # mis-selects a tool.
+  - name: claude-code
+    providers:
+      - ollama-qwen-coder-7b
+      - ollama-qwen-coder-14b
+      - openrouter-free
+      - openrouter-claude
+
+  # Alias — historically used for code-heavy tasks. Kept for backward compat.
   - name: coding
     providers:
-      - local-llamacpp
+      - ollama-qwen-coder-7b
       - openrouter-free
       - openrouter-claude
 
+  # Strictly no paid providers, even if ALLOW_PAID=true.
   - name: free-only
     providers:
-      - local-llamacpp
+      - ollama-qwen-coder-7b
+      - ollama-qwen-coder-14b
       - openrouter-free
