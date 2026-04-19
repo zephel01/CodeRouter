@@ -7,6 +7,16 @@
 作成者: zephel01
 状態: **v0.2 Anthropic Ingress 完了** (2026-04-20) — 全 54 テスト green、Claude Code → CodeRouter → Ollama のフルパス疎通済み。
 
+### リリース履歴（概要）
+
+| Ver | 日付 | タグ | Commit | 一言 |
+| --- | --- | --- | --- | --- |
+| v0.1.0 | 2026-04-20 | `v0.1.0` | `5efff5b` | Walking Skeleton — OpenAI ingress + local + fallback 1 個、26 tests green |
+| v0.2.0 | 2026-04-20 | `v0.2.0` | `6c6e3f4` | Anthropic ingress — Claude Code 疎通、+28 tests / 計 54 green |
+
+詳細な変更点は [`CHANGELOG.md`](./CHANGELOG.md) を参照。
+各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8）に格納。
+
 ---
 
 ## 0. このドキュメントの目的
@@ -721,14 +731,39 @@ claude-code-local の "数字で見せる" を踏襲。
 
 ---
 
-## 18. 次のアクション (今日明日でやる)
+## 18. 次のアクション (v0.3 候補、優先度順)
 
-1. [ ] このplan.md をレビューして合意 / 微修正
-2. [ ] `providers.yaml` 雛形 v0 を切る (memo.txt の例ベース)
-3. [ ] `profiles.yaml` 雛形 v0 を切る
-4. [ ] 言語決定スパイク: Python + FastAPI で `/v1/chat/completions` を 1 endpoint だけ動かしてみる
-5. [ ] OpenRouter のアカウント / 無料モデル一覧を整理
-6. [ ] ローカルモデル候補を確定 (qwen3-coder, glm-flash, gemma など)
+v0.1 / v0.2 は完了（リリース履歴と §7 / §8 を参照）。ここからは Claude Code 実運用に耐えるための品質改善フェーズ。
+
+### 高優先 (v0.3 本命)
+
+1. [ ] **Tool-call repair** — qwen2.5-coder など "tool_calls を text で返してしまう" モデルへの救済。
+   - assistant text content を JSON ブロックの有無で scan
+   - 見つかれば `{name, arguments}` を抜き出して `tool_calls` に引き剥がす
+   - 元 text は削除 or 空欄化（Claude Code の tool_use block に翻訳された時に重複しないように）
+   - ユニットテスト: v0.2 の `test_malformed_tool_call_json_preserved_in_raw` の延長で
+     "text中に完成形 JSON" / "text中に code fence 付き JSON" / "text中に複数 JSON ブロック" の 3 ケース
+2. [ ] **Mid-stream fallback guard** — fallback engine が初バイト送出後の provider 切替を禁止するフラグを持つ。
+   - 切替が必要になった場合は Anthropic wire なら `event: error`、OpenAI wire なら SSE ERROR で閉じる
+   - Claude Code に部分 SSE + 重複コンテンツが届く事故を防ぐ
+3. [ ] **Usage 集計** — `message_delta.usage.output_tokens` を正しく埋める。stream 終端 chunk の `usage` が
+   手元の upstream で取れる場合はそれを、取れない場合は `content_block_delta` 数から近似。
+
+### 中優先 (v0.3.x)
+
+4. [ ] **Anthropic native adapter** — `kind: "anthropic"` を追加し、上流が本物の Claude のとき翻訳を通さず passthrough。
+   - 翻訳コストを省き、Anthropic 固有の cache_control / thinking ブロックをそのまま活用できるようにする
+5. [ ] **Claude Code 向け profile サンプル** を README と `examples/providers.yaml` に追加。
+   - Claude Code は 15-20K token の system prompt を毎ターン送るので、14B クラスでは prompt eval 100秒級。
+     7B 以下中心 + 14B を最後尾に置くサンプルを例示する
+6. [ ] **OpenRouter 無料モデル一覧の棚卸** — 2026-04 時点で安定して使える無料モデルを選定し、`examples/` 同梱
+7. [ ] **README 更新** — v0.2 までの実機疎通例 (Claude Code) を Quickstart に反映
+
+### 低優先 (v0.5 以降で拾う)
+
+- [ ] プロファイル / capability / ALLOW_PAID の完全版は §9 (v0.5) スコープ
+- [ ] 14 ケース回帰テスト / Code Mode / 出力クリーニングは §10 (v1.0) スコープ
+- [ ] launcher / doctor は §11 (v1.1)、計測は §12 (v1.5)、プラグイン / MCP は §13 (v2.0)
 
 ---
 

@@ -56,24 +56,42 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.1 Walking Skeleton
+## Status: v0.2 Anthropic Ingress (2026-04-20)
 
-What works today:
+What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
 - [x] OpenAI-compatible `POST /v1/chat/completions` ingress
-- [x] SSE streaming
+- [x] **Anthropic-compatible `POST /v1/messages`** ingress — Claude Code works via `ANTHROPIC_BASE_URL`
+- [x] SSE streaming on both endpoints (Anthropic event sequence `message_start → content_block_* → message_delta → message_stop`)
+- [x] Bidirectional Anthropic ⇄ OpenAI wire-format translation (`text` / `tool_use` / `tool_result` / `image` content blocks)
 - [x] OpenAI-compat adapter (covers llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq)
-- [x] Sequential fallback engine
-- [x] `ALLOW_PAID=false` enforcement
-- [x] JSON-line structured logging
-- [x] Healthcheck at `/healthz`
+- [x] Sequential fallback engine with `ALLOW_PAID=false` enforcement
+- [x] Profile selection: body `profile` > `X-CodeRouter-Profile` header > config default
+- [x] JSON-line structured logging, `/healthz`, tests (54 green)
 
-Coming next (see [plan.md](./plan.md)):
+### Use it with Claude Code
 
-- v0.2 — Anthropic-compatible `POST /v1/messages` (so Claude Code can use it directly)
-- v0.5 — Profiles / capability flags / per-mode routing
-- v1.0 — Tool-call format recovery, Code Mode (slim Claude Code harness), output cleaning
-- v1.1 — `coderouter doctor --network` (audit zero outbound), launchers
+```bash
+# Terminal 1: start CodeRouter
+uv run coderouter serve --port 8088
+
+# Terminal 2: point Claude Code at it
+ANTHROPIC_BASE_URL=http://localhost:8088 \
+ANTHROPIC_AUTH_TOKEN=dummy \
+claude
+```
+
+Note: Claude Code sends a 15-20K-token system prompt every turn. On a 14B local model,
+expect ~2 min per turn. Use 7B-or-smaller coding models for interactive speed — see
+`examples/providers.yaml` for recommended chains.
+
+Coming next (see [plan.md §18](./plan.md)):
+
+- v0.3 — Tool-call repair (text → `tool_calls` extraction), mid-stream fallback guard, usage aggregation
+- v0.3.x — Anthropic native adapter (`kind: "anthropic"`, passthrough), Claude Code profile examples
+- v0.5 — Profiles / capability flags / per-mode routing (full scope)
+- v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
+- v1.1 — `coderouter doctor --network`, launchers
 - v1.5 — Metrics dashboard
 
 ## Dependency policy
