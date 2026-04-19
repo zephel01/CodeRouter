@@ -9,6 +9,7 @@ from fastapi import FastAPI
 
 from coderouter import __version__
 from coderouter.config import load_config
+from coderouter.ingress.anthropic_routes import router as anthropic_router
 from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
 from coderouter.routing import FallbackEngine
@@ -55,7 +56,15 @@ def create_app(config_path: str | None = None) -> FastAPI:
             "allow_paid": config.allow_paid,
         }
 
+    # Claude Code and similar SDKs probe the base URL with HEAD / or GET /
+    # at startup. Return a tiny identifier instead of 404 so those probes
+    # succeed cleanly. Non-functional beyond that.
+    @app.api_route("/", methods=["GET", "HEAD"])
+    async def root() -> dict[str, str]:
+        return {"service": "coderouter", "version": __version__}
+
     app.include_router(openai_router, prefix="/v1", tags=["openai-compat"])
+    app.include_router(anthropic_router, prefix="/v1", tags=["anthropic-compat"])
 
     return app
 

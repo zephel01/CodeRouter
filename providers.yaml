@@ -26,7 +26,10 @@ providers:
     base_url: http://localhost:11434/v1
     model: qwen2.5-coder:14b
     paid: false
-    timeout_s: 120
+    # Claude Code sends a large system prompt + tool definitions; 14B
+    # needs real breathing room here (cold-start + first-token can easily
+    # blow past 2 min on consumer hardware).
+    timeout_s: 300
     capabilities:
       chat: true
       streaming: true
