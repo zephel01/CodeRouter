@@ -170,3 +170,160 @@ def test_unknown_profile_from_header_is_400(
     )
     assert resp.status_code == 400, resp.text
     assert engine.seen_profiles == []
+
+
+# ----------------------------------------------------------------------
+# v0.6-D: mode_aliases (X-CodeRouter-Mode → profile) fixtures + tests
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def mode_aliased_config() -> CodeRouterConfig:
+    """Config with ``mode_aliases`` declared so Mode-header tests have a target.
+
+    Shape kept parallel to ``two_profile_config`` — same two profiles
+    (default / fast) plus a ``mode_aliases`` block that maps the
+    canonical intent names (``coding`` / ``quick``) to them.
+    """
+    return CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[
+            ProviderConfig(
+                name="local",
+                base_url="http://localhost:8080/v1",
+                model="qwen-coder",
+            ),
+            ProviderConfig(
+                name="small",
+                base_url="http://localhost:8080/v1",
+                model="qwen-small",
+            ),
+        ],
+        profiles=[
+            FallbackChain(name="default", providers=["local"]),
+            FallbackChain(name="fast", providers=["small"]),
+        ],
+        mode_aliases={"coding": "default", "quick": "fast"},
+    )
+
+
+@pytest.fixture
+def mode_client_and_engine(
+    mode_aliased_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _RecordingEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: mode_aliased_config,
+    )
+    app = create_app()
+    engine = _RecordingEngine()
+    app.state.engine = engine
+    app.state.config = mode_aliased_config
+    return TestClient(app), engine
+
+
+def test_mode_header_resolves_to_aliased_profile(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """``X-CodeRouter-Mode: quick`` lands on the aliased profile (``fast``)."""
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "quick"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["fast"]
+
+
+def test_profile_header_wins_over_mode_header(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Explicit Profile header beats Mode header.
+
+    Rationale in the module docstring: Profile is the concrete
+    implementation, Mode is the intent. When both are present the caller
+    has spelled out the implementation so respect it verbatim.
+    """
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json=_MINIMAL_BODY,
+        headers={
+            "X-CodeRouter-Profile": "default",
+            "X-CodeRouter-Mode": "quick",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["default"]
+
+
+def test_body_profile_wins_over_mode_header(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Body-embedded profile beats Mode header (same precedence as Profile header)."""
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json={**_MINIMAL_BODY, "profile": "default"},
+        headers={"X-CodeRouter-Mode": "quick"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["default"]
+
+
+def test_unknown_mode_is_400_with_available_list(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Unknown Mode → 400 that enumerates the declared aliases.
+
+    Mirrors the "unknown profile" error shape — operator-friendly error
+    message, engine never touched.
+    """
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "nope"},
+    )
+    assert resp.status_code == 400, resp.text
+    # Error message surfaces the known aliases so the caller can self-correct.
+    assert "unknown mode" in resp.text
+    assert "coding" in resp.text and "quick" in resp.text
+    assert engine.seen_profiles == []
+
+
+def test_mode_header_when_mode_aliases_empty_is_400(
+    client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Mode header on a config with no ``mode_aliases:`` block → 400.
+
+    The fixture here is ``client_and_engine`` (no aliases declared), so
+    the only legal state is "mode header ignored if empty-dict resolve
+    raises". We use 400 rather than silent ignore to keep the contract
+    explicit — typos in client code should surface.
+    """
+    client, engine = client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "coding"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "unknown mode" in resp.text
+    assert engine.seen_profiles == []
+
+
+def test_mode_header_alone_reaches_engine_as_aliased_profile(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """``coding`` alias → the engine sees ``profile='default'`` (resolved)."""
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "coding"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["default"]

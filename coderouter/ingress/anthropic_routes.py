@@ -10,7 +10,9 @@ SSE streaming events follow the Anthropic wire protocol
 (`message_start` / `content_block_*` / `message_delta` / `message_stop`).
 
 Profile selection mirrors the OpenAI route (see openai_routes.py):
-    Body field `profile` > `X-CodeRouter-Profile` header > config default.
+    Body field `profile` > `X-CodeRouter-Profile` header >
+    `X-CodeRouter-Mode` header (v0.6-D, via mode_aliases) >
+    config default.
 
 `anthropic-version` header is accepted but not enforced — Claude Code and
 SDKs send values like "2023-06-01"; we log it for diagnostics only.
@@ -38,6 +40,7 @@ router = APIRouter()
 logger = get_logger(__name__)
 
 _PROFILE_HEADER = "x-coderouter-profile"
+_MODE_HEADER = "x-coderouter-mode"
 _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
 
@@ -47,6 +50,7 @@ async def messages(
     payload: dict,
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
+    x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
     anthropic_version: str | None = Header(
         default=None, alias=_ANTHROPIC_VERSION_HEADER
     ),
@@ -81,6 +85,25 @@ async def messages(
     # Profile selection — body field wins over header (same policy as OpenAI route).
     if anth_req.profile is None and x_coderouter_profile:
         anth_req.profile = x_coderouter_profile
+
+    # v0.6-D: X-CodeRouter-Mode → mode_aliases → profile. Mode sits below
+    # Profile because Mode is intent / Profile is the implementation.
+    if anth_req.profile is None and x_coderouter_mode:
+        try:
+            anth_req.profile = config.resolve_mode(x_coderouter_mode)
+        except KeyError as exc:
+            available = sorted(config.mode_aliases.keys())
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unknown mode {x_coderouter_mode!r}. "
+                    f"available modes: {available}"
+                ),
+            ) from exc
+        logger.info(
+            "mode-alias-resolved",
+            extra={"mode": x_coderouter_mode, "profile": anth_req.profile},
+        )
 
     if anth_req.profile is not None:
         try:

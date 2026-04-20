@@ -56,7 +56,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.6-C — 宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` warn (2026-04-20)
+## Status: v0.6-D — `mode_aliases` + `X-CodeRouter-Mode` header → profile resolution (2026-04-20)
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -69,7 +69,7 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **Symmetric routing (v0.4-A)** — `/v1/chat/completions` can also reach `kind: "anthropic"` providers; the adapter reverse-translates `ChatRequest → AnthropicRequest` (system lifted, `tool_result` blocks batched into one user turn, `tool_calls ↔ tool_use`, stream `event: error → retryable=False`)
 - [x] **`anthropic-beta` header passthrough (v0.4-D)** — beta-gated body fields Claude Code relies on (`context_management`, newer `cache_control` / `thinking` variants) reach `api.anthropic.com` without the validator 400 because the client's `anthropic-beta` header is now forwarded verbatim
 - [x] Sequential fallback engine with `ALLOW_PAID=false` enforcement; mixed chains (`kind: anthropic` → `kind: openai_compat`) supported via polymorphic dispatch
-- [x] Profile selection: body `profile` > `X-CodeRouter-Profile` header > config default
+- [x] Profile selection: body `profile` > `X-CodeRouter-Profile` header > `X-CodeRouter-Mode` header (via `mode_aliases`) > config default
 - [x] **Tool-call repair** — models that emit `{"name":..., "arguments":...}` as plain text (qwen2.5-coder:14b often does this) are lifted back to valid `tool_use` blocks via a balanced-brace scanner + allowlist matching (non-streaming and streaming-via-downgrade)
 - [x] **Mid-stream fallback guard** — `MidStreamError` prevents silent fall-through after first byte; clients see an explicit `event: error` / `type: api_error` instead of spliced partial responses from two different providers
 - [x] **Usage aggregation** — `message_delta.usage.output_tokens` uses upstream `completion_tokens` when available, falls back to `(emitted_chars + 3) // 4`. Adapter auto-adds `stream_options.include_usage: true`, overridable per provider.
@@ -80,7 +80,8 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **`--mode` CLI / `CODEROUTER_MODE` env (v0.6-A)** — pick the active profile at server-launch time without editing the config (`coderouter serve --mode claude-code-direct`). Startup validates the name against the loaded config and fails fast with the list of valid profiles instead of deferring to the first request. Per-request overrides (header / body) still win.
 - [x] **Profile-level parameter override (v0.6-B)** — a profile can override `timeout_s` and `append_system_prompt` for every attempt in its chain (replace semantics: profile value wins entirely when set). `append_system_prompt: ""` explicitly clears the provider's directive for this profile. Threaded through a `ProviderCallOverrides` dataclass so adapters never need to know the profile concept.
 - [x] **Declarative `ALLOW_PAID` gate (v0.6-C)** — when the paid gate filters the entire chain to empty, a single aggregate `chain-paid-gate-blocked` warn fires (with `profile` / `blocked_providers` / `hint` fields) so the root cause is grep-visible in one line, instead of getting buried under `NoProvidersAvailableError`. Per-provider `skip-paid-provider` INFO is preserved for traceability; mixed chains where a free provider survives stay silent (the normal `provider-failed` trail narrates them).
-- [x] JSON-line structured logging, `/healthz`, tests (**291 green**)
+- [x] **`mode_aliases` + `X-CodeRouter-Mode` header (v0.6-D)** — clients send an intent name (`coding` / `long` / `fast`) via header; a YAML `mode_aliases:` block resolves it to the concrete profile. Lets the chain be rewired without touching client code. Precedence: body `profile` > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > default (explicit implementation always wins over intent). Broken alias targets fast-fail at startup; unknown modes → 400 with the list of declared aliases; a `mode-alias-resolved` INFO log records every resolution.
+- [x] JSON-line structured logging, `/healthz`, tests (**306 green**)
 
 ### Use it with Claude Code
 
@@ -147,6 +148,29 @@ profiles:
 
 Semantics: the profile value **replaces** the provider's value when set (not appended), keeping parity with how scalar fields like `timeout_s` naturally behave. `append_system_prompt: ""` explicitly clears the provider directive for this profile (distinguished from "unset", which means "fall back to the provider's default"). Unset fields leave every provider's defaults intact. `retry_max` is deferred to a later minor since adapter-level retry is still unpiloted — the fallback chain itself is currently the retry mechanism.
 
+#### Mode aliases — `X-CodeRouter-Mode` (v0.6-D)
+
+Clients that want to express **intent** rather than a concrete profile name can send an `X-CodeRouter-Mode` header, and CodeRouter resolves it against a YAML `mode_aliases:` block:
+
+```yaml
+# providers.yaml
+mode_aliases:
+  coding: claude-code          # client sends Mode: coding → profile claude-code
+  long:   claude-code-long
+  fast:   ollama-only
+```
+
+```bash
+curl http://localhost:8088/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-CodeRouter-Mode: coding' \
+  -d '{ "messages": [{"role":"user","content":"hi"}] }'
+```
+
+Precedence (first hit wins): body `profile` > `X-CodeRouter-Profile` header > `X-CodeRouter-Mode` header > `default_profile`. Mode sits below Profile because **Profile is the implementation, Mode is the intent** — when a caller specifies the concrete profile, respect it verbatim. This matters when a proxy in front of CodeRouter auto-injects a Mode header: an explicit body/header `profile` from the caller still wins.
+
+Guardrails: broken alias targets fast-fail at startup (same philosophy as `default_profile` validation), unknown Mode values return 400 with the list of declared aliases, and every resolution logs a `mode-alias-resolved` INFO line so operators can grep the mapping after the fact.
+
 #### What to expect
 
 - **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
@@ -156,7 +180,6 @@ Semantics: the profile value **replaces** the provider's value when set (not app
 
 Coming next (see [plan.md §18](./plan.md)):
 
-- v0.6-D — `mode_aliases` YAML block for `X-CodeRouter-Mode: coding` → profile name mapping
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers
 - v1.5 — Metrics dashboard

@@ -431,6 +431,143 @@ def test_unknown_profile_from_header_is_400(
 
 
 # ----------------------------------------------------------------------
+# v0.6-D: mode_aliases (X-CodeRouter-Mode → profile) — Anthropic ingress
+# ----------------------------------------------------------------------
+
+
+@pytest.fixture
+def mode_aliased_config() -> CodeRouterConfig:
+    """Config with ``mode_aliases`` declared, parallel to ``two_profile_config``."""
+    return CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[
+            ProviderConfig(
+                name="local",
+                base_url="http://localhost:8080/v1",
+                model="qwen-coder",
+            ),
+            ProviderConfig(
+                name="small",
+                base_url="http://localhost:8080/v1",
+                model="qwen-small",
+            ),
+        ],
+        profiles=[
+            FallbackChain(name="default", providers=["local"]),
+            FallbackChain(name="fast", providers=["small"]),
+        ],
+        mode_aliases={"coding": "default", "quick": "fast"},
+    )
+
+
+@pytest.fixture
+def mode_client_and_engine(
+    mode_aliased_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _RecordingEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: mode_aliased_config,
+    )
+    app = create_app()
+    engine = _RecordingEngine()
+    app.state.engine = engine
+    app.state.config = mode_aliased_config
+    return TestClient(app), engine
+
+
+def test_mode_header_resolves_to_aliased_profile(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Anthropic ingress respects ``X-CodeRouter-Mode`` the same as OpenAI."""
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "quick"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["fast"]
+
+
+def test_profile_header_wins_over_mode_header(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json=_MINIMAL_BODY,
+        headers={
+            "X-CodeRouter-Profile": "default",
+            "X-CodeRouter-Mode": "quick",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["default"]
+
+
+def test_body_profile_wins_over_mode_header(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json={**_MINIMAL_BODY, "profile": "default"},
+        headers={"X-CodeRouter-Mode": "quick"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_profiles == ["default"]
+
+
+def test_unknown_mode_is_400_with_available_list(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    client, engine = mode_client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "nope"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "unknown mode" in resp.text
+    assert "coding" in resp.text and "quick" in resp.text
+    assert engine.seen_profiles == []
+
+
+def test_mode_header_when_mode_aliases_empty_is_400(
+    client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Base fixture has no ``mode_aliases`` — mode header must 400, not fall through."""
+    client, engine = client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json=_MINIMAL_BODY,
+        headers={"X-CodeRouter-Mode": "coding"},
+    )
+    assert resp.status_code == 400, resp.text
+    assert "unknown mode" in resp.text
+    assert engine.seen_profiles == []
+
+
+def test_streaming_path_also_respects_mode_header(
+    mode_client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """Mode resolution happens before the stream flag is honored, so SSE works too."""
+    client, engine = mode_client_and_engine
+    body = {**_MINIMAL_BODY, "stream": True}
+    with client.stream(
+        "POST",
+        "/v1/messages",
+        json=body,
+        headers={"X-CodeRouter-Mode": "quick"},
+    ) as resp:
+        assert resp.status_code == 200
+        # Drain so the generator runs to completion.
+        b"".join(resp.iter_bytes())
+    assert engine.seen_profiles == ["fast"]
+
+
+# ----------------------------------------------------------------------
 # Error mapping (non-streaming)
 # ----------------------------------------------------------------------
 

@@ -120,6 +120,90 @@ def test_unknown_default_profile_in_yaml_raises(tmp_path: Path) -> None:
         load_config(tmp_path / "providers.yaml")
 
 
+def test_mode_aliases_resolve_returns_target_profile(tmp_path: Path) -> None:
+    """v0.6-D: ``resolve_mode`` maps a declared mode alias to its profile.
+
+    Parallels ``profile_by_name`` — a lookup on a string key that either
+    returns the target or raises ``KeyError``. The ingress layer relies
+    on this contract to distinguish "caller sent a mode we don't know"
+    (400) from "caller sent a profile we don't know" (also 400 but a
+    different code path).
+    """
+    import yaml as _yaml
+
+    (tmp_path / "providers.yaml").write_text(
+        _yaml.safe_dump(
+            {
+                "allow_paid": False,
+                "default_profile": "default",
+                "providers": [
+                    {
+                        "name": "local",
+                        "base_url": "http://localhost:8080/v1",
+                        "model": "m",
+                    },
+                ],
+                "profiles": [
+                    {"name": "default", "providers": ["local"]},
+                    {"name": "fast", "providers": ["local"]},
+                ],
+                "mode_aliases": {"coding": "default", "quick": "fast"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    cfg = load_config(tmp_path / "providers.yaml")
+    assert cfg.resolve_mode("coding") == "default"
+    assert cfg.resolve_mode("quick") == "fast"
+
+    with pytest.raises(KeyError, match="no-such-mode"):
+        cfg.resolve_mode("no-such-mode")
+
+
+def test_mode_aliases_unknown_target_raises_at_load(tmp_path: Path) -> None:
+    """v0.6-D: ``mode_aliases`` pointing to a missing profile must fast-fail.
+
+    Same philosophy as ``_check_default_profile_exists`` — a typo in the
+    YAML surfaces at load time, not on the first request that happens to
+    hit the broken alias. The error message should list the known
+    profile names to help the operator spot the typo.
+    """
+    import yaml as _yaml
+
+    (tmp_path / "providers.yaml").write_text(
+        _yaml.safe_dump(
+            {
+                "allow_paid": False,
+                "default_profile": "default",
+                "providers": [
+                    {
+                        "name": "local",
+                        "base_url": "http://localhost:8080/v1",
+                        "model": "m",
+                    }
+                ],
+                "profiles": [{"name": "default", "providers": ["local"]}],
+                "mode_aliases": {"coding": "typo-profile"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="typo-profile"):
+        load_config(tmp_path / "providers.yaml")
+
+
+def test_mode_aliases_empty_by_default(yaml_config_path: Path) -> None:
+    """A config without a ``mode_aliases:`` block parses with an empty dict.
+
+    Guards the "feature off by default" contract — existing configs that
+    predate v0.6-D must continue to load unchanged, and the ingress
+    layer must see an empty dict (not None) so it can uniformly render
+    ``available modes: []`` in error messages without a null check.
+    """
+    cfg = load_config(yaml_config_path)
+    assert cfg.mode_aliases == {}
+
+
 def test_missing_config_path_is_helpful(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

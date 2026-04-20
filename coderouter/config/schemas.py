@@ -155,6 +155,18 @@ class CodeRouterConfig(BaseModel):
     default_profile: str = Field(default="default")
     providers: list[ProviderConfig] = Field(..., min_length=1)
     profiles: list[FallbackChain] = Field(..., min_length=1)
+    mode_aliases: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "v0.6-D: intent-to-profile mapping. Clients send "
+            "``X-CodeRouter-Mode: coding`` and the ingress resolves it to "
+            "the aliased profile name. Lets clients name their intent "
+            "(``coding`` / ``long`` / ``fast``) independently of the "
+            "underlying profile names — you can rewire the chain without "
+            "touching client code. Keys = mode names, values = profile "
+            "names (must exist in ``profiles``). Empty dict = feature off."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_default_profile_exists(self) -> CodeRouterConfig:
@@ -174,6 +186,27 @@ class CodeRouterConfig(BaseModel):
             )
         return self
 
+    @model_validator(mode="after")
+    def _check_mode_alias_targets_exist(self) -> CodeRouterConfig:
+        """v0.6-D: every ``mode_aliases`` value must point to a declared profile.
+
+        Same fast-fail philosophy as ``_check_default_profile_exists``: a
+        broken alias should 500 at load, not silently 400 for every
+        request that uses that mode.
+        """
+        names = {p.name for p in self.profiles}
+        bad = {
+            mode: profile
+            for mode, profile in self.mode_aliases.items()
+            if profile not in names
+        }
+        if bad:
+            raise ValueError(
+                f"mode_aliases points to unknown profile(s): {bad}. "
+                f"known profiles={sorted(names)}"
+            )
+        return self
+
     def provider_by_name(self, name: str) -> ProviderConfig:
         """Look up a provider config by name. Raises KeyError if not found."""
         for p in self.providers:
@@ -187,3 +220,18 @@ class CodeRouterConfig(BaseModel):
             if prof.name == name:
                 return prof
         raise KeyError(f"Profile not found: {name!r}")
+
+    def resolve_mode(self, mode: str) -> str:
+        """v0.6-D: resolve a mode alias to a profile name.
+
+        The startup validator guarantees every alias target exists in
+        ``profiles``, so callers can pass the returned value straight to
+        ``profile_by_name`` without a second existence check.
+
+        Raises ``KeyError`` when ``mode`` is not in ``mode_aliases`` —
+        the ingress layer catches it and returns 400 with the list of
+        available modes.
+        """
+        if mode in self.mode_aliases:
+            return self.mode_aliases[mode]
+        raise KeyError(f"Unknown mode alias: {mode!r}")
