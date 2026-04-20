@@ -44,6 +44,39 @@ def _build_parser() -> argparse.ArgumentParser:
         "--log-level", default="info", help="uvicorn log level (default: info)"
     )
 
+    # v0.7-B: `coderouter doctor --check-model <provider>` runs a small
+    # live-probe suite against one provider and reports per-capability
+    # verdicts + suggested YAML patches. See coderouter/doctor.py for
+    # probe details and exit-code semantics (0/1/2).
+    doctor = sub.add_parser(
+        "doctor",
+        help="Diagnose a provider's capabilities (v0.7-B).",
+        description=(
+            "Run live probes against a provider from providers.yaml and "
+            "compare observed behavior with the registry / providers.yaml "
+            "declarations. Emits copy-paste YAML patches on mismatch. "
+            "Exit codes: 0 match, 2 needs tuning, 1 probe failed to run."
+        ),
+    )
+    doctor.add_argument(
+        "--check-model",
+        metavar="PROVIDER",
+        required=True,
+        help=(
+            "Name of a provider declared in providers.yaml. The doctor "
+            "targets exactly one provider per invocation; re-run with a "
+            "different name to check another."
+        ),
+    )
+    doctor.add_argument(
+        "--config",
+        default=None,
+        help=(
+            "Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
+            "./providers.yaml, or ~/.coderouter/providers.yaml."
+        ),
+    )
+
     return parser
 
 
@@ -76,8 +109,50 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
+    if args.command == "doctor":
+        return _run_doctor(args)
+
     print(f"unknown command: {args.command}", file=sys.stderr)
     return 2
+
+
+def _run_doctor(args: argparse.Namespace) -> int:
+    """v0.7-B: drive ``coderouter doctor --check-model <provider>``.
+
+    Kept as a small function rather than a nested import site so tests
+    that monkeypatch the doctor module have a stable attribute
+    (``coderouter.cli._run_doctor``) to target. The actual probe logic
+    lives in ``coderouter.doctor`` — this just wires load_config + the
+    doctor entry point together and pipes output to stdout.
+
+    Errors surfaced here (config not found, unknown provider name) map
+    to exit code 1 with a terse stderr message; probe-level failures
+    map via ``doctor.exit_code_for()``.
+    """
+    from coderouter.config.loader import load_config
+    from coderouter.doctor import (
+        format_report,
+        exit_code_for,
+        run_check_model_sync,
+    )
+
+    try:
+        config = load_config(args.config)
+    except FileNotFoundError as exc:
+        print(f"doctor: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # pydantic ValidationError, YAML parse error, etc.
+        print(f"doctor: failed to load config: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        report = run_check_model_sync(config, args.check_model)
+    except KeyError as exc:
+        print(f"doctor: {exc}", file=sys.stderr)
+        return 1
+
+    print(format_report(report))
+    return exit_code_for(report)
 
 
 if __name__ == "__main__":

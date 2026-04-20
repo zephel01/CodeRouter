@@ -112,6 +112,67 @@ providers:
       tools: true
 
   # ------------------------------------------------------------
+  # HF-on-Ollama reference stanza (v0.7-C)
+  #
+  # Ollama 0.3.13+ can run any HF-hosted GGUF directly via
+  # `ollama run hf.co/<user>/<repo>:<quant>`. This block is a template
+  # with the 5 knobs that matter most when using HF distilled / fine-tuned
+  # variants through CodeRouter. Each is mapped to the corresponding Ollama
+  # beginner silent-fail symptom in the README Troubleshooting section; run
+  # `coderouter doctor --check-model ollama-hf-example` after editing to
+  # verify declarations match observed behavior.
+  #
+  # The block is commented out by default — uncomment and adjust when you
+  # actually pull an HF GGUF. Typical candidates:
+  #   hf.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M   (coding, tools-capable)
+  #   hf.co/bartowski/Qwen3-8B-GGUF:Q5_K_M                  (Qwen3 distill, <think>-leaky)
+  #   hf.co/unsloth/DeepSeek-R1-Distill-Qwen-7B-GGUF:Q4_K_M (reasoning distill, tools-weak)
+  #
+  # Reminder: the HF `:<quant>` suffix is REQUIRED. Omitting it yields
+  # `404 model not found` from Ollama (v0.7-B doctor's auth+basic-chat probe
+  # surfaces this as UNSUPPORTED with an `ollama pull` hint).
+  # ------------------------------------------------------------
+
+  # - name: ollama-hf-example
+  #   kind: openai_compat
+  #   base_url: http://localhost:11434/v1
+  #   # Replace with the `ollama list` entry verbatim, `:<quant>` suffix included.
+  #   model: hf.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M
+  #   paid: false
+  #   # Prefill of Claude Code's 15-20K-token system prompt dominates latency on
+  #   # any 7B+ model; budget generously. Symptom 1 is not a timeout failure
+  #   # per se — it's Ollama silently truncating the prompt to num_ctx below.
+  #   timeout_s: 300
+  #   extra_body:
+  #     options:
+  #       # Symptom 1: Ollama default `num_ctx` is 2048. Claude Code's system
+  #       # prompt alone is 15-20K tokens, so prompts get truncated from the
+  #       # FRONT (where the tool definitions live) and the model silently
+  #       # forgets it has tools. Bump to 32K for Claude Code workloads;
+  #       # lower (8K) is fine for plain chat traffic.
+  #       num_ctx: 32768
+  #   # Symptom 3: Qwen3 distills (and some R1 distills) inline <think>...</think>
+  #   # in the content channel instead of using a thinking block. Uncomment to
+  #   # suppress at the source via the model's native opt-out directive. Leave
+  #   # empty / remove for non-Qwen3 models.
+  #   # append_system_prompt: "/no_think"
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     # Symptom 2: small quantized distills often ignore the `tools` parameter
+  #     # or emit malformed JSON. Start with `false` (CodeRouter falls back to
+  #     # plain chat completions), then flip to `true` if `coderouter doctor`
+  #     # reports the tool_calls probe as OK. Setting `true` when the model
+  #     # can't actually call tools causes Claude Code to hang waiting for a
+  #     # tool_use block that never arrives.
+  #     tools: false
+  #     # Symptom 3 alternative path: if the model emits content with
+  #     # <think>...</think> visible in the UI despite `/no_think`, keep this
+  #     # false (the default) so CodeRouter's v1.0 output-cleaning path can
+  #     # strip downstream. Setting `true` here opts out of all cleaning.
+  #     # reasoning_passthrough: false
+
+  # ------------------------------------------------------------
   # Tier 2: free cloud (escape hatch)
   #
   # OpenRouter free-tier rate limits (as of 2026-04):

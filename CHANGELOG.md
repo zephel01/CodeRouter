@@ -6,6 +6,195 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.7.0] — 2026-04-20 (Umbrella tag — Beginner UX, made legible)
+
+**Theme: v0.7-A / v0.7-B / v0.7-C を束ねる umbrella tag。** 「Ollama 立てたけど動かない」を 1 コマンドで切り分け可能にする minor。plan.md §9.4 の silent-fail 5 症状 (num_ctx truncation / tools incompetence / `<think>` leak / model-tag 404 / missing API key) を contract として、(A) 宣言を Python literal から YAML に外出し、(B) 宣言と実機を突合する live-probe (`coderouter doctor --check-model <provider>`) を実装、(C) 症状 × probe コマンド × YAML patch × fix command の 3–4 点セットを README Troubleshooting に章立て — の 3 段階で beginner UX の観測ループを閉じた。narrative layer は [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md)、per-sub-release の機能詳細は下の `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`。
+
+- Tests: 306 → **382** (+76, +25%)、v0.7-A +39 / v0.7-B +37 / v0.7-C ±0
+- Runtime deps: 5 → 5 (SDK 依存ゼロ維持、probe は pure httpx + pyyaml + pydantic)
+- Design through-lines:
+  - **Data-as-configuration** (v0.7-A) — bundled + user 2 層の YAML registry が Python 内 regex literal を置換
+  - **Diagnostic surface that bypasses runtime transformations** (v0.7-B) — probe は adapter を介さず直接 httpx、transformation の観測穴を塞ぐ
+  - **Dominant-signal short-circuit with SKIP preserved** (v0.7-B) — auth 失敗で残り probe を SKIP、透明性は維持 / token は消費しない
+  - **Non-code release as a sub-release boundary** (v0.7-C) — docs + examples を独立 sub-release として versioning
+
+### v0.7 umbrella-level follow-ons
+
+v0.7 各 sub-release の follow-on は該当 section を参照。umbrella level で横串にかかるものは以下:
+
+- **`coderouter doctor` `num_ctx` probe** (symptom #1 direct detection、v0.8 scope)
+- **`coderouter doctor --json` output** (CI auto-PR bot 向け、v0.7-D or v0.8)
+- **CI smoke workflow**: 週次 `doctor --check-model <each-free-provider>`、v0.5-D cron の対称
+- **v1.0 output-cleaning 時の probe 追加** — 「transformation には probe が伴う」原則の適用
+- **Real-machine re-verify for v0.7** (`scripts/verify_v0_7.sh` 相当)
+- **Test-count auto-updater** (3 retro 連続で名指し、未実装)
+- **Doc-edit touchpoint automation** (`scripts/release-close.py` 案、~9 手動編集の自動化)
+
+---
+
+## [v0.7-C] — 2026-04-20 (Ollama beginner Troubleshooting + HF-on-Ollama reference profile)
+
+**Theme: v0.7-A / v0.7-B で構築した宣言レイヤ + probe を「運用者の目線」に落とし込む。** v0.7-A で registry を YAML 化し、v0.7-B で live-probe を導入したが、**どの症状に対してどのコマンド / どの YAML patch を出せばよいか** の導線が README に無ければ beginner は依然として trial-and-error に戻る。v0.7-C は non-code deliverable のみ: plan.md §9.4 の 5 症状を README Troubleshooting に章立てし、各症状に `coderouter doctor --check-model` 実行例 + 具体的な YAML patch + fix の 3 点セットを添付する。併せて `examples/providers.yaml` に HF 蒸留 Ollama provider の reference stanza を追加 (commented-out template、5 knob 全て 1 block で demonstrate)。lunacode [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) とのクロスリンクで editor-harness layer との対応も明示。これで v0.7 umbrella は deliverable level 完了、`v0.7.0` tag + retrospective 執筆へ。
+
+- Tests: 382 → **382** (コード変更ゼロ、docs + example config のみ)
+- plan.md §9.4 DoD: 残り 2 項目中「README Troubleshooting に 5 症状全て記述」を消化。`v0.7.0` umbrella tag + retrospective 執筆の 1 項目が最後
+
+### Added
+
+- **README — `### Ollama beginner — 5 silent-fail symptoms (v0.7-C)`** (Troubleshooting セクション末尾に新規 subsection)
+  - 症状 1: num_ctx truncation (`extra_body.options.num_ctx: 32768`) — doctor で **indirect** 検出 (tool_calls probe が "no tool_call emitted" を返す症状として観測)。num_ctx probe 自体は follow-on で v0.7-B の CHANGELOG に明記済み
+  - 症状 2: tools=false 未宣言 (`capabilities.tools: false`) — doctor `tool_calls: NEEDS_TUNING` で検出、patch は doctor output 末尾の copy-paste YAML そのまま
+  - 症状 3: `<think>` tag leak (`append_system_prompt: "/no_think"` + 将来的に v1.0 output-cleaning) — doctor `reasoning-leak: informational` で検出
+  - 症状 4: model tag typo / `ollama pull` 忘れ (404) — doctor `auth+basic-chat: UNSUPPORTED` で検出、`ollama pull <tag>` hint 付き。HF-on-Ollama の `:Q4_K_M` suffix 忘れも同じ分類
+  - 症状 5: API key 未設定 (401) — doctor `auth+basic-chat: AUTH_FAIL` で検出、env var 名付きで diagnose。残り 3 probe を SKIP にする auth short-circuit の UX 上の価値をここで回収
+  - 末尾に `for p in <providers>; do coderouter doctor --check-model "$p"; done` の loop 例と、exit code 表 (Doctor subsection) への anchor link
+  - lunacode [`MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) への cross-link — CodeRouter provider-granularity vs lunacode per-model-granularity の棲み分けを一言で説明
+- **README — `#### HF-on-Ollama reference profile`** (subsection、上の 5 症状 section 直下)
+  - `examples/providers.yaml` の `ollama-hf-example` stanza への導線
+  - HF GGUF が 5 症状全てを増幅する理由 (chat template 欠落 / distillation 由来の `<think>` 漏れ / quant suffix 必須) を 1 段落で説明
+- **`examples/providers.yaml` — `ollama-hf-example` stanza** (commented-out reference、Ollama Tier 1 の直後に配置)
+  - `base_url: http://localhost:11434/v1` + `model: hf.co/unsloth/Qwen2.5-Coder-7B-Instruct-GGUF:Q4_K_M` を default example に
+  - コメントで候補 3 種類 (Qwen2.5-Coder / Qwen3-8B / DeepSeek-R1-Distill-Qwen) を列挙
+  - `extra_body.options.num_ctx: 32768` — 症状 1 対応、コメントで Claude Code system prompt の token 規模を明記
+  - `append_system_prompt: "/no_think"` (commented sub-line) — 症状 3 対応、Qwen3 / R1-distill だけ有効と明記
+  - `capabilities.tools: false` default — 症状 2 対応、`coderouter doctor` で OK が出たら flip する運用を記述
+  - `reasoning_passthrough: false` (commented) — 症状 3 の流出対応、v1.0 output-cleaning との関係を明記
+  - `:<quant>` suffix 必須の warning (症状 4 の HF 特化版) を stanza header comment に
+- **README — `#### Doctor` subsection の Troubleshooting からの anchor**
+  - 5 症状 section 末尾から Doctor subsection の exit code 表に戻る cross-link
+
+### Changed
+
+- **README の "Coming next" リスト** — v0.7-C 項目を削除、v1.0 を先頭に (次のマイルストーンは 14-case regression suite + Code Mode)
+- **README の Troubleshooting 導入行** — 既存「まず `coderouter doctor --check-model <provider>` を走らせろ」の案内はそのまま、5 症状 subsection が新設されたことで「先に読むべき項目」が整理された
+
+### Design notes
+
+- **non-code-only release としての v0.7-C.** v0.7-A が YAML 外出し、v0.7-B が probe という「実装寄り 2 release」に対して v0.7-C は意図的に docs + example config のみ。probe が存在しても operator がそれを「症状 → コマンド → patch」の 3 点セットとして認識できなければ価値が出ないため、non-code だが独立 release として切り出した。plan.md §9.4 の scope 表で最初からこの切り方を宣言していた意図の回収
+- **5 症状の配列順は「検出しやすさ」ではなく「初心者が踏みやすい順」に.** 症状 1 (num_ctx) は CodeRouter の doctor では **indirect** にしか検出できないが、Ollama を初めて Claude Code と繋げた時に最初に踏む地雷なので筆頭に配置。症状 5 (API key 未設定) は最も確定的に検出できるが、ある程度セットアップが進んだ段階で踏む症状なので末尾
+- **各症状に「検出コマンド出力」の 1 行モック例を添える.** 実際の `coderouter doctor` 出力を 1 行だけ貼る (`# → tool_calls: NEEDS_TUNING — ...` 形式) ことで、operator が実行前に何が見えるかを想像できるようにした。full 出力は Doctor subsection に既に載せてあるため、ここでは該当 probe の verdict line だけ
+- **HF-on-Ollama stanza を commented-out で置く理由.** uncomment して初めて active になる設計は、(a) fresh install の default chain を HF provider に汚染させない、(b) operator に「自分で pull して uncomment」の 2 step を踏ませることで `:<quant>` suffix の記入ミスを事前に意識させる、という 2 つの効果を持つ。active な HF provider を example に含めると `coderouter serve` が fresh install 時点で `ollama pull` されていない model 名に対して 404 を吐き続ける failure-by-example になる
+- **lunacode MODEL_SETTINGS.md との関係の明示.** 同一作者の兄弟プロジェクトという関係性から、両プロジェクトの知見が重複する部分は多い。ただし CodeRouter は **provider-granularity** (「このプロバイダ経由で使う model の capability」) で宣言し、lunacode は **per-model-granularity** (「この model そのものの設定」) で宣言するため、同じ症状でも declaration の位置が違う。README cross-link は 2 つのプロジェクトを並行運用する場合の "どっちの設定ファイルを触るか" の判断材料として機能する
+
+### Follow-ons
+
+- **`coderouter doctor` num_ctx probe の追加** — 症状 1 を direct 検出するために 5th probe を導入。8K / 16K / 32K の境界で silent truncation するかを確率的にサンプリング (長 prompt + 末尾に marker phrase → response に marker が含まれるか)。v0.8 scope
+- **`coderouter doctor --json` output** — CI 向け machine-readable 出力。exit code + 症状の JSON array で auto-patch bot が parse できる shape。v0.7-B CHANGELOG でも言及済み、v0.8 で回収
+- **v0.7.0 umbrella tag + `docs/retrospectives/v0.7.md`** — 本 release の直後に commit で消化。plan.md §9.4 DoD 残り 1 項目
+- **HF-on-Ollama reference stanza の bundled `model-capabilities.yaml` 対応物** — 現状は per-provider `capabilities.tools: false` で opt-out する設計だが、HF GGUF 特有の glob (`hf.co/unsloth/*` 等) を bundled YAML に足すかは要判断。provider-granularity 原則と矛盾するため v0.7 では見送り
+
+---
+
+## [v0.7-B] — 2026-04-20 (`coderouter doctor --check-model` — per-provider live probe)
+
+**Theme: 「Ollama 立てたけど動かない」を 1 コマンドで切り分け可能にする。** v0.7-A で宣言を YAML に外出しした registry と、providers.yaml の `capabilities.*` explicit opt-in が揃った今、次に足りないのは「宣言と実機挙動の差分を **事前に** 検出する仕組み」だった。v0.7-B では `coderouter doctor --check-model <provider>` を実装し、1 provider に対して 4 probe (auth / tool_calls / thinking / reasoning-leak) を順に走らせ、registry + providers.yaml の宣言と実測を照合して、乖離時には copy-paste 可能な YAML patch を emit する。plan.md §9.4 の 5 症状 (特に #2 tools / #3 thinking / #4 auth / #5 model-not-found) に対する**事前診断**の第一歩。
+
+- Tests: 345 → **382** (+37、`tests/test_doctor.py` +31、`tests/test_cli.py` +6)
+- Exit-code contract: `0` = match / `2` = needs_tuning / `1` = auth_fail | model-not-found | transport-error (CI smoke で grep 可能な "Exit: N" 終端行付き)
+- 非破壊: probe は read-only、tool-spec は fake `echo` で side-effect なし、auth 失敗時は remaining probe を SKIP にして token 消費を止める
+
+### Added
+
+- **`coderouter/doctor.py`** (新モジュール、~600 行、probe 本体 + reporting)
+  - `ProbeVerdict` enum: `OK / SKIP / NEEDS_TUNING / UNSUPPORTED / AUTH_FAIL / TRANSPORT_ERROR`
+  - `ProbeResult` / `DoctorReport` dataclass — per-probe verdict + `suggested_patch` + `target_file` (`providers.yaml` / `model-capabilities.yaml`)
+  - `exit_code_for(report)` — blocker (auth/unsupported/transport) > needs_tuning > ok の precedence で 0/1/2 を返す
+  - **Probe 1 `auth+basic-chat`** — `POST /chat/completions` (openai_compat) or `POST /v1/messages` (anthropic) で minimal prompt を送る。401/403 → AUTH_FAIL、404 → UNSUPPORTED (Ollama `ollama pull` hint 含む)、timeout/5xx → TRANSPORT_ERROR、2xx + parseable → OK。**auth 失敗時は残り 3 probe を SKIP**
+  - **Probe 2 `tool_calls`** — fake `echo` tool spec を添えて "Call echo with message=probe" を送る。native `tool_calls` / text-JSON (v0.3-A repair で拾える) / 何も無し の 3 分岐 × 宣言 (providers explicit / registry tools / 両方なし) の組み合わせで OK / NEEDS_TUNING を判定。patch は `providers.yaml capabilities.tools` を `true` / `false` どちらにも flip 可能
+  - **Probe 3 `thinking`** — `kind: anthropic` のみ。`thinking: {type: enabled, budget_tokens: 1024}` を送り、response content に `{type: thinking}` block があるかを観測。400 rejection (upstream が field を知らない) も成功シグナルとして検出。openai_compat は SKIP (openai-shape translation で block が失われるため)、ただし `capabilities.thinking=True` の誤設定には SKIP + 警告文で note
+  - **Probe 4 `reasoning-leak`** — `kind: openai_compat` のみ。response の `message.reasoning` 非標準 field の有無を観測。存在 + `reasoning_passthrough=false` (default) → 情報提供 OK (v0.5-C strip が働く前提で `capability-degraded` log が出る理由を operator に伝える)。anthropic は SKIP
+  - `check_model(config, provider_name, *, registry=None)` async entry / `run_check_model_sync` sync wrapper (CLI から呼ぶ)
+  - `format_report(report)` — `[OK]` / `[NEEDS TUNING]` バッジ付き line-oriented 出力、末尾に `Exit: N` 行 (CI grep 用)
+  - `_patch_providers_yaml_capability()` / `_patch_model_capabilities_yaml()` — copy-paste YAML 生成ヘルパ。header comment で貼り先ファイル名を明示
+- **`coderouter/cli.py`** — `doctor` subcommand 追加 (argparse)
+  - `--check-model <provider>` (required) / `--config <path>` (共通)
+  - `_run_doctor(args)` — config load + probe 実行 + exit code return。FileNotFoundError / YAML parse error / 不明 provider 名は exit 1 + stderr
+- **`tests/test_doctor.py`** (新規 +31)
+  - Patch emitters: 3 test (providers.yaml / model-capabilities.yaml それぞれ格納、emitted YAML が valid-yaml で parse 可能)
+  - Auth probe: 5 test (401 → AUTH_FAIL + 残り SKIP / 403 同様 / 404 → UNSUPPORTED + model 名 hint / 実 transport error / 2xx+garbage body)
+  - Tool-calls probe: 7 test (native + declared / native + silent → patch true / text-JSON + declared false → OK / text-JSON + declared true → NEEDS_TUNING / 何もなし + declared → NEEDS_TUNING false / 何もなし + undeclared / providers.yaml explicit opt-in 優先)
+  - Thinking probe: 5 test (openai_compat skip / openai_compat opt-in misconfig warn / anthropic match / anthropic no block but declared / anthropic 400 rejection + declared)
+  - Reasoning-leak probe: 3 test (detected → informational OK / absent → OK / anthropic skip)
+  - Exit-code: 3 test (all OK = 0 / NEEDS_TUNING alone = 2 / AUTH_FAIL dominates NEEDS_TUNING = 1)
+  - Orchestration: 5 test (unknown provider → KeyError with known names / registry kwarg default 経由 / openai Bearer auth / anthropic x-api-key auth / format_report 末尾 "Exit: N")
+- **`tests/test_cli.py`** (+6)
+  - `doctor` required-arg / load_config への `--check-model` 伝播 / NEEDS_TUNING が exit 2 に伝播 / 不明 provider → exit 1 + stderr に known names / FileNotFoundError → exit 1 / `--config` が load_config に届く
+
+### Design notes
+
+- **なぜ adapter 層を bypass する直接 httpx か.** Reasoning-leak probe は v0.5-C の passive strip が走る前の raw body を見たいし、thinking probe は `kind: anthropic` に Anthropic wire shape を直接送りたい。tool_calls probe も repair pass の前に raw `tool_calls` vs raw text を区別したい。adapter を経由すると観測点が adapter 内部に移動し、test mock が adapter 依存 = brittleになる。probe は「raw POST + raw body 解釈」に閉じた
+- **auth short-circuit の理由.** auth 失敗時に残り 3 probe を走らせると、token は消費されないものの操作者にノイズが増える。401 を見た瞬間に「まず env 変数を直せ」と断言でき、tool_calls / thinking の判定は無意味 (そもそも request が通らない)。SKIP 行は残して「何がチェックされてないか」の透明性は保つ
+- **exit code の precedence.** blocker (1) > tuning (2) > ok (0)。これは CI 文脈で「1 は人間介入 blocker、2 は自動 PR 可能な mechanical fix、0 は green」という分け。2 を 1 より大きい番号にしたのは従来 Unix 慣例 (lint tools で `--fix` 可能なものが 2、unrecoverable が 1) に合わせたもの
+- **probe の読みやすさ vs mock の複雑度.** 各 probe が独立した `POST` を 1 回ずつするシンプル構造にしたため、`httpx_mock.add_response` を probe 順に並べるだけでテストが書ける。alternative としては 1 call で多 probe (batch endpoint) を検討したが、openai_compat と anthropic で endpoint 形状が違う以上 batch 化のメリットが薄く、今の構造が最も直感的
+- **patch の target_file 選択.** 単一 provider の問題なら `providers.yaml` を変えるのが最小変更 (glob rule を動かすと同 family の他の provider に波及する)。逆に「model 全 family が registry と異なる」ケースは operator 判断で `model-capabilities.yaml` に patch を書く。doctor は 1 provider しか見ない原則から、suggested_patch は常に `providers.yaml` target にフォールバック。thinking probe の「block emitted but declaration silent」のみ例外 (registry declare が自然な表現なので `model-capabilities.yaml` を suggest)
+- **fake `echo` tool の safety.** 名前が `echo` で description に "diagnostic-only" と明記、parameters は `message: string` のみ、副作用性の言及ゼロ。万が一 repair 経由で caller 側に tool_call が届いても、`echo` はホワイトリストされた実ツールには普通マッチしないので silent drop される。probe の非破壊性担保
+- **`--network` flag の保留.** plan.md §9.4 でメンション された `--network` flag は static lint mode との分離を想定したものだったが、v0.7-B は `--check-model` 専用で live-probe 前提、`--network` は意味的に自明 (probe = network call)。v0.7-C or v0.8 で static-only lint mode を導入する際に再検討
+
+### Follow-ons
+
+- **v0.7-C で 5 症状を README Troubleshooting に整理** — 各症状に `coderouter doctor --check-model <provider>` 導線を貼る。HF-on-Ollama reference profile の `providers.yaml` stanza + bundled `model-capabilities.yaml` entry も追加
+- **num_ctx 境界 probe**: 大 system prompt で silent truncation するかを検出する 5th probe として検討。現状 `max_context_tokens` は registry に declare できるが probe 側では未活用
+- **CI smoke script**: GitHub Actions に週次で `coderouter doctor --check-model <each-free-provider>` を回す workflow。exit 2 → auto-PR で providers.yaml patch 適用、exit 1 → issue。v0.5-D OpenRouter roster cron と対称
+- **`reasoning` field strip の細粒度化**: 現在 v0.5-C strip は all-or-nothing (`capabilities.reasoning_passthrough` flag)。model ごとに "reasoning tag だけ strip、他の field はそのまま" のような細粒度設計は v1.0+ の reasoning_control 抽象と合流して再検討
+- **doctor --json 出力モード**: CI / script 向けに machine-readable 出力。現状は人間向け text のみ。v0.7-C or v0.8 で追加検討
+
+---
+
+## [v0.7-A] — 2026-04-20 (宣言的 `model-capabilities.yaml` registry)
+
+**Theme: 「どの family が thinking を受けるか」を YAML に外出し。** v0.5-A で導入した capability gate の heuristic は Python literal regex (`^claude-sonnet-4-6` など) が `coderouter/routing/capability.py` に焼き込まれていた。Anthropic が新 family を shipping するたびに code change + release cycle が必要で、初心者・中級者にはそもそも存在が見えない隠しレイヤだった。v0.7-A で `model-capabilities.yaml` (bundled default + user override) に宣言を外出しし、新 family 追加 = 1 行 YAML edit にしつつ、将来の `tools` / `reasoning_passthrough` / `max_context_tokens` 宣言のハブに設計。plan.md §9.4 v0.7 scope に対する最初のサブリリース。
+
+- Tests: 306 → **345** (+39、`tests/test_capability_registry.py` 新規、schema validation / glob matching / first-match-per-flag / user override layering / bundled YAML 整合性 / gate function integration)
+- 振る舞い変更ゼロ: `provider_supports_thinking` の公開 API・判定結果は v0.5-A と同一 (bundled YAML が旧 regex を 1:1 で encode)
+- providers.yaml `capabilities.*` explicit opt-in は最優先のまま (`provider.capabilities.thinking=True` は registry lookup をスキップ)
+
+### Added
+
+- **`coderouter/data/model-capabilities.yaml`** (bundled default、パッケージ同梱)
+  - Schema v1: `rules: [{match: glob, kind: "anthropic"|"openai_compat"|"any", capabilities: {thinking, reasoning_passthrough, tools, max_context_tokens}}]`
+  - 現行エントリ: `claude-opus-4-*` / `claude-sonnet-4-6*` / `claude-sonnet-4-7*` (forward-compat) / `claude-haiku-4-*` の 4 glob、全て `kind: anthropic` + `thinking: true`
+  - comment で「新 family 追加はこの 1 ファイル編集のみ」「user override は `~/.coderouter/model-capabilities.yaml`」と明記
+- **`coderouter/data/__init__.py`** — package data を安定に `importlib.resources.files()` 可能にする real-package 化
+- **`coderouter/config/capability_registry.py`** (新モジュール)
+  - `RegistryCapabilities` / `CapabilityRule` / `CapabilityRegistryFile` Pydantic models (全て `extra="forbid"`、typo で即 ValidationError)
+  - `ResolvedCapabilities` frozen dataclass — 4 flag + `None` (= 宣言無し)
+  - `CapabilityRegistry.lookup(*, kind, model)` — **first-match-per-flag** semantics: rule を top-down に歩き、flag ごとに「declared 済みの最初の rule」が勝つ (未 declared flag はさらに下の rule にパスする)
+  - `CapabilityRegistry.load_default()` / `load_from_paths()` / `from_rule_lists()` loader 3 種 (production / test-isolated / fully-in-memory)
+  - user file 不在は `[]` を返して bundled-only で動作 (正常系)、schema error は fail fast
+- **`coderouter/routing/capability.py`**
+  - `_THINKING_CAPABLE_PATTERNS` / `_THINKING_CAPABLE_RE` / `re` import を削除 (regex 焼き込みの撤去)
+  - `get_default_registry()` lazy module-level singleton — 1 process で 1 回だけ disk load
+  - `reset_default_registry()` test hook — user YAML を stage したテストが cache を無効化できる
+  - `provider_supports_thinking(provider, *, registry=None)` に `registry` kwarg 追加 — DI point。production は default 経由、test はカスタム registry 注入可
+  - `__all__` に `CapabilityRegistry` / `ResolvedCapabilities` / `get_default_registry` / `reset_default_registry` を追加 (adapter/engine 層が routing からインポート可能に)
+- **`tests/test_capability_registry.py`** (新規 +39)
+  - Schema: 7 test (empty YAML OK / top-level typo rejected / rule typo rejected / flag typo rejected / version mismatch rejected / empty match rejected / kind default = "any")
+  - Glob matching: 10 param test (`claude-opus-4-*` / `claude-sonnet-4-6*` 境界 / `qwen3-coder:*` / case sensitivity)
+  - Lookup semantics: 8 test (no rules → all None / kind filter / first-match-per-flag / flag independence / user > bundled 順序 / unmatched flag = None / `kind: "any"` universal match)
+  - Bundled YAML 整合性: 3 test (v0.5-A regex で capable だった model 7 種 × thinking=True / pre-4-6 sonnet → None / openai_compat → None)
+  - User override integration: 3 test (load_from_paths 両方読む / missing user OK / malformed user → ValidationError)
+  - Gate integration: 8 test (`registry=` kwarg 注入 / providers.yaml explicit > registry / registry 未宣言 → False / `reset_default_registry` で reload / default == fresh load / re-export 確認)
+
+### Design notes
+
+- **なぜ YAML 外出しか.** v0.5-A は「Anthropic release cadence に対する passive drift」を retro で follow-on として挙げていた (docs/retrospectives/v0.5.md §What was sharp)。code change が必要だと release cycle の遅延 = drift が不可視に。YAML ならユーザが bundled を待たず自分で更新可 (`~/.coderouter/model-capabilities.yaml`)、bundled 更新も 1-line PR で済む
+- **first-match-per-flag の理由.** 単純な first-match だと「A rule が thinking だけ declare、B rule が同じ glob で tools だけ declare」のケースで B が A を上書きするか無視するかが曖昧になる。per-flag なら「A が thinking=true、B が tools=true、両方適用」が自然に表現できる。YAML 作者は flag ごとに独立した上書き順序を設計できる
+- **layered lookup を採らない (plan.md §9.4 policy).** lunacode は `<cwd>/.kairos → <repo>/.kairos → ~/.kairos → bundled` の 4 層だが、CodeRouter の providers.yaml は deployment 時 static config なので per-cwd layer の意味が薄い。bundled + user の 2 層に絞った。将来 `providers.d/*.yaml` merge が要望されたら v0.7-D or v0.8 に分離検討 (現状 YAGNI)
+- **per-provider 粒度を維持 (per-model にしない).** 同じ `qwen3-coder:7b` でも Ollama と LMStudio で tool calling の安定度が違うケースがあり、registry lookup の粒度は `(kind, model)` のまま。lunacode は editor harness なので per-model で OK だったが CodeRouter は provider 抽象が前提
+- **`kind: "any"` vs `"anthropic"` の使い分け.** 旧 heuristic は `if provider.kind != "anthropic": return False` という hard-check を持っていた。v0.7-A ではこれを「bundled YAML の rule が全部 `kind: anthropic` なので openai_compat query は一致しない」というデータで表現し直した。将来 openai_compat family 向け default (例: `qwen3-coder:*` tools=true) を追加するときは `kind: openai_compat` rule を置けば共存可能
+- **`provider.capabilities.thinking=True` の precedence は変わらず最優先.** registry はあくまで「explicit 未宣言時の default」であって、**ユーザが明示的に上書きしたものは上書きしたまま**が unchanged contract。providers.yaml escape hatch は v0.5-A 時点の約束と同じ
+- **test-only `reset_default_registry`.** module-level singleton にした代わりに、tests が stage した user YAML を pick up するための hook を置いた。production code は呼ぶ必要なし
+
+### Follow-ons
+
+- **v0.7-B で registry ↔ live probe の diff 機構**: `coderouter doctor --check-model <provider>` が registry 宣言 vs 実機挙動を比較し、乖離を `⚠️ NEEDS TUNING` として emit する。copy-paste YAML patch (`providers.yaml` / `model-capabilities.yaml` どちらにも貼れる形) を出力
+- **Registry snapshot の CI**: 週次 `coderouter doctor --check-model` を providers.yaml 全 entry に対して回し、乖離を PR-ready artifact として落とす (v0.5-D の OpenRouter roster cron と対称)
+- **v0.7-C で HF-on-Ollama reference profile**: HF distilled model (qwen3.5 / qwen3.6 等) を Ollama 経由で使う用の `model-capabilities.yaml` entry + `providers.yaml` stanza の reference を examples に追加
+- **tools / max_context_tokens / reasoning_passthrough の bundled default 追加**: 現在 bundled は thinking のみ。v0.7-B doctor の probe 結果を accumulate して順次 bundled に昇格させる運用を想定 (policy: 「実機検証済の事実のみ bundled に書く」)
+- **Capabilities class との合流** (v1.0+): `ProviderConfig.capabilities` は v0.5 retro で「kitchen sink 化」と警告された (10 flag 目前)。v1.0 の `reasoning_control` / `mcp` Literal 抽象と合流する際に registry 側の schema も再整理
+
+---
+
 ## [v0.6.0] — 2026-04-20 (umbrella tag for v0.6-A / v0.6-B / v0.6-C / v0.6-D)
 
 **Theme: Chain as a first-class object.** v0.6-A (launch-time profile selection + startup validation), v0.6-B (profile-level parameter override `timeout_s` / `append_system_prompt` + `ProviderCallOverrides`), v0.6-C (宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` 集約 warn), v0.6-D (`mode_aliases` + `X-CodeRouter-Mode` header — intent / implementation 名前空間分離) の 4 サブリリースを一本の tag にまとめる意味合い。**startup fast-fail validator** (4 例) と **typed log payload + chokepoint helper** (v0.6-C = v0.5.1 A-1 パターンの 2 例目) が minor 全体に通底する設計 spine として確立。`_resolve_chain` が 4 engine entry-points を束ねる chokepoint であることが v0.6-C warn 配置で再確認された (v0.4-A の polymorphic chain 化の dividend)。§9.3 の v0.5 未着手分は capability mismatch→chain skip (v1.0+ / vision 同梱) を除いて全消化。

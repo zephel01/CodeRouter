@@ -1,4 +1,4 @@
-"""Capability gate for request-level block normalization (v0.5-A).
+"""Capability gate for request-level block normalization (v0.5-A, v0.7-A).
 
 Purpose
     Claude Code sends requests that carry Anthropic-specific body fields
@@ -6,32 +6,41 @@ Purpose
     of models accept. Hitting a non-supporting model returns a 400 like
     ``"adaptive thinking is not supported on this model"`` (v0.4-D retro).
 
-    v0.5-A introduces a capability gate that:
+    v0.5-A introduced a capability gate that:
       1. Declares per-provider support via ``Capabilities.thinking`` in
          ``providers.yaml`` (explicit — honored verbatim).
-      2. Falls back to a model-name heuristic when unset. The heuristic
-         covers the families we've verified accept the feature today; new
-         families should be added here when Anthropic releases them.
+      2. Falls back to a declarative registry when unset (v0.7-A: was a
+         Python-literal regex in v0.5-A). The bundled default registry
+         at ``coderouter/data/model-capabilities.yaml`` encodes the
+         families we've verified accept the feature; users can extend /
+         override via ``~/.coderouter/model-capabilities.yaml``.
       3. Lets the fallback engine prefer capable providers and silently
          strip the block when it has to hand off to a non-capable one,
          logging the degradation so operators can see it after the fact.
 
 Design decisions
-    - Pure functions, no I/O. Easy to unit test.
-    - Heuristic lives in one place (this module) rather than scattered
-      across adapters. Updates are a single edit.
+    - Pure functions, no I/O at the gate level. The registry is a module-
+      level lazy-loaded singleton (one disk read per process); tests can
+      inject a custom registry via the ``registry=`` kwarg on each gate
+      function.
+    - Heuristic lives in YAML (v0.7-A) rather than scattered across
+      adapters or baked into regex. Adding a new Anthropic family is a
+      one-line YAML edit.
     - ``strip_thinking`` returns a new ``AnthropicRequest`` instance (does
       not mutate) — fallback chains may revisit the original.
-    - OpenAI-compat providers are always considered incapable, since the
-      OpenAI wire format has no equivalent field and the existing
-      ``to_chat_request`` translation already drops it on the way out.
+    - OpenAI-compat providers are not rejected by a hardcoded ``kind``
+      check anymore (v0.7-A); the registry simply does not declare any
+      openai_compat rules for thinking, so the lookup returns
+      ``thinking=None`` which the gate treats as False. The per-provider
+      YAML escape hatch still lets users opt in explicitly.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Final
-
+from coderouter.config.capability_registry import (
+    CapabilityRegistry,
+    ResolvedCapabilities,
+)
 from coderouter.config.schemas import ProviderConfig
 from coderouter.logging import (
     CapabilityDegradedPayload,
@@ -47,61 +56,93 @@ from coderouter.translation.anthropic import AnthropicRequest
 __all__ = [
     "CapabilityDegradedPayload",
     "CapabilityDegradedReason",
+    "CapabilityRegistry",
+    "ResolvedCapabilities",
     "anthropic_request_has_cache_control",
     "anthropic_request_requires_thinking",
+    "get_default_registry",
     "log_capability_degraded",
     "provider_supports_cache_control",
     "provider_supports_thinking",
+    "reset_default_registry",
     "strip_thinking",
 ]
 
 # ---------------------------------------------------------------------------
-# Heuristic: model families known to accept Anthropic's `thinking` body field.
+# Registry: declarative model-capabilities.yaml (v0.7-A)
 #
-# Verified 2026-04 against api.anthropic.com:
-#   claude-sonnet-4-6       → accepts adaptive (`{type: enabled}` no budget)
-#   claude-sonnet-4-5-*     → 400 "adaptive thinking is not supported"
-#   claude-opus-4-*         → accepts (all 4.x opus)
-#   claude-haiku-4-*        → accepts (all 4.x haiku)
-#
-# When Anthropic releases a new family that supports thinking, add its
-# regex here. When a family is deprecated, leave it — the check is an
-# allow-list, so stale patterns don't matter.
+# Loaded lazily once per process. Tests can inject a custom registry via
+# the ``registry=`` kwarg on the gate functions, or call
+# ``reset_default_registry()`` to force a reload (picks up a user YAML
+# written in a test fixture). See ``coderouter.config.capability_registry``
+# for the schema and lookup semantics.
 # ---------------------------------------------------------------------------
 
-_THINKING_CAPABLE_PATTERNS: Final[tuple[str, ...]] = (
-    r"^claude-opus-4-",          # all 4.x opus
-    r"^claude-sonnet-4-6",       # 4.6 — first sonnet family to accept thinking
-    r"^claude-sonnet-4-7",       # future 4.7 (forward-compat)
-    r"^claude-haiku-4-",         # all 4.x haiku
-)
-
-_THINKING_CAPABLE_RE: Final[re.Pattern[str]] = re.compile(
-    "|".join(_THINKING_CAPABLE_PATTERNS)
-)
+_DEFAULT_REGISTRY: CapabilityRegistry | None = None
 
 
-def provider_supports_thinking(provider: ProviderConfig) -> bool:
+def get_default_registry() -> CapabilityRegistry:
+    """Return the process-wide default capability registry.
+
+    First call loads ``coderouter/data/model-capabilities.yaml`` +
+    optional ``~/.coderouter/model-capabilities.yaml``; subsequent calls
+    return the cached instance.
+    """
+    global _DEFAULT_REGISTRY
+    if _DEFAULT_REGISTRY is None:
+        _DEFAULT_REGISTRY = CapabilityRegistry.load_default()
+    return _DEFAULT_REGISTRY
+
+
+def reset_default_registry() -> None:
+    """Forget the cached default registry; next lookup re-reads disk.
+
+    Intended for tests that stage a user YAML and want the gate to pick
+    it up. Production code never needs this.
+    """
+    global _DEFAULT_REGISTRY
+    _DEFAULT_REGISTRY = None
+
+
+def _resolve(
+    provider: ProviderConfig,
+    registry: CapabilityRegistry | None,
+) -> ResolvedCapabilities:
+    """Consult the registry for ``provider``. ``registry=None`` uses the default."""
+    reg = registry if registry is not None else get_default_registry()
+    return reg.lookup(kind=provider.kind, model=provider.model or "")
+
+
+def provider_supports_thinking(
+    provider: ProviderConfig,
+    *,
+    registry: CapabilityRegistry | None = None,
+) -> bool:
     """Does this provider accept ``thinking: {type: enabled}`` blocks?
 
     Resolution order:
-        1. If ``provider.capabilities.thinking`` is True → True (explicit opt-in).
-        2. Otherwise apply heuristic:
-           - ``kind: openai_compat``: always False (no such wire field).
-           - ``kind: anthropic``: True iff model name matches one of the
-             known-capable regex families.
+        1. If ``provider.capabilities.thinking`` is True → True (explicit
+           per-provider opt-in from providers.yaml — highest precedence).
+        2. Otherwise consult the registry via
+           :func:`coderouter.config.capability_registry.CapabilityRegistry.lookup`.
+           The registry returns ``thinking=True`` when any matching rule
+           declares it, or ``None`` when no rule matches. ``None`` →
+           treated as False (conservative default; capability gate then
+           strips the block and logs degradation before the call).
 
     Explicit ``thinking: false`` in YAML is indistinguishable from the
-    default (both produce False); the heuristic only promotes to True. A
-    user who wants to hard-disable thinking on a capable model can change
-    the model to an incapable one, or set ``extra_body.thinking: null``
-    at the provider level (not handled here — that's a future feature).
+    default (both produce False); the registry only promotes to True. A
+    user who wants to hard-disable thinking on a registry-capable model
+    can change the provider's model to one that isn't declared, or add a
+    more-specific rule to ``~/.coderouter/model-capabilities.yaml`` that
+    declares ``thinking: false`` earlier in the chain.
+
+    The ``registry`` kwarg is for tests — production callers pass
+    nothing and get the module-level default.
     """
     if provider.capabilities.thinking:
         return True
-    if provider.kind != "anthropic":
-        return False
-    return bool(_THINKING_CAPABLE_RE.match(provider.model or ""))
+    return _resolve(provider, registry).thinking is True
 
 
 def anthropic_request_requires_thinking(request: AnthropicRequest) -> bool:

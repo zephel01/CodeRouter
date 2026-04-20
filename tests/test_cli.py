@@ -105,3 +105,161 @@ def test_serve_passes_config_via_env(
     import os
 
     assert os.environ["CODEROUTER_CONFIG"] == "/tmp/whatever.yaml"
+
+
+# ---------------------------------------------------------------------------
+# v0.7-B: `coderouter doctor --check-model <provider>` wiring tests.
+#
+# The probe logic itself lives in `coderouter.doctor` and has its own test
+# suite (``tests/test_doctor.py``). These tests focus on the CLI's two
+# jobs: (1) route the ``doctor`` subcommand to the probe entry point with
+# the right arguments; (2) map load / probe errors to the right exit
+# codes + stderr messages.
+# ---------------------------------------------------------------------------
+
+
+def _fake_config() -> object:
+    """A sentinel object that `load_config` returns; the test doesn't need
+    it to be a real CodeRouterConfig because ``run_check_model_sync`` is
+    the next thing monkeypatched."""
+    return object()
+
+
+def test_doctor_check_model_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``coderouter doctor`` without --check-model should fail argparse.
+
+    Keeps the CLI narrowly scoped to the v0.7-B deliverable — other
+    subcommands (like a future static-lint mode) will be added in later
+    releases with their own flags.
+    """
+    with pytest.raises(SystemExit):
+        cli.main(["doctor"])
+
+
+def test_doctor_invokes_run_check_model_sync_with_provider_name(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """CLI must pass the --check-model arg through to the doctor module."""
+    import coderouter.doctor as doctor_mod
+    from coderouter.doctor import ProbeResult, ProbeVerdict
+
+    called: dict[str, object] = {}
+
+    def _fake_load_config(path: str | None) -> object:
+        called["config_path"] = path
+        return _fake_config()
+
+    def _fake_run_check_model(config: object, provider_name: str) -> object:
+        called["provider_name"] = provider_name
+        # Return a minimal report so `format_report` can render it.
+        from coderouter.config.capability_registry import ResolvedCapabilities
+
+        report = doctor_mod.DoctorReport(
+            provider_name=provider_name,
+            provider=None,  # type: ignore[arg-type]
+            resolved_caps=ResolvedCapabilities(),
+        )
+        report.results = [
+            ProbeResult(name="auth+basic-chat", verdict=ProbeVerdict.OK, detail="ok"),
+        ]
+        return report
+
+    def _fake_format_report(report: object) -> str:
+        return "REPORT-TEXT"
+
+    def _fake_exit_code(report: object) -> int:
+        return 0
+
+    monkeypatch.setattr(
+        "coderouter.config.loader.load_config", _fake_load_config
+    )
+    monkeypatch.setattr(doctor_mod, "run_check_model_sync", _fake_run_check_model)
+    monkeypatch.setattr(doctor_mod, "format_report", _fake_format_report)
+    monkeypatch.setattr(doctor_mod, "exit_code_for", _fake_exit_code)
+
+    rc = cli.main(["doctor", "--check-model", "myprov"])
+    assert rc == 0
+    assert called["provider_name"] == "myprov"
+    out = capsys.readouterr().out
+    assert "REPORT-TEXT" in out
+
+
+def test_doctor_propagates_needs_tuning_exit_code(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When the probe reports NEEDS_TUNING, CLI must exit 2 (CI contract)."""
+    import coderouter.doctor as doctor_mod
+
+    monkeypatch.setattr(
+        "coderouter.config.loader.load_config", lambda path: _fake_config()
+    )
+    monkeypatch.setattr(
+        doctor_mod, "run_check_model_sync", lambda cfg, name: object()
+    )
+    monkeypatch.setattr(doctor_mod, "format_report", lambda r: "X")
+    monkeypatch.setattr(doctor_mod, "exit_code_for", lambda r: 2)
+
+    rc = cli.main(["doctor", "--check-model", "foo"])
+    assert rc == 2
+
+
+def test_doctor_returns_one_when_provider_not_in_config(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Unknown provider → KeyError from check_model → CLI exits 1 with stderr."""
+    import coderouter.doctor as doctor_mod
+
+    monkeypatch.setattr(
+        "coderouter.config.loader.load_config", lambda path: _fake_config()
+    )
+
+    def _raise_key(cfg: object, name: str) -> object:
+        raise KeyError(f"provider {name!r} not found. Known: ['foo']")
+
+    monkeypatch.setattr(doctor_mod, "run_check_model_sync", _raise_key)
+
+    rc = cli.main(["doctor", "--check-model", "missing"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "missing" in err
+    assert "foo" in err
+
+
+def test_doctor_returns_one_when_config_file_missing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Config file not found → CLI exits 1 with stderr."""
+    def _raise_fnf(path: str | None) -> object:
+        raise FileNotFoundError("providers.yaml not found. Searched: ...")
+
+    monkeypatch.setattr("coderouter.config.loader.load_config", _raise_fnf)
+
+    rc = cli.main(["doctor", "--check-model", "anything"])
+    assert rc == 1
+    err = capsys.readouterr().err
+    assert "providers.yaml not found" in err
+
+
+def test_doctor_honors_config_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """--config must be threaded into load_config."""
+    import coderouter.doctor as doctor_mod
+
+    captured: dict[str, str | None] = {}
+
+    def _fake_load_config(path: str | None) -> object:
+        captured["path"] = path
+        return _fake_config()
+
+    monkeypatch.setattr("coderouter.config.loader.load_config", _fake_load_config)
+    monkeypatch.setattr(
+        doctor_mod, "run_check_model_sync", lambda cfg, name: object()
+    )
+    monkeypatch.setattr(doctor_mod, "format_report", lambda r: "")
+    monkeypatch.setattr(doctor_mod, "exit_code_for", lambda r: 0)
+
+    cli.main(
+        ["doctor", "--check-model", "foo", "--config", "/tmp/custom.yaml"]
+    )
+    assert captured["path"] == "/tmp/custom.yaml"

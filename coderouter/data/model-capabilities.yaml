@@ -1,0 +1,86 @@
+# ============================================================
+# CodeRouter — bundled model-capabilities.yaml
+#
+# Declarative capability registry — glob + first-match defaults per
+# (kind, model) pair.
+#
+# Loaded by ``coderouter.config.capability_registry.CapabilityRegistry``
+# at startup. Users can extend / override via
+# ``~/.coderouter/model-capabilities.yaml`` (optional; merged on top of
+# this file — user rules are evaluated first, so a user rule overrides
+# a bundled rule for the same flag).
+#
+# Precedence for the capability gate (see coderouter/routing/capability.py):
+#   1. providers.yaml ``capabilities.*`` per-provider explicit flag
+#      (highest priority — verbatim opt-in).
+#   2. ``~/.coderouter/model-capabilities.yaml`` (user rules).
+#   3. This file (bundled rules).
+#   4. Unset ⇒ flag defaults to False (not-supported).
+#
+# Schema
+# ------
+# version: int        — format version (currently 1)
+# rules: list
+#   - match: str      — fnmatch-style glob applied against ProviderConfig.model
+#                       (case-sensitive). Supported wildcards: *, ?, [seq].
+#     kind: str       — optional; restricts rule to this adapter kind.
+#                       One of "anthropic", "openai_compat", "any".
+#                       Default: "any".
+#     capabilities:   — dict of flag overrides (all fields optional).
+#       thinking: bool                — Anthropic `thinking: {type: enabled}` body field
+#       reasoning_passthrough: bool   — opt OUT of the adapter's passive `reasoning` strip
+#       tools: bool                   — upstream reliably emits tool_calls
+#       max_context_tokens: int       — declared model context window
+#
+# First-match semantics: rules within a file are evaluated top-to-bottom
+# per flag; the first rule whose glob matches AND declares that flag
+# determines the value. Rules that don't declare a flag are skipped for
+# that flag's lookup (so a specific rule can override `thinking` while
+# leaving `tools` to fall through to a broader later rule).
+#
+# When to edit this file vs. the user file:
+#   - Bundled (this file): shared defaults that ship with CodeRouter.
+#     Update when a new model family verifiably accepts a capability.
+#   - User file (~/.coderouter/model-capabilities.yaml): per-deployment
+#     overrides, e.g. "my local Ollama qwen3-coder:7b is reliable with
+#     tool calling, declare tools: true for it".
+# ============================================================
+
+version: 1
+
+rules:
+  # ------------------------------------------------------------------
+  # Anthropic families — `thinking: {type: enabled}` support.
+  #
+  # Verified 2026-04 against api.anthropic.com (v0.5-A):
+  #   claude-sonnet-4-5-*   → 400 "adaptive thinking is not supported"
+  #   claude-sonnet-4-6+    → accepts adaptive + budgeted thinking
+  #   claude-opus-4-*       → accepts (all 4.x opus)
+  #   claude-haiku-4-*      → accepts (all 4.x haiku)
+  #
+  # Forward-compat entry for 4-7 is included so a named-later model ships
+  # without requiring a CodeRouter update. When Anthropic releases 4-8
+  # or 5-0, add the glob here. The per-provider YAML escape hatch
+  # (``providers.yaml`` ``capabilities.thinking: true``) remains the
+  # interim path while a new family is un-listed.
+  # ------------------------------------------------------------------
+
+  - match: "claude-opus-4-*"
+    kind: anthropic
+    capabilities:
+      thinking: true
+
+  - match: "claude-sonnet-4-6*"
+    kind: anthropic
+    capabilities:
+      thinking: true
+
+  - match: "claude-sonnet-4-7*"
+    kind: anthropic
+    capabilities:
+      thinking: true
+
+  - match: "claude-haiku-4-*"
+    kind: anthropic
+    capabilities:
+      thinking: true

@@ -60,9 +60,9 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.7-A — declarative `model-capabilities.yaml` registry (2026-04-20)
+## Status: v0.7.0 — Beginner UX, made legible (2026-04-20)
 
-Most recent work: v0.5-A's Python-literal regex heuristic for "which Anthropic models accept the `thinking` body field" is now externalized to `coderouter/data/model-capabilities.yaml` (bundled default) plus optional `~/.coderouter/model-capabilities.yaml` (user override). Adding a new family when Anthropic ships one is a one-line YAML edit. Behavior is unchanged for every existing provider — the bundled YAML encodes the v0.5-A regex 1:1 — and `providers.yaml` `capabilities.*` explicit opt-ins still win over the registry. Detail in [CHANGELOG.md](./CHANGELOG.md) `[v0.7-A]`. Prior: v0.6.0 umbrella tag (v0.6-A / v0.6-B / v0.6-C / v0.6-D) with retrospective at [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md).
+Most recent work: v0.7.0 umbrella tag closing out v0.7-A / v0.7-B / v0.7-C. The minor's goal was to make the "I set up Ollama and something is off" phenotype diagnosable in a single command. Three sub-releases closed the loop: **v0.7-A** externalized the capability heuristic from Python regex literals into a declarative `model-capabilities.yaml` (bundled default + optional user override, glob + first-match-per-flag semantics); **v0.7-B** added `coderouter doctor --check-model <provider>`, a four-probe live diagnostic that diffs observed upstream behavior against the v0.7-A registry and emits copy-paste YAML patches on mismatch with CI-friendly exit codes (`0` match / `2` needs-tuning / `1` blocker); **v0.7-C** closed the narrative loop with a `Ollama beginner — 5 silent-fail symptoms` README subsection (each symptom has its probe command, YAML patch, and fix) plus an `ollama-hf-example` reference stanza in `examples/providers.yaml`. Tests: 306 → **382** (+76, +25%); runtime deps: 5 → 5. Retrospective: [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md). Per-sub-release detail: [CHANGELOG.md](./CHANGELOG.md) `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`. Prior: v0.6.0 umbrella with retrospective at [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md).
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -88,7 +88,8 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **Declarative `ALLOW_PAID` gate (v0.6-C)** — when the paid gate filters the entire chain to empty, a single aggregate `chain-paid-gate-blocked` warn fires (with `profile` / `blocked_providers` / `hint` fields) so the root cause is grep-visible in one line, instead of getting buried under `NoProvidersAvailableError`. Per-provider `skip-paid-provider` INFO is preserved for traceability; mixed chains where a free provider survives stay silent (the normal `provider-failed` trail narrates them).
 - [x] **`mode_aliases` + `X-CodeRouter-Mode` header (v0.6-D)** — clients send an intent name (`coding` / `long` / `fast`) via header; a YAML `mode_aliases:` block resolves it to the concrete profile. Lets the chain be rewired without touching client code. Precedence: body `profile` > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > default (explicit implementation always wins over intent). Broken alias targets fast-fail at startup; unknown modes → 400 with the list of declared aliases; a `mode-alias-resolved` INFO log records every resolution.
 - [x] **Declarative `model-capabilities.yaml` registry (v0.7-A)** — the "which Anthropic model families accept the `thinking` body field" heuristic (and future `tools` / `reasoning_passthrough` / `max_context_tokens` defaults) lives in `coderouter/data/model-capabilities.yaml` instead of being baked into Python. Users can extend or override at `~/.coderouter/model-capabilities.yaml`. Schema: `rules: [{match: <fnmatch glob>, kind: anthropic|openai_compat|any, capabilities: {...}}]` with first-match-per-flag semantics. Precedence: `providers.yaml` `capabilities.*` (explicit per-provider) > user YAML > bundled YAML > unset. Adding a new Anthropic family when it ships is a one-line YAML edit; no code change required.
-- [x] JSON-line structured logging, `/healthz`, tests (**345 green**)
+- [x] **`coderouter doctor --check-model <provider>` (v0.7-B)** — live probes one provider from `providers.yaml` (auth + basic chat / tool_calls / thinking / reasoning-leak), compares with the v0.7-A registry, and prints a per-capability verdict table plus copy-paste YAML patches on mismatch. Uses direct `httpx` (not the adapter) so the reasoning-leak probe sees the raw upstream body before the v0.5-C strip, and the thinking probe sends Anthropic's native shape. Auth-probe failure short-circuits the remaining probes (`SKIP`) to save tokens. Exit codes: `0` match / `2` needs-tuning / `1` unrecoverable (auth / unreachable / unknown provider).
+- [x] JSON-line structured logging, `/healthz`, tests (**382 green**)
 
 ### Use it with Claude Code
 
@@ -208,6 +209,51 @@ Precedence across the layers is `providers.yaml` `capabilities.*` per-provider (
 
 Typos are caught at load time: unknown top-level fields, unknown flag names, and invalid `kind` values raise `ValidationError` before the server accepts traffic. The same fast-fail stance as `default_profile` / `mode_aliases` validation.
 
+#### Doctor — `coderouter doctor --check-model <provider>` (v0.7-B)
+
+"I set up Ollama and pointed the router at it, but something's off" is the most common onboarding failure. The v0.7-B `doctor` subcommand makes that a one-liner to diagnose:
+
+```bash
+coderouter doctor --check-model ollama-qwen-coder-14b
+```
+
+It runs four small probes (≤100 tokens each) against that one provider — **not** the whole fallback chain — and prints a verdict table plus copy-paste YAML patches if the observed behavior doesn't match what `providers.yaml` + `model-capabilities.yaml` currently declare:
+
+```
+provider: ollama-qwen-coder-14b  (kind=openai_compat, model=qwen2.5-coder:14b)
+
+probe                     verdict        detail
+auth+basic-chat           OK             200 in 1.4s, 18 tokens in / 6 tokens out
+tool_calls                NEEDS_TUNING   model emitted a tool_use block but registry says tools=false
+thinking                  N/A            kind=openai_compat; thinking probe is anthropic-only
+reasoning-leak            OK             no stray `reasoning` field on choice.message
+
+suggested patch for ~/.coderouter/providers.yaml:
+  providers:
+    - name: ollama-qwen-coder-14b
+      capabilities:
+        tools: true        # observed: model returned a well-formed tool_use block
+```
+
+The four probes and why they exist:
+
+- **auth+basic-chat** — one trivial turn. Catches the "API key not set" / "wrong base_url" / "provider unreachable" class of failures up front. If this probe fails, the remaining three are marked `SKIP` so you don't waste time (or tokens) chasing symptoms.
+- **tool_calls** — sends a fake `echo(text: string)` tool spec and a prompt that should trigger it. Non-destructive on purpose — no real side effects upstream. Verdict is `NEEDS_TUNING` when the model emits a valid `tool_use` but the registry says `tools: false` (or vice versa).
+- **thinking** — Anthropic-only; sends `thinking: {type: enabled, budget_tokens: 16}` natively (bypassing the OpenAI-shape adapter) and checks whether the upstream accepts the field. Emits a registry patch (not a `providers.yaml` patch) when the family isn't yet in `model-capabilities.yaml`.
+- **reasoning-leak** — issues a chat turn and inspects the raw upstream body **before** the v0.5-C strip runs, so it can distinguish "model returns `reasoning`" from "adapter already scrubbed it". Relevant to OpenRouter free models like `openai/gpt-oss-120b:free`.
+
+Exit codes (designed to drop into CI):
+
+| Code | Meaning |
+|------|---------|
+| `0`  | All probes match declared capabilities; nothing to patch |
+| `2`  | At least one `NEEDS_TUNING` verdict; YAML patches are in the output |
+| `1`  | A probe couldn't run — auth failed, provider unreachable, or unknown provider name. Fix the precondition and re-run |
+
+Precedence when multiple signals fire: `1` (blocker) > `2` (tuning) > `0` (clean). That matches the Unix lint convention where `2` means "auto-fixable" and `1` means "give up". One probe failure doesn't suppress the others — each verdict line is emitted for transparency, even under auth short-circuit where the skipped probes are shown with `SKIP: upstream auth failed`.
+
+The subcommand targets **one** provider per invocation by design: a doctor probe shouldn't suggest registry-glob changes that affect other providers sharing the same family. Re-run with a different `--check-model` name for each provider in your chain.
+
 #### What to expect
 
 - **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
@@ -217,10 +263,9 @@ Typos are caught at load time: unknown top-level fields, unknown flag names, and
 
 Coming next (see [plan.md §9.4](./plan.md) for v0.7, §18 for v1.0+):
 
-- v0.7-B — `coderouter doctor --check-model <provider>` live probe that diffs `model-capabilities.yaml` declarations against upstream reality, emits copy-paste YAML patches for the gap
 - v0.7-C — README Troubleshooting for the 5 Ollama beginner silent-fail symptoms (num_ctx / tools / `<think>` leak / model tag 404 / missing API key), HF-on-Ollama reference profile in `examples/providers.yaml`
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
-- v1.1 — `coderouter doctor --network`, launchers
+- v1.1 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers
 - v1.5 — Metrics dashboard
 
 ## Choosing `kind: openai_compat` vs `kind: anthropic`
@@ -247,6 +292,8 @@ Every provider in `providers.yaml` has a `kind`. You have two options. The choic
 
 ## Troubleshooting
 
+First pass: **run [`coderouter doctor --check-model <provider>`](#doctor--coderouter-doctor---check-model-provider-v07-b)** against the failing provider. It runs four small probes and prints copy-paste YAML patches for any declaration mismatch. If `doctor` comes back clean and the issue is still reproducing, fall through to the log-reading workflow below.
+
 Thanks to v0.4-D, failed upstream requests now appear in the server log with the **exact upstream response body** attached. When a request fails, look for:
 
 ```
@@ -265,6 +312,91 @@ Common patterns and what they mean:
 - **`502 Bad Gateway: all providers failed`** — every provider in the chain returned a retryable error. Inspect the `provider-failed` log lines in order; the last `error` field shows why the chain bottomed out.
 
 Mid-stream failures surface as a single `event: error` with `type: api_error` inside the SSE stream (no 5xx HTTP status — headers have already shipped). This is distinct from "no provider could start" which emits `type: overloaded_error`.
+
+### Ollama beginner — 5 silent-fail symptoms (v0.7-C)
+
+"I pointed the router at a fresh Ollama install and something is off" is by far the most common onboarding failure. The symptoms almost never look like errors — they look like the model shrugged. Here are the five we've collected in practice, with the one-liner that diagnoses each and the YAML patch that fixes it. `<provider>` below is the provider name from `providers.yaml`, e.g. `ollama-qwen-coder-7b`.
+
+**1. Blank / gibberish reply even though the provider returned 200.** Ollama's default `num_ctx` is 2048 tokens. Claude Code's system prompt alone is 15–20K tokens per turn, so everything after the first 2048 gets silently dropped from the **front** of the prompt — tool definitions, task description, everything. The model replies from the leftover tail.
+
+```yaml
+# providers.yaml — patch:
+- name: <provider>
+  extra_body:
+    options:
+      num_ctx: 32768    # or 16384 if you need to save VRAM
+```
+
+`coderouter doctor --check-model <provider>` does **not** currently probe `num_ctx` (planned follow-on); the symptom shows up indirectly as the tool_calls probe returning "no tool_call emitted" on a model the registry claims supports tools.
+
+**2. Claude Code keeps saying "I can't read files".** The model received the `tools` parameter, got confused, and returned an empty assistant message. Small quantized models (≤ 7B, Q4) frequently can't handle tool specs at all. CodeRouter's v0.3-A tool-call repair can recover *malformed* tool JSON, but this case is "model never attempted a tool call" — nothing to repair.
+
+```bash
+coderouter doctor --check-model <provider>
+# → tool_calls: NEEDS_TUNING — model returned no tool_use and registry says tools=true
+```
+
+```yaml
+# providers.yaml — patch suggested by doctor:
+- name: <provider>
+  capabilities:
+    tools: false    # observed: model returned no tool_use block
+```
+
+With `tools: false` the chain moves on to the next provider when a tool-heavy request arrives. Pair this with a stronger model later in the chain (e.g. qwen2.5-coder:14b or a cloud fallback).
+
+**3. `<think>...</think>` tags leak into the UI.** Qwen3-distilled models, DeepSeek-R1 distills, and some HF GGUF variants emit chain-of-thought inside the regular content channel (not an Anthropic `thinking` block). The tags land in Claude Code's terminal verbatim.
+
+```bash
+coderouter doctor --check-model <provider>
+# → reasoning-leak: informational — observed `<think>` in content
+```
+
+Suppress at the source with the model's native opt-out directive (supported by Qwen3 / R1-distill families):
+
+```yaml
+# providers.yaml — patch:
+- name: <provider>
+  append_system_prompt: "/no_think"
+```
+
+If the model doesn't honor `/no_think`, the v1.0 output-cleaning work (planned) will strip the tags downstream. Until then, pick a non-reasoning variant for interactive use.
+
+**4. First request to the chain always fails, then recovers.** The `model` field in `providers.yaml` has a typo or you forgot `ollama pull <tag>`. Ollama returns `404 model not found`, which is classified as retryable (bug fix from v0.2-x), so the chain falls through — but you lose the local-tier latency advantage on every turn.
+
+```bash
+coderouter doctor --check-model <provider>
+# → auth+basic-chat: UNSUPPORTED — 404 from upstream (run `ollama pull <tag>`)
+# → (remaining probes SKIP — no point running them until the model exists)
+```
+
+Fix: either `ollama pull <the-tag-in-your-YAML>` or correct the typo. The 404 is Ollama's way of saying "I have no GGUF with that tag loaded". Note that HF-on-Ollama model names are required to include the `:Q4_K_M`-style quant suffix — omitting it yields the same 404.
+
+**5. Every provider in the chain fails uniformly.** Your `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` isn't set (or is expired), and every cloud provider in the chain 401s in turn. As of v0.5.1 A-3 there's a `chain-uniform-auth-failure` WARN that identifies this pattern after the fact, but it's easier to catch before traffic starts.
+
+```bash
+coderouter doctor --check-model <the-cloud-provider>
+# → auth+basic-chat: AUTH_FAIL — 401 from upstream (check env var <KEY_NAME>)
+# → (remaining probes SKIP — auth dominates)
+```
+
+Fix: set the env var, or add it to the `.env` loaded at server start (`cp examples/.env.example .env`). `coderouter doctor` reads the same env the running server would, so a successful probe from your shell is a reliable signal that the server will work too.
+
+**Running the full set** is one `doctor` per provider:
+
+```bash
+for p in ollama-qwen-coder-7b ollama-qwen-coder-14b openrouter-free openrouter-gpt-oss-free; do
+  coderouter doctor --check-model "$p" || true
+done
+```
+
+Exit codes collapse into three buckets (0 clean / 2 patchable / 1 blocker) so the loop above can be wired into CI — see the [Doctor subsection](#doctor--coderouter-doctor---check-model-provider-v07-b) for the full table.
+
+If you run both CodeRouter (router layer) and [lunacode](https://github.com/zephel01/lunacode) (editor harness) against the same local Ollama, lunacode's [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) is the sister reference — it covers the same 5 symptoms at the editor/harness layer (per-model settings, chat template overrides, `/no_think` variants) where CodeRouter's provider-granularity declarations stop.
+
+#### HF-on-Ollama reference profile
+
+Running any HF-hosted GGUF through Ollama's `hf.co/<user>/<repo>:<quant>` loader amplifies all 5 symptoms — HF GGUFs often ship without chat templates, inherit the leaky `<think>` tag from distillation, and require the `:<quant>` suffix that catches symptom 4. `examples/providers.yaml` includes a commented-out `ollama-hf-example` stanza that exercises every knob (`extra_body.options.num_ctx`, `append_system_prompt: "/no_think"`, `capabilities.tools: false`, `reasoning_passthrough`) with inline comments mapping each to its symptom. Copy it, set `model:` to the HF tag you pulled, and run `coderouter doctor --check-model ollama-hf-example` to verify.
 
 ## Dependency policy
 
