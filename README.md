@@ -1,12 +1,16 @@
-# CodeRouter
+<h1 align="center">CodeRouter</h1>
 
-> **Local-first coding AI with ZERO cost by default.**
-> Local → free cloud → paid cloud, automatic fallback. Claude Code / OpenAI compatible. 5 dependencies.
+<p align="center">
+  <strong>Local-first coding AI with ZERO cost by default.</strong><br>
+  Local → free cloud → paid cloud, automatic fallback. Claude Code / OpenAI compatible. 5 dependencies.
+</p>
 
-[![status](https://img.shields.io/badge/status-pre--alpha-orange)]()
-[![python](https://img.shields.io/badge/python-3.12%2B-blue)]()
-[![deps](https://img.shields.io/badge/runtime%20deps-5-brightgreen)]()
-[![license](https://img.shields.io/badge/license-MIT-yellow)]()
+<p align="center">
+  <a href=""><img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="status"></a>
+  <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
+  <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
+  <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
+</p>
 
 ## What is this?
 
@@ -56,9 +60,9 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.6.0 — umbrella tag for v0.6-A / v0.6-B / v0.6-C / v0.6-D (2026-04-20)
+## Status: v0.7-A — declarative `model-capabilities.yaml` registry (2026-04-20)
 
-Retrospective & design through-lines: [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md). Per-sub-release detail in [CHANGELOG.md](./CHANGELOG.md) sections `[v0.6-A]` through `[v0.6-D]` plus the `[v0.6.0]` umbrella summary.
+Most recent work: v0.5-A's Python-literal regex heuristic for "which Anthropic models accept the `thinking` body field" is now externalized to `coderouter/data/model-capabilities.yaml` (bundled default) plus optional `~/.coderouter/model-capabilities.yaml` (user override). Adding a new family when Anthropic ships one is a one-line YAML edit. Behavior is unchanged for every existing provider — the bundled YAML encodes the v0.5-A regex 1:1 — and `providers.yaml` `capabilities.*` explicit opt-ins still win over the registry. Detail in [CHANGELOG.md](./CHANGELOG.md) `[v0.7-A]`. Prior: v0.6.0 umbrella tag (v0.6-A / v0.6-B / v0.6-C / v0.6-D) with retrospective at [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md).
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -83,7 +87,8 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **Profile-level parameter override (v0.6-B)** — a profile can override `timeout_s` and `append_system_prompt` for every attempt in its chain (replace semantics: profile value wins entirely when set). `append_system_prompt: ""` explicitly clears the provider's directive for this profile. Threaded through a `ProviderCallOverrides` dataclass so adapters never need to know the profile concept.
 - [x] **Declarative `ALLOW_PAID` gate (v0.6-C)** — when the paid gate filters the entire chain to empty, a single aggregate `chain-paid-gate-blocked` warn fires (with `profile` / `blocked_providers` / `hint` fields) so the root cause is grep-visible in one line, instead of getting buried under `NoProvidersAvailableError`. Per-provider `skip-paid-provider` INFO is preserved for traceability; mixed chains where a free provider survives stay silent (the normal `provider-failed` trail narrates them).
 - [x] **`mode_aliases` + `X-CodeRouter-Mode` header (v0.6-D)** — clients send an intent name (`coding` / `long` / `fast`) via header; a YAML `mode_aliases:` block resolves it to the concrete profile. Lets the chain be rewired without touching client code. Precedence: body `profile` > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > default (explicit implementation always wins over intent). Broken alias targets fast-fail at startup; unknown modes → 400 with the list of declared aliases; a `mode-alias-resolved` INFO log records every resolution.
-- [x] JSON-line structured logging, `/healthz`, tests (**306 green**)
+- [x] **Declarative `model-capabilities.yaml` registry (v0.7-A)** — the "which Anthropic model families accept the `thinking` body field" heuristic (and future `tools` / `reasoning_passthrough` / `max_context_tokens` defaults) lives in `coderouter/data/model-capabilities.yaml` instead of being baked into Python. Users can extend or override at `~/.coderouter/model-capabilities.yaml`. Schema: `rules: [{match: <fnmatch glob>, kind: anthropic|openai_compat|any, capabilities: {...}}]` with first-match-per-flag semantics. Precedence: `providers.yaml` `capabilities.*` (explicit per-provider) > user YAML > bundled YAML > unset. Adding a new Anthropic family when it ships is a one-line YAML edit; no code change required.
+- [x] JSON-line structured logging, `/healthz`, tests (**345 green**)
 
 ### Use it with Claude Code
 
@@ -173,6 +178,36 @@ Precedence (first hit wins): body `profile` > `X-CodeRouter-Profile` header > `X
 
 Guardrails: broken alias targets fast-fail at startup (same philosophy as `default_profile` validation), unknown Mode values return 400 with the list of declared aliases, and every resolution logs a `mode-alias-resolved` INFO line so operators can grep the mapping after the fact.
 
+#### Model capabilities registry — `model-capabilities.yaml` (v0.7-A)
+
+The "which Anthropic families accept `thinking: {type: enabled}`" knowledge used to live as a regex literal inside `coderouter/routing/capability.py`. From v0.7-A it lives in `coderouter/data/model-capabilities.yaml` (shipped with the package) with an optional override at `~/.coderouter/model-capabilities.yaml`. Adding a new family when Anthropic releases one is a one-line YAML edit — no code change, no release cycle.
+
+```yaml
+# ~/.coderouter/model-capabilities.yaml — optional user override
+version: 1
+rules:
+  # A hypothetical new family Anthropic just shipped; you want to use
+  # it before the CodeRouter bundled defaults are updated.
+  - match: "claude-sonnet-5-*"
+    kind: anthropic
+    capabilities:
+      thinking: true
+
+  # Your local Ollama reliably calls tools on this tag — declare it so
+  # the doctor probe (v0.7-B) agrees and future glob consumers can
+  # see it as an opinionated default.
+  - match: "qwen3-coder:*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+```
+
+Schema: each rule has `match` (fnmatch glob against `provider.model`, case-sensitive), optional `kind` filter (`"anthropic"` / `"openai_compat"` / `"any"`, default `"any"`), and a `capabilities:` map that can declare `thinking` / `reasoning_passthrough` / `tools` / `max_context_tokens`. Rules are walked top-to-bottom and the **first rule that declares each flag** wins for that flag — a rule can override one capability while leaving others to fall through.
+
+Precedence across the layers is `providers.yaml` `capabilities.*` per-provider (explicit opt-in) > user `model-capabilities.yaml` > bundled `model-capabilities.yaml` > unset (treated as False). This means a user never loses the ability to override — an explicit `capabilities.thinking: true` on a provider in `providers.yaml` still wins over the registry, same as v0.5-A.
+
+Typos are caught at load time: unknown top-level fields, unknown flag names, and invalid `kind` values raise `ValidationError` before the server accepts traffic. The same fast-fail stance as `default_profile` / `mode_aliases` validation.
+
 #### What to expect
 
 - **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
@@ -180,8 +215,10 @@ Guardrails: broken alias targets fast-fail at startup (same philosophy as `defau
 - **Tool selection quality** is a model limitation, not a wire issue. CodeRouter repairs the wire (text JSON → `tool_use` block); whether the model chose the *right* tool is on the model. qwen2.5-coder:14b sometimes picks `Glob` where `Bash` would be correct — the remedy is a stronger local model or falling through to Claude via `ALLOW_PAID=true`.
 - **Mid-stream failure** (Ollama dies after first chunk) surfaces as a single `event: error` to the client, no retry — the partial response is preserved and the stream closes cleanly.
 
-Coming next (see [plan.md §18](./plan.md)):
+Coming next (see [plan.md §9.4](./plan.md) for v0.7, §18 for v1.0+):
 
+- v0.7-B — `coderouter doctor --check-model <provider>` live probe that diffs `model-capabilities.yaml` declarations against upstream reality, emits copy-paste YAML patches for the gap
+- v0.7-C — README Troubleshooting for the 5 Ollama beginner silent-fail symptoms (num_ctx / tools / `<think>` leak / model tag 404 / missing API key), HF-on-Ollama reference profile in `examples/providers.yaml`
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers
 - v1.5 — Metrics dashboard
