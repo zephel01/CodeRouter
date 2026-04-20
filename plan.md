@@ -777,6 +777,12 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - Status を `v0.4-A — Symmetric OpenAI ⇄ Anthropic routing` に
    - 147 tests green / native adapter / 逆翻訳 (v0.4-A) を箇条書きに追加
    - Coming next から v0.3.x 完了項目を除去
+8. [x] **v0.4 実機疎通確認** (2026-04-20) — `/tmp/cr-verify.yaml` に検証用 profile を用意し host から spot check。
+   - `/v1/chat/completions` → `openrouter-gpt-oss-free`: 200 OK / pong 応答 / `reasoning` フィールドが追加で返る発見あり (将来 reasoning-strip 層で扱う)
+   - `/v1/chat/completions` → `anthropic-direct` (tool_choice=auto): `tool_calls[0].id = "toolu_..."` で逆翻訳経路確定。system lift / tools→input_schema / tool_use→tool_calls 全段動作
+   - streaming 版: OpenAI shape の delta 列 + trailing usage chunk + [DONE] で完全再構築、Anthropic event 漏れなし
+   - `/v1/messages` → `anthropic-direct` (native passthrough): `cache_control: {type: "ephemeral"}` が API まで届き、call 1 で `cache_creation_input_tokens: 1321`、call 2 で `cache_read_input_tokens: 1321` を確認 → cache_control ロスレス運搬を数値で証明
+   - server log の `native_anthropic: true` フラグが Anthropic ingress 経由でのみ立つことも確認 → engine の分岐設計どおり
 
 ### 低優先 (v0.5 以降で拾う)
 
