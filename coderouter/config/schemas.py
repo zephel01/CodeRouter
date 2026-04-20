@@ -28,6 +28,12 @@ class Capabilities(BaseModel):
     tools: bool = False
     vision: bool = False
     prompt_cache: bool = False
+    # v0.5-A: Anthropic's extended-thinking body field (`thinking: {type:
+    # enabled, budget_tokens: N}` or `{type: enabled}` adaptive). Narrow,
+    # per-model flag — when unset, the capability gate falls back to a
+    # model-name heuristic (see coderouter/routing/capability.py). Distinct
+    # from `reasoning_control` below, which is the v1.0+ abstract interface.
+    thinking: bool = False
     # v1.0+ fields, declared early so providers.yaml can future-proof
     reasoning_control: Literal["none", "openai", "anthropic", "provider_specific"] = "none"
     mcp: Literal["none", "anthropic", "provider_specific"] = "none"

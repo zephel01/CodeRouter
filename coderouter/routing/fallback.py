@@ -37,6 +37,11 @@ from coderouter.adapters.base import (
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.logging import get_logger
+from coderouter.routing.capability import (
+    anthropic_request_requires_thinking,
+    provider_supports_thinking,
+    strip_thinking,
+)
 from coderouter.translation import (
     AnthropicRequest,
     AnthropicResponse,
@@ -106,6 +111,37 @@ class FallbackEngine:
                 continue
             adapters.append(self._adapters[prov_name])
         return adapters
+
+    def _resolve_anthropic_chain(
+        self, request: AnthropicRequest
+    ) -> list[tuple[BaseAdapter, bool]]:
+        """Resolve a chain, annotating each adapter with a ``will_degrade`` flag.
+
+        v0.5-A capability gate: when ``request`` carries ``thinking: {type:
+        enabled}`` and a provider does not support it (per
+        ``provider_supports_thinking``), we still include that provider in
+        the chain — it becomes a degraded-fallback. The block will be
+        stripped before the call and a ``capability-degraded`` log line
+        will fire. Capable providers are pulled to the front (stable sort)
+        so the user's ordering is preserved within each bucket.
+
+        Returns a list of ``(adapter, will_degrade)`` pairs in the order
+        they should be tried. When the request has no capability
+        requirement, all entries have ``will_degrade=False`` and the order
+        matches ``_resolve_chain``.
+        """
+        base = self._resolve_chain(request.profile)
+        if not anthropic_request_requires_thinking(request):
+            return [(a, False) for a in base]
+
+        capable: list[tuple[BaseAdapter, bool]] = []
+        degraded: list[tuple[BaseAdapter, bool]] = []
+        for adapter in base:
+            if provider_supports_thinking(adapter.config):
+                capable.append((adapter, False))
+            else:
+                degraded.append((adapter, True))
+        return capable + degraded
 
     async def generate(self, request: ChatRequest) -> ChatResponse:
         adapters = self._resolve_chain(request.profile)
@@ -227,25 +263,41 @@ class FallbackEngine:
         self, request: AnthropicRequest
     ) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
-        adapters = self._resolve_chain(request.profile)
+        chain = self._resolve_anthropic_chain(request)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
 
-        for adapter in adapters:
+        for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
+            effective_request = request
+            if will_degrade:
+                # v0.5-A: strip unsupported blocks before handing to this
+                # provider and emit a structured log so operators can see
+                # the downgrade after the fact. Today only `thinking` is
+                # gated; the list is surfaced in the log for forward-compat.
+                effective_request = strip_thinking(request)
+                logger.info(
+                    "capability-degraded",
+                    extra={
+                        "provider": adapter.name,
+                        "dropped": ["thinking"],
+                        "reason": "provider-does-not-support",
+                    },
+                )
             logger.info(
                 "try-provider",
                 extra={
                     "provider": adapter.name,
                     "stream": False,
                     "native_anthropic": is_native,
+                    "degraded": will_degrade,
                 },
             )
             try:
                 if is_native:
-                    resp = await adapter.generate_anthropic(request)
+                    resp = await adapter.generate_anthropic(effective_request)
                 else:
-                    chat_req = to_chat_request(request)
+                    chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
                     chat_resp = await adapter.generate(chat_req)
                     resp = to_anthropic_response(
@@ -294,13 +346,24 @@ class FallbackEngine:
         the downgrade entirely (Anthropic emits structured tool_use
         blocks natively, no repair needed).
         """
-        adapters = self._resolve_chain(request.profile)
+        chain = self._resolve_anthropic_chain(request)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
 
-        for adapter in adapters:
+        for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
             downgrading = (not is_native) and bool(request.tools)
+            effective_request = request
+            if will_degrade:
+                effective_request = strip_thinking(request)
+                logger.info(
+                    "capability-degraded",
+                    extra={
+                        "provider": adapter.name,
+                        "dropped": ["thinking"],
+                        "reason": "provider-does-not-support",
+                    },
+                )
             logger.info(
                 "try-provider",
                 extra={
@@ -308,6 +371,7 @@ class FallbackEngine:
                     "stream": True,
                     "native_anthropic": is_native,
                     "downgrade": downgrading,
+                    "degraded": will_degrade,
                 },
             )
 
@@ -318,11 +382,11 @@ class FallbackEngine:
             first: AnthropicStreamEvent
             try:
                 if is_native:
-                    event_iter = adapter.stream_anthropic(request)
+                    event_iter = adapter.stream_anthropic(effective_request)
                     first = await anext(event_iter)
                 elif downgrading:
                     # v0.3-D downgrade: run non-streaming, repair, replay.
-                    chat_req = to_chat_request(request)
+                    chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
                     chat_resp = await adapter.generate(chat_req)
                     anth_resp = to_anthropic_response(
@@ -333,7 +397,7 @@ class FallbackEngine:
                     )
                     first = await anext(event_iter)
                 else:
-                    chat_req = to_chat_request(request)
+                    chat_req = to_chat_request(effective_request)
                     chat_req.stream = True
                     event_iter = stream_chat_to_anthropic_events(
                         adapter.stream(chat_req)

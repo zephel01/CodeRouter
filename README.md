@@ -56,7 +56,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.4-D — Symmetric routing + beta header passthrough (2026-04-20)
+## Status: v0.5-A — Thinking capability gate (2026-04-20)
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -74,7 +74,8 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **Mid-stream fallback guard** — `MidStreamError` prevents silent fall-through after first byte; clients see an explicit `event: error` / `type: api_error` instead of spliced partial responses from two different providers
 - [x] **Usage aggregation** — `message_delta.usage.output_tokens` uses upstream `completion_tokens` when available, falls back to `(emitted_chars + 3) // 4`. Adapter auto-adds `stream_options.include_usage: true`, overridable per provider.
 - [x] **Structured upstream-error logging (v0.4-D)** — `provider-failed` log lines now include the upstream response body (truncated to 500 chars). 4xx diagnosis is no longer guesswork.
-- [x] JSON-line structured logging, `/healthz`, tests (**153 green**)
+- [x] **Thinking capability gate (v0.5-A)** — requests carrying Anthropic's `thinking: {type: "enabled"}` block are routed to providers whose model supports it (stable-sorted to the front of the fallback chain); if none do, the block is silently stripped and `capability-degraded` is emitted to the structured log. This means pinning `provider.model = claude-sonnet-4-5-20250929` no longer 400s on adaptive-thinking side requests — the block is dropped on the way out rather than rejected by the upstream.
+- [x] JSON-line structured logging, `/healthz`, tests (**189 green**)
 
 ### Use it with Claude Code
 
@@ -127,7 +128,9 @@ If you'd rather have the paid tier go through Anthropic's native API (so `cache_
 
 Coming next (see [plan.md §18](./plan.md)):
 
-- v0.5 — Profiles / capability flags / per-mode routing (full scope). Includes the **thinking / beta body capability gate** — strip or normalize block types the upstream model doesn't support, so "which model you pick" stops being a footgun (see the v0.4 retro [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md))
+- v0.5-B — `cache_control` normalization. Extends the v0.5-A gate to the other Anthropic-only body field. Less urgent than thinking because `cache_control` on an `openai_compat` provider is lossy (pass-through, no error) rather than rejected — but the lossiness deserves an explicit log + documented guarantee.
+- v0.5-C — OpenRouter `reasoning` response-field passive strip (see the v0.4 retro [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md))
+- v0.5-D — Weekly OpenRouter roster diff cron (proactive replacement for the reactive v0.4-B refresh)
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers
 - v1.5 — Metrics dashboard
@@ -166,7 +169,7 @@ Thanks to v0.4-D, failed upstream requests now appear in the server log with the
 Common patterns and what they mean:
 
 - **`"Extra inputs are not permitted"` on a body field** — the upstream model (usually Anthropic) rejected a field it doesn't know. If the field is gated behind an `anthropic-beta` header (`context_management`, newer `cache_control` / `thinking` variants), check that the client actually set the header. CodeRouter forwards it verbatim as of v0.4-D, but if the client never sent one, no header will reach upstream.
-- **`"adaptive thinking is not supported on this model"`** — the client sent a `thinking` block the upstream model doesn't support. Fix by pinning `provider.model` to a newer model that supports adaptive thinking (e.g. `claude-sonnet-4-6` rather than `claude-sonnet-4-5-20250929`). This will become an adapter-level capability gate in v0.5.
+- **`"adaptive thinking is not supported on this model"`** — as of v0.5-A this should no longer reach the user. The capability gate routes `thinking: {type: enabled}` requests to providers whose model accepts the field (heuristic: `claude-opus-4-*` / `claude-sonnet-4-6` / `claude-sonnet-4-7` / `claude-haiku-4-*`), and strips the block when the chain only has incapable providers. If you still see this error, either (a) your chain has a newer Anthropic family that isn't in the heuristic yet — set `capabilities.thinking: true` on that provider to opt in explicitly, or (b) file an issue with the model slug so the heuristic can be updated. Check the server log for `capability-degraded` lines to confirm the gate is firing.
 - **`rate_limit_error` / 429** — Anthropic org-level TPM cap. This is retryable (the engine will try the next provider); adjust profile order or lower Claude Code's context with `/compact`.
 - **`unknown profile 'xxx'` (400)** — the `profile` field in the request body or `X-CodeRouter-Profile` header doesn't match any `profiles[].name` in your config. The response body shows the valid names.
 - **`502 Bad Gateway: all providers failed`** — every provider in the chain returned a retryable error. Inspect the `provider-failed` log lines in order; the last `error` field shows why the chain bottomed out.

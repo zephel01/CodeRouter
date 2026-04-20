@@ -789,11 +789,14 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - 診断性能強化: `fallback.py` の `provider-failed` / `provider-failed-midstream` ログ 6 箇所に `"error": str(exc)[:500]` を追加 → 400 の body を構造化ログで取れるように。これが `context_management` エラーの特定を可能にした
    - tests +6 件 (`test_adapter_anthropic.py` +4 / `test_ingress_anthropic.py` +2) → 合計 **153 件**
 10. [x] **v0.4 retrospective + docs pass** (2026-04-20) — v0.4-A/B/D を一気通貫で振り返り、README の stale 箇所 (tests 件数 / deepseek-r1 / "Coming next") を全て reconcile。新設 2 セクション「Choosing `kind: openai_compat` vs `kind: anthropic`」「Troubleshooting」。詳細なナラティブは [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md) — v0.5 計画の primary source。
+11. [x] **v0.5-A: thinking capability gate** (2026-04-20) — v0.4 retro §Follow-ons で筆頭に挙げた capability gate の最初のピース。`coderouter/routing/capability.py` 新設 (純粋関数 3 つ: `provider_supports_thinking` / `anthropic_request_requires_thinking` / `strip_thinking`)、`Capabilities.thinking: bool` 追加、`FallbackEngine` の anthropic-shaped path 2 本で `_resolve_anthropic_chain` (capable/degraded stable-sort) + `strip_thinking` + 構造化ログ `capability-degraded`。tests +36 (`test_capability.py` +27 / `test_fallback_thinking.py` +9) → 合計 **189 件**。これで「v0.4-D で model を手動で Sonnet 4.5 → 4.6 に差し替える必要があった」症状が adapter 層で自動解決される。v0.5-B (cache_control normalization) を次に拾う。
 
 ### 低優先 (v0.5 以降で拾う)
 
 - [ ] プロファイル / capability / ALLOW_PAID の完全版は §9 (v0.5) スコープ
-- [ ] **Thinking / beta-gated body field capability gate (v0.5 候補)** — Claude Code は `thinking: {"type": "enabled", "budget_tokens": ...}` や `context_management` を送るが、古い model (例: Sonnet 4.5) は adaptive thinking を受け付けず 400 になる。現状ユーザは `provider.model` を手動で新しいものに差し替える必要がある。adapter 層で `provider.capabilities` (or 新設の `provider.features`) を見て、サポートされない block を strip / normalize する gate があれば「どの model を選んでも Claude Code が動く」が実現できる。2026-04-20 `v0.4-D` 実機検証で顕在化。
+- [ ] **v0.5-B: cache_control normalization** — v0.5-A の gate 基盤を流用。thinking と違い openai_compat 経由では 400 にならず lossy pass-through するだけなので、挙動を明文化 + `cache_control` 含むリクエストを openai_compat に回す際の警告ログを追加する。1024-token minimum (retro §What was sharp 参照) の docstring 警告も併記。
+- [ ] **v0.5-C: OpenRouter `reasoning` field passive strip** (retro §Follow-ons より) — 一部 free-tier モデルが返す非標準 `reasoning` キーを response-side で silent strip + ログ。
+- [ ] **v0.5-D: OpenRouter roster 週次 cron diff** (retro §Follow-ons より) — `/api/v1/models` を snapshot に diff、free-tier 撤退検出を proactive 化。v0.4-B は reactive だった。
 - [ ] 14 ケース回帰テスト / Code Mode / 出力クリーニングは §10 (v1.0) スコープ
 - [ ] launcher / doctor は §11 (v1.1)、計測は §12 (v1.5)、プラグイン / MCP は §13 (v2.0)
 

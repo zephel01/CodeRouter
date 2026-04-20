@@ -6,6 +6,82 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.5-A] — 2026-04-20
+
+### thinking capability gate
+
+v0.4-D retrospective で follow-on に挙げた「capability gate」の最初のピース。
+Anthropic の `thinking: {type: "enabled"}` を対応モデルだけにルーティングし、
+未対応モデルには silent strip + 構造化ログで degrade する。
+
+背景: v0.4-D 実機テストで `claude-sonnet-4-5-20250929` が adaptive thinking
+リクエストに 400 を返す問題にぶつかり、`claude-sonnet-4-6` に差し替えて回避し
+た。ユーザーのモデル選択が「正当性に影響する決定」になっていた状態を、v0.5-A
+で「純粋に経済性の決定」に降格させる。
+
+#### Added
+
+- **`coderouter/routing/capability.py`** (新規) — 純粋関数 3 つ:
+  - `provider_supports_thinking(provider)` — YAML flag 優先、未指定なら
+    model 名 heuristic (`^claude-(opus|sonnet|haiku)-4-(6|7)`, `claude-opus-4-`,
+    `claude-haiku-4-` にマッチすれば capable)。`kind: openai_compat` は
+    model 名にかかわらず常に incapable (OpenAI wire に thinking field なし)
+  - `anthropic_request_requires_thinking(request)` — `model_extra["thinking"]`
+    が `{"type": "enabled"}` かどうかを判定。disabled / 欠落 / 非 dict は False
+  - `strip_thinking(request)` — extras から `thinking` を除いた複製を返す
+    (mutation-free)。`profile` / `anthropic_beta` (exclude=True fields) は保持
+- **`coderouter/config/schemas.py`**
+  - `Capabilities.thinking: bool = False` 追加。YAML で明示的に `true` を
+    立てると heuristic を上書きできる (新モデルファミリーが出た時の escape
+    hatch)。`reasoning_control: Literal[...]` (v1.0+ abstract interface) とは
+    別物なので併存
+- **`coderouter/routing/fallback.py`**
+  - `_resolve_anthropic_chain(request)` — `request` が thinking を要求して
+    いる場合、chain を `capable` / `degraded` の 2 バケットに stable-sort し
+    て返す。要求なしの場合は従来通り declared order を保つ
+
+#### Changed
+
+- **`coderouter/routing/fallback.py`** — `generate_anthropic` / `stream_anthropic`
+  の両方で:
+  - `_resolve_chain(...)` → `_resolve_anthropic_chain(...)` に差し替え。戻り値が
+    `list[tuple[BaseAdapter, bool]]` になり、各 provider について
+    `will_degrade` フラグが付く
+  - `will_degrade=True` の provider を呼ぶ前に `strip_thinking(request)` + 構造化
+    ログ `capability-degraded` (`provider` / `dropped: ["thinking"]` / `reason`)
+  - 既存の `try-provider` ログに `"degraded": will_degrade` を追加
+- OpenAI ingress (`/v1/chat/completions`) 経路は変更なし。ChatRequest に
+  thinking field がそもそもないため、capability logic を通す必要がない
+
+#### Tests
+
+- **+36 件** (合計 **189 件 green**)
+  - `test_capability.py` (新規) +27: heuristic の capable/incapable ファミリー
+    (パラメトリック), openai_compat 常時 incapable, YAML 明示 true が両 kind で
+    wins, `requires_thinking` の enabled/disabled/missing/非 dict 各種, `strip`
+    の除去 / 保持 / noop / wire-body clean / 他 extras 非破壊
+  - `test_fallback_thinking.py` (新規) +9: capable-pull-to-front, plain-request
+    順序保持, degraded fallback + `capability-degraded` ログ発火, strip 後の
+    adapter 引数が wire-body レベルで clean, no-degraded-log when capable 成功
+    / plain request, openai_compat は Claude-like slug でも incapable 扱い, YAML
+    thinking:true で heuristic 外モデルを capable に昇格, streaming path も
+    同じ preference
+
+#### Notes
+
+- **v0.5-B で予定**: `cache_control` の normalization。thinking と違って
+  「400 vs 200」の二値ではなく「openai_compat 経由だと lossy で pass-through
+  する / anthropic で preserve」という非対称性なので、別リリースで扱う
+- **heuristic table のメンテナンス**: 新しい Claude family が出たら
+  `capability.py` の `_THINKING_CAPABLE_PATTERNS` に regex を追加。allow-list
+  なので古いパターンを削る必要はない (deprecated 家族がマッチしても害はない)
+- **実機 verify は任意**: 本リリースの挙動は 36 件の unit/engine tests で確認
+  済み。実機で chain 再選択を見たい場合は `providers.yaml` に capable/incapable
+  の 2 つを置き、thinking 付きリクエストを `/v1/messages` に投げると
+  `capability-degraded` ログの有無で確認できる
+
+---
+
 ## [v0.4-D] — 2026-04-20
 
 ### `anthropic-beta` header passthrough (Claude Code 400 fix)

@@ -210,6 +210,14 @@ providers:
       chat: true
       streaming: true
       tools: true
+      # v0.5-A capability gate. Setting `thinking: true` explicitly tells
+      # the router this provider accepts Anthropic's `thinking: {type:
+      # enabled, ...}` body field. When unset (like here), the router
+      # falls back to a model-name heuristic — claude-sonnet-4-6 /
+      # claude-opus-4-* / claude-haiku-4-* are auto-detected as capable.
+      # Declaring it explicitly is only needed for forward-compat with
+      # new Claude families before the heuristic table is updated, e.g.:
+      #   thinking: true
     # Optional: override the default anthropic-version header (2023-06-01)
     # extra_body:
     #   anthropic_version: "2023-06-01"
