@@ -764,11 +764,15 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - engine 側はコード変更なし（polymorphic dispatch が効く）
    - tests +37 件 (`test_translation_reverse.py` 31 件新設 / `test_adapter_anthropic.py` +2 net / `test_fallback_anthropic.py` +4) → 合計 **147 件**
    - 詳細は CHANGELOG.md `[v0.4-A]` セクション
-5. [ ] **Claude Code 向け profile サンプル** を README と `examples/providers.yaml` に追加。
-   - Claude Code は 15-20K token の system prompt を毎ターン送るので、14B クラスでは prompt eval 100秒級。
-     7B 以下中心 + 14B を最後尾に置くサンプルを例示する
+5. [x] **Claude Code 向け profile サンプル** を README と `examples/providers.yaml` に追加 (v0.4-A docs pass, 2026-04-20)。
+   - `claude-code` profile: 7b → 14b → 2 free → paid (openrouter-claude)。14B timeout は 300s で Claude Code の 15-20K token system prompt 前提
+   - `claude-code-direct` profile (NEW): 最終 paid を `anthropic-direct` (kind: anthropic) に差し替えたバリアント。cache_control / thinking ブロックを無傷で扱える
+   - README「Use it with Claude Code」に profile の YAML snippet を明示
 6. [ ] **OpenRouter 無料モデル一覧の棚卸** — 2026-04 時点で安定して使える無料モデルを選定し、`examples/` 同梱
-7. [ ] **README 更新** — v0.2 までの実機疎通例 (Claude Code) を Quickstart に反映
+7. [x] **README 更新** — v0.3 / v0.4-A の実装状況を Quickstart / Status セクションに反映 (2026-04-20)。
+   - Status を `v0.4-A — Symmetric OpenAI ⇄ Anthropic routing` に
+   - 147 tests green / native adapter / 逆翻訳 (v0.4-A) を箇条書きに追加
+   - Coming next から v0.3.x 完了項目を除去
 
 ### 低優先 (v0.5 以降で拾う)
 

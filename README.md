@@ -56,7 +56,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.3.0 Production-quality tool calls (2026-04-20)
+## Status: v0.4-A — Symmetric OpenAI ⇄ Anthropic routing (2026-04-20)
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -65,12 +65,14 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] SSE streaming on both endpoints (Anthropic event sequence `message_start → content_block_* → message_delta → message_stop`)
 - [x] Bidirectional Anthropic ⇄ OpenAI wire-format translation (`text` / `tool_use` / `tool_result` / `image` content blocks)
 - [x] OpenAI-compat adapter (covers llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq)
-- [x] Sequential fallback engine with `ALLOW_PAID=false` enforcement
+- [x] **Native Anthropic adapter** (`kind: "anthropic"`) — from the Anthropic ingress the request passes straight through to `api.anthropic.com` with no OpenAI-shape round-trip, preserving `cache_control` / `thinking` blocks
+- [x] **Symmetric routing (v0.4-A)** — `/v1/chat/completions` can also reach `kind: "anthropic"` providers; the adapter reverse-translates `ChatRequest → AnthropicRequest` (system lifted, `tool_result` blocks batched into one user turn, `tool_calls ↔ tool_use`, stream `event: error → retryable=False`)
+- [x] Sequential fallback engine with `ALLOW_PAID=false` enforcement; mixed chains (`kind: anthropic` → `kind: openai_compat`) supported via polymorphic dispatch
 - [x] Profile selection: body `profile` > `X-CodeRouter-Profile` header > config default
 - [x] **Tool-call repair** — models that emit `{"name":..., "arguments":...}` as plain text (qwen2.5-coder:14b often does this) are lifted back to valid `tool_use` blocks via a balanced-brace scanner + allowlist matching (non-streaming and streaming-via-downgrade)
 - [x] **Mid-stream fallback guard** — `MidStreamError` prevents silent fall-through after first byte; clients see an explicit `event: error` / `type: api_error` instead of spliced partial responses from two different providers
 - [x] **Usage aggregation** — `message_delta.usage.output_tokens` uses upstream `completion_tokens` when available, falls back to `(emitted_chars + 3) // 4`. Adapter auto-adds `stream_options.include_usage: true`, overridable per provider.
-- [x] JSON-line structured logging, `/healthz`, tests (**87 green**)
+- [x] JSON-line structured logging, `/healthz`, tests (**147 green**)
 
 ### Use it with Claude Code
 
@@ -93,6 +95,27 @@ default_profile: claude-code
 
 Or select it per-request via the `X-CodeRouter-Profile` header when your client lets you set headers.
 
+The profile itself looks like this in `examples/providers.yaml` — copy it verbatim, then edit the `base_url` / `model` of each `providers:` entry to match your local stack:
+
+```yaml
+# Tuned for ANTHROPIC_BASE_URL=http://localhost:8088 claude.
+# Claude Code declares all its tools (Bash/Glob/Read/Write/...) every turn,
+# so the router always uses the v0.3-D tool-downgrade path; user-felt latency
+# ≈ upstream total response time. Put the fastest tool-capable model first,
+# 14b second as a quality fallback, 2 free clouds for rate-limit escape,
+# and Claude as paid last resort.
+profiles:
+  - name: claude-code
+    providers:
+      - ollama-qwen-coder-7b         # ~30–60s/turn on M-series, tool-capable
+      - ollama-qwen-coder-14b        # quality fallback (timeout_s: 300)
+      - openrouter-free              # qwen/qwen3-coder:free (262K context)
+      - openrouter-deepseek-free     # deepseek/deepseek-r1:free (rate-limit escape)
+      - openrouter-claude            # paid, requires ALLOW_PAID=true
+```
+
+If you'd rather have the paid tier go through Anthropic's native API (so `cache_control` / `thinking` blocks survive when reached via the Anthropic ingress), swap `openrouter-claude` for `anthropic-direct` — the `claude-code-direct` profile in `examples/providers.yaml` does exactly that.
+
 #### What to expect
 
 - **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
@@ -102,7 +125,7 @@ Or select it per-request via the `X-CodeRouter-Profile` header when your client 
 
 Coming next (see [plan.md §18](./plan.md)):
 
-- v0.3.x — Anthropic native adapter (`kind: "anthropic"`, passthrough to skip translation), OpenRouter free-tier roster refresh
+- v0.4 — OpenRouter free-tier roster refresh (2026-04 snapshot); opportunistic cache_control / thinking passthrough audit
 - v0.5 — Profiles / capability flags / per-mode routing (full scope)
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers

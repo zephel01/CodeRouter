@@ -12,15 +12,27 @@
 #   4. coderouter serve
 #
 # Profiles provided (see the `profiles:` section at the bottom):
-#   - default       generic chain, 7b local → 2 free clouds → (paid if allowed)
-#   - claude-code   tuned for Claude Code (see README "Use it with Claude Code")
-#                   — 7b first for latency, 14b as quality fallback, 14b has
-#                     timeout_s=300 because Claude Code sends 15-20K-token
-#                     system prompts every turn that take ~100s to prefill.
-#                     Then 2 free OpenRouter models (qwen3-coder / deepseek-r1)
-#                     as cloud escape hatches, Claude as paid last resort.
-#   - coding        alias of default, kept for backward compat
-#   - free-only     skips paid tier entirely
+#   - default             generic chain, 7b local → 2 free clouds → (paid if allowed)
+#   - claude-code         tuned for Claude Code (see README "Use it with Claude Code")
+#                         — 7b first for latency, 14b as quality fallback, 14b has
+#                           timeout_s=300 because Claude Code sends 15-20K-token
+#                           system prompts every turn that take ~100s to prefill.
+#                           Then 2 free OpenRouter models (qwen3-coder / deepseek-r1)
+#                           as cloud escape hatches, Claude as paid last resort.
+#   - claude-code-direct  same as claude-code but the paid last resort is
+#                         `anthropic-direct` (kind: anthropic) instead of
+#                         `openrouter-claude` (kind: openai_compat). Use this when:
+#                           (a) you want cache_control / thinking blocks to survive
+#                               the hop (they're lost through openai_compat's
+#                               OpenAI-shape round-trip), AND
+#                           (b) your client reaches CodeRouter via the Anthropic
+#                               ingress (`ANTHROPIC_BASE_URL=http://localhost:8088`).
+#                         If (a) is needed but your client uses `/v1/chat/completions`,
+#                         basic chat / tools / vision still work in v0.4-A (adapter
+#                         internally reverse-translates ChatRequest→AnthropicRequest),
+#                         but cache_control / thinking require the Anthropic ingress.
+#   - coding              alias of default, kept for backward compat
+#   - free-only           skips paid tier entirely
 #
 # Free-tier notes (2026-04):
 #   OpenRouter free models are rate-limited to ~20 req/min and ~200 req/day
@@ -204,6 +216,22 @@ profiles:
       - openrouter-free
       - openrouter-deepseek-free
       - openrouter-claude
+
+  # Same shape as `claude-code` but swaps the paid last resort from
+  # `openrouter-claude` (OpenAI-compat translation path) to `anthropic-direct`
+  # (native `kind: anthropic`, v0.3.x-1+). Prefer this when your client reaches
+  # CodeRouter via the Anthropic ingress (`ANTHROPIC_BASE_URL=...`) and you
+  # want `cache_control` / `thinking` blocks to pass through untouched.
+  # From `/v1/chat/completions` the v0.4-A reverse-translation path still
+  # works for basic chat / tools / vision, but Anthropic-only features
+  # (cache_control / thinking) require the Anthropic ingress.
+  - name: claude-code-direct
+    providers:
+      - ollama-qwen-coder-7b
+      - ollama-qwen-coder-14b
+      - openrouter-free
+      - openrouter-deepseek-free
+      - anthropic-direct
 
   # Alias — historically used for code-heavy tasks. Kept for backward compat.
   - name: coding
