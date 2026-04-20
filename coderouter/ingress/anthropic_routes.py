@@ -51,12 +51,8 @@ async def messages(
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
-    anthropic_version: str | None = Header(
-        default=None, alias=_ANTHROPIC_VERSION_HEADER
-    ),
-    anthropic_beta: str | None = Header(
-        default=None, alias=_ANTHROPIC_BETA_HEADER
-    ),
+    anthropic_version: str | None = Header(default=None, alias=_ANTHROPIC_VERSION_HEADER),
+    anthropic_beta: str | None = Header(default=None, alias=_ANTHROPIC_BETA_HEADER),
 ):
     engine: FallbackEngine = request.app.state.engine
     config = request.app.state.config
@@ -95,10 +91,7 @@ async def messages(
             available = sorted(config.mode_aliases.keys())
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"unknown mode {x_coderouter_mode!r}. "
-                    f"available modes: {available}"
-                ),
+                detail=(f"unknown mode {x_coderouter_mode!r}. available modes: {available}"),
             ) from exc
         logger.info(
             "mode-alias-resolved",
@@ -112,10 +105,7 @@ async def messages(
             available = [p.name for p in config.profiles]
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"unknown profile {anth_req.profile!r}. "
-                    f"available: {available}"
-                ),
+                detail=(f"unknown profile {anth_req.profile!r}. available: {available}"),
             ) from exc
 
     if anth_req.stream:
@@ -133,9 +123,7 @@ async def messages(
     return anth_resp.model_dump(exclude_none=True)
 
 
-async def _anthropic_sse_iterator(
-    engine: FallbackEngine, anth_req: AnthropicRequest
-):
+async def _anthropic_sse_iterator(engine: FallbackEngine, anth_req: AnthropicRequest):
     """Serialize engine.stream_anthropic() onto the Anthropic SSE wire.
 
     Each emitted block is `event: <type>\\ndata: <json>\\n\\n` per the

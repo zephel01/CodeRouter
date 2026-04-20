@@ -177,7 +177,7 @@ class StripThinkingFilter:
                 idx = self._buffer.find(_THINK_OPEN)
                 if idx != -1:
                     out_parts.append(self._buffer[:idx])
-                    self._buffer = self._buffer[idx + len(_THINK_OPEN):]
+                    self._buffer = self._buffer[idx + len(_THINK_OPEN) :]
                     self._in_think = True
                     self.modified = True
                     continue
@@ -193,7 +193,7 @@ class StripThinkingFilter:
             # in_think: suppress until we find the close tag.
             idx = self._buffer.find(_THINK_CLOSE)
             if idx != -1:
-                self._buffer = self._buffer[idx + len(_THINK_CLOSE):]
+                self._buffer = self._buffer[idx + len(_THINK_CLOSE) :]
                 self._in_think = False
                 continue
             # No close tag — retain potential partial suffix, drop the rest.
@@ -228,9 +228,7 @@ class StripStopMarkersFilter:
 
     name = "strip_stop_markers"
 
-    def __init__(
-        self, markers: tuple[str, ...] = DEFAULT_STOP_MARKERS
-    ) -> None:
+    def __init__(self, markers: tuple[str, ...] = DEFAULT_STOP_MARKERS) -> None:
         self.modified: bool = False
         self._buffer: str = ""
         self._markers: tuple[str, ...] = markers
@@ -257,7 +255,7 @@ class StripStopMarkersFilter:
             idx, marker = hit
             if idx:
                 out_parts.append(self._buffer[:idx])
-            self._buffer = self._buffer[idx + len(marker):]
+            self._buffer = self._buffer[idx + len(marker) :]
             self.modified = True
 
         # No complete match — hold back a potential partial suffix.
@@ -300,8 +298,7 @@ def validate_output_filters(names: list[str]) -> None:
     unknown = [n for n in names if n not in KNOWN_FILTERS]
     if unknown:
         raise ValueError(
-            f"Unknown output_filters entries: {unknown}. "
-            f"Known filters: {sorted(KNOWN_FILTERS)}"
+            f"Unknown output_filters entries: {unknown}. Known filters: {sorted(KNOWN_FILTERS)}"
         )
 
 
@@ -322,9 +319,7 @@ class OutputFilterChain:
 
     def __init__(self, filter_names: list[str]) -> None:
         validate_output_filters(filter_names)
-        self._filters: list[OutputFilter] = [
-            KNOWN_FILTERS[n]() for n in filter_names
-        ]
+        self._filters: list[OutputFilter] = [KNOWN_FILTERS[n]() for n in filter_names]
         self._names: list[str] = list(filter_names)
 
     @property
@@ -361,9 +356,7 @@ class OutputFilterChain:
 # ---------------------------------------------------------------------------
 
 
-def apply_output_filters(
-    filter_names: list[str], text: str
-) -> tuple[str, list[str]]:
+def apply_output_filters(filter_names: list[str], text: str) -> tuple[str, list[str]]:
     """Run a one-shot chain over a complete text.
 
     Returns ``(scrubbed_text, applied_filter_names)``. The second

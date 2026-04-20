@@ -63,7 +63,7 @@ import asyncio
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 from typing import Any
 
 import httpx
@@ -94,7 +94,7 @@ __all__ = [
 # ---------------------------------------------------------------------------
 
 
-class ProbeVerdict(str, Enum):
+class ProbeVerdict(StrEnum):
     """Per-probe verdict.
 
     Mapping to exit code (see :func:`exit_code_for`):
@@ -251,35 +251,35 @@ async def _http_stream_sse(
     can branch on ``status`` the same way.
     """
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            async with client.stream(
-                "POST", url, json=body, headers=headers
-            ) as resp:
-                status = resp.status_code
-                if status >= 400:
-                    raw = await resp.aread()
-                    return (
-                        status,
-                        [],
-                        False,
-                        raw.decode("utf-8", errors="replace")[:400],
-                    )
-                chunks: list[dict[str, Any]] = []
-                saw_done = False
-                async for line in resp.aiter_lines():
-                    if not line or line.startswith(":"):
-                        continue
-                    if not line.startswith("data:"):
-                        continue
-                    data_str = line[len("data:") :].strip()
-                    if data_str == "[DONE]":
-                        saw_done = True
-                        continue
-                    try:
-                        chunks.append(json.loads(data_str))
-                    except json.JSONDecodeError:
-                        continue  # skip malformed chunks, keep consuming
-                return status, chunks, saw_done, ""
+        async with (
+            httpx.AsyncClient(timeout=timeout) as client,
+            client.stream("POST", url, json=body, headers=headers) as resp,
+        ):
+            status = resp.status_code
+            if status >= 400:
+                raw = await resp.aread()
+                return (
+                    status,
+                    [],
+                    False,
+                    raw.decode("utf-8", errors="replace")[:400],
+                )
+            chunks: list[dict[str, Any]] = []
+            saw_done = False
+            async for line in resp.aiter_lines():
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[len("data:") :].strip()
+                if data_str == "[DONE]":
+                    saw_done = True
+                    continue
+                try:
+                    chunks.append(json.loads(data_str))
+                except json.JSONDecodeError:
+                    continue  # skip malformed chunks, keep consuming
+            return status, chunks, saw_done, ""
     except httpx.HTTPError as exc:
         return None, [], False, f"transport error: {exc}"
 
@@ -293,9 +293,7 @@ async def _http_stream_sse(
 # ---------------------------------------------------------------------------
 
 
-def _patch_providers_yaml_capability(
-    provider_name: str, key: str, value: bool
-) -> str:
+def _patch_providers_yaml_capability(provider_name: str, key: str, value: bool) -> str:
     """Emit a providers.yaml patch that flips ``capabilities.<key>``."""
     val = "true" if value else "false"
     return (
@@ -309,9 +307,7 @@ def _patch_providers_yaml_capability(
     )
 
 
-def _patch_model_capabilities_yaml(
-    *, match: str, kind: str, key: str, value: bool
-) -> str:
+def _patch_model_capabilities_yaml(*, match: str, kind: str, key: str, value: bool) -> str:
     """Emit a model-capabilities.yaml rule that declares ``<key>=<value>``."""
     val = "true" if value else "false"
     return (
@@ -324,9 +320,7 @@ def _patch_model_capabilities_yaml(
     )
 
 
-def _patch_providers_yaml_output_filters(
-    provider_name: str, filters: list[str]
-) -> str:
+def _patch_providers_yaml_output_filters(provider_name: str, filters: list[str]) -> str:
     """v1.0-A: Emit a providers.yaml patch adding/extending ``output_filters``.
 
     Lists the filters verbatim so copy-paste yields a valid YAML list.
@@ -346,9 +340,7 @@ def _patch_providers_yaml_output_filters(
     )
 
 
-def _patch_providers_yaml_num_ctx(
-    provider_name: str, desired_ctx: int = 32768
-) -> str:
+def _patch_providers_yaml_num_ctx(provider_name: str, desired_ctx: int = 32768) -> str:
     """v1.0-B: Emit a providers.yaml patch setting ``extra_body.options.num_ctx``.
 
     The path is Ollama-specific: ``extra_body`` is shallow-merged into the
@@ -369,9 +361,7 @@ def _patch_providers_yaml_num_ctx(
     )
 
 
-def _patch_providers_yaml_num_predict(
-    provider_name: str, desired_predict: int = 4096
-) -> str:
+def _patch_providers_yaml_num_predict(provider_name: str, desired_predict: int = 4096) -> str:
     """v1.0-C: Emit a providers.yaml patch setting ``extra_body.options.num_predict``.
 
     Sibling of :func:`_patch_providers_yaml_num_ctx` — same ``extra_body.options``
@@ -437,8 +427,7 @@ _NUM_CTX_ADEQUATE_THRESHOLD = 8192
 # kept well under ``num_ctx`` so a stray ``num_ctx`` issue does not
 # masquerade as a ``num_predict`` issue (num_ctx probe runs first anyway).
 _STREAMING_PROBE_USER_PROMPT = (
-    "Count from 1 to 30, one number per line. "
-    "Output only the numbers, nothing else."
+    "Count from 1 to 30, one number per line. Output only the numbers, nothing else."
 )
 # Minimum content length we require to call the stream "not prematurely
 # truncated". "1\n2\n...\n30" is ~80 chars; 40 chars covers the halfway
@@ -703,7 +692,7 @@ async def _probe_num_ctx(provider: ProviderConfig) -> ProbeResult:
         }
     )
 
-    status, parsed, raw = await _http_post_json(
+    status, parsed, _raw = await _http_post_json(
         url, headers=headers, body=body, timeout=provider.timeout_s
     )
 
@@ -882,9 +871,7 @@ async def _probe_streaming(provider: ProviderConfig) -> ProbeResult:
     body.update(
         {
             "model": provider.model,
-            "messages": [
-                {"role": "user", "content": _STREAMING_PROBE_USER_PROMPT}
-            ],
+            "messages": [{"role": "user", "content": _STREAMING_PROBE_USER_PROMPT}],
             "max_tokens": 128,
             "temperature": 0,
             "stream": True,
@@ -956,10 +943,7 @@ async def _probe_streaming(provider: ProviderConfig) -> ProbeResult:
             ),
         )
 
-    if (
-        finish_reason == "length"
-        and len(content) < _STREAMING_PROBE_MIN_EXPECTED_CHARS
-    ):
+    if finish_reason == "length" and len(content) < _STREAMING_PROBE_MIN_EXPECTED_CHARS:
         # Premature cap — the hallmark of a low ``num_predict`` on
         # Ollama. Claude Code users see this as "assistant cut off
         # mid-word". Since we're already Ollama-shape-gated, the
@@ -1054,7 +1038,7 @@ async def _probe_tool_calls(
             "tools": [_PROBE_TOOL_SPEC_OPENAI],
         }
 
-    status, parsed, raw = await _http_post_json(
+    status, parsed, _raw = await _http_post_json(
         url, headers=headers, body=body, timeout=provider.timeout_s
     )
 
@@ -1122,9 +1106,7 @@ async def _probe_tool_calls(
                 "Opt in to unlock tool-bearing prompts."
             ),
             target_file="providers.yaml",
-            suggested_patch=_patch_providers_yaml_capability(
-                provider.name, "tools", True
-            ),
+            suggested_patch=_patch_providers_yaml_capability(provider.name, "tools", True),
         )
 
     if text_json_tool_call:
@@ -1142,9 +1124,7 @@ async def _probe_tool_calls(
                     "the declaration to rely on repair."
                 ),
                 target_file="providers.yaml",
-                suggested_patch=_patch_providers_yaml_capability(
-                    provider.name, "tools", False
-                ),
+                suggested_patch=_patch_providers_yaml_capability(provider.name, "tools", False),
             )
         return ProbeResult(
             name="tool_calls",
@@ -1166,9 +1146,7 @@ async def _probe_tool_calls(
                 "quantized small models (plan.md §9.4 symptom #2)."
             ),
             target_file="providers.yaml",
-            suggested_patch=_patch_providers_yaml_capability(
-                provider.name, "tools", False
-            ),
+            suggested_patch=_patch_providers_yaml_capability(provider.name, "tools", False),
         )
     return ProbeResult(
         name="tool_calls",
@@ -1232,10 +1210,7 @@ async def _probe_thinking(
         # model rejected the field. Map to NEEDS_TUNING when the
         # registry / explicit flag promised support, otherwise OK.
         rejected = (
-            status is not None
-            and status == 400
-            and raw is not None
-            and "thinking" in raw.lower()
+            status is not None and status == 400 and raw is not None and "thinking" in raw.lower()
         )
         declared = provider.capabilities.thinking or (resolved.thinking is True)
         if rejected and declared:
@@ -1248,9 +1223,7 @@ async def _probe_thinking(
                     "this provider or refine the registry rule."
                 ),
                 target_file="providers.yaml",
-                suggested_patch=_patch_providers_yaml_capability(
-                    provider.name, "thinking", False
-                ),
+                suggested_patch=_patch_providers_yaml_capability(provider.name, "thinking", False),
             )
         if rejected and not declared:
             return ProbeResult(
@@ -1305,9 +1278,7 @@ async def _probe_thinking(
                 "disable the flag or narrow the registry rule."
             ),
             target_file="providers.yaml",
-            suggested_patch=_patch_providers_yaml_capability(
-                provider.name, "thinking", False
-            ),
+            suggested_patch=_patch_providers_yaml_capability(provider.name, "thinking", False),
         )
     return ProbeResult(
         name="thinking",
@@ -1367,15 +1338,14 @@ async def _probe_reasoning_leak(
             {
                 "role": "user",
                 "content": (
-                    "Think step by step about the capital of France, "
-                    "then answer in one word."
+                    "Think step by step about the capital of France, then answer in one word."
                 ),
             },
         ],
         "max_tokens": 128,
         "temperature": 0,
     }
-    status, parsed, raw = await _http_post_json(
+    status, parsed, _raw = await _http_post_json(
         url, headers=headers, body=body, timeout=provider.timeout_s
     )
 
@@ -1393,14 +1363,10 @@ async def _probe_reasoning_leak(
     content = (msg.get("content") if isinstance(msg, dict) else None) or ""
     content_text = content if isinstance(content, str) else ""
     has_think = "<think>" in content_text
-    leaked_markers: list[str] = [
-        m for m in DEFAULT_STOP_MARKERS if m in content_text
-    ]
+    leaked_markers: list[str] = [m for m in DEFAULT_STOP_MARKERS if m in content_text]
     configured_filters = set(provider.output_filters)
     needs_strip_thinking = has_think and "strip_thinking" not in configured_filters
-    needs_strip_markers = (
-        bool(leaked_markers) and "strip_stop_markers" not in configured_filters
-    )
+    needs_strip_markers = bool(leaked_markers) and "strip_stop_markers" not in configured_filters
 
     if needs_strip_thinking or needs_strip_markers:
         # Dominant signal — emit NEEDS_TUNING with a copy-paste patch
@@ -1418,9 +1384,7 @@ async def _probe_reasoning_leak(
         if has_think:
             found_desc.append("<think>...</think>")
         if leaked_markers:
-            found_desc.append(
-                "stop markers " + ", ".join(repr(m) for m in leaked_markers)
-            )
+            found_desc.append("stop markers " + ", ".join(repr(m) for m in leaked_markers))
 
         return ProbeResult(
             name="reasoning-leak",
@@ -1433,14 +1397,11 @@ async def _probe_reasoning_leak(
                 f"add {recommended}."
             ),
             target_file="providers.yaml",
-            suggested_patch=_patch_providers_yaml_output_filters(
-                provider.name, recommended
-            ),
+            suggested_patch=_patch_providers_yaml_output_filters(provider.name, recommended),
         )
 
     passthrough_on = (
-        provider.capabilities.reasoning_passthrough
-        or resolved.reasoning_passthrough is True
+        provider.capabilities.reasoning_passthrough or resolved.reasoning_passthrough is True
     )
 
     if has_reasoning and passthrough_on:
@@ -1470,8 +1431,7 @@ async def _probe_reasoning_leak(
         name="reasoning-leak",
         verdict=ProbeVerdict.OK,
         detail=(
-            "no `reasoning` field observed and no content-embedded "
-            "markers — nothing to strip."
+            "no `reasoning` field observed and no content-embedded markers — nothing to strip."
         ),
     )
 
@@ -1594,12 +1554,10 @@ def format_report(report: DoctorReport) -> str:
     lines.append("")
     lines.append("Registry + providers.yaml declarations:")
     lines.append(
-        f"  thinking:              providers={p.capabilities.thinking}, "
-        f"registry={caps.thinking}"
+        f"  thinking:              providers={p.capabilities.thinking}, registry={caps.thinking}"
     )
     lines.append(
-        f"  tools:                 providers={p.capabilities.tools}, "
-        f"registry={caps.tools}"
+        f"  tools:                 providers={p.capabilities.tools}, registry={caps.tools}"
     )
     lines.append(
         f"  reasoning_passthrough: providers={p.capabilities.reasoning_passthrough}, "
@@ -1607,9 +1565,7 @@ def format_report(report: DoctorReport) -> str:
     )
     # v1.0-A: surface the output_filters chain so operators can see at a
     # glance which filters are active before running the probes.
-    lines.append(
-        f"  output_filters:        providers={list(p.output_filters)}"
-    )
+    lines.append(f"  output_filters:        providers={list(p.output_filters)}")
 
     lines.append("")
     lines.append("Probes:")

@@ -34,7 +34,6 @@ from coderouter.translation.anthropic import (
     AnthropicMessage,
     AnthropicRequest,
 )
-
 from tests.test_fallback_anthropic import (
     FakeAnthropicAdapter,
     FakeOpenAIAdapter,
@@ -84,9 +83,7 @@ def _config(providers: list[ProviderConfig], chain: list[str]) -> CodeRouterConf
     )
 
 
-def _engine(
-    config: CodeRouterConfig, adapters: dict[str, BaseAdapter]
-) -> FallbackEngine:
+def _engine(config: CodeRouterConfig, adapters: dict[str, BaseAdapter]) -> FallbackEngine:
     engine = FallbackEngine.__new__(FallbackEngine)
     engine.config = config
     engine._adapters = adapters  # type: ignore[attr-defined]
@@ -123,9 +120,7 @@ async def test_capable_provider_pulled_to_front() -> None:
     second. Capability-driven preference overrides user ordering only
     for capability-requiring requests — plain requests still follow the
     declared order (tested below)."""
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     capable_cfg = _anthropic_provider("sonnet-4-6", model="claude-sonnet-4-6")
     config = _config(
         [incapable_cfg, capable_cfg],
@@ -133,9 +128,7 @@ async def test_capable_provider_pulled_to_front() -> None:
     )
     incapable = FakeAnthropicAdapter(incapable_cfg, text="should not be called")
     capable = FakeAnthropicAdapter(capable_cfg, text="capable handled it")
-    engine = _engine(
-        config, {"sonnet-4-5": incapable, "sonnet-4-6": capable}
-    )
+    engine = _engine(config, {"sonnet-4-5": incapable, "sonnet-4-6": capable})
 
     resp = await engine.generate_anthropic(_thinking_request())
 
@@ -154,9 +147,7 @@ async def test_plain_request_preserves_user_ordering() -> None:
     config = _config([first, second], chain=["sonnet-4-5", "sonnet-4-6"])
     first_fake = FakeAnthropicAdapter(first, text="first wins")
     second_fake = FakeAnthropicAdapter(second, text="second unused")
-    engine = _engine(
-        config, {"sonnet-4-5": first_fake, "sonnet-4-6": second_fake}
-    )
+    engine = _engine(config, {"sonnet-4-5": first_fake, "sonnet-4-6": second_fake})
 
     resp = await engine.generate_anthropic(_plain_request())
 
@@ -177,25 +168,17 @@ async def test_degrades_to_incapable_when_capable_fails(
     stripping thinking. A `capability-degraded` log must fire before the
     incapable provider is tried."""
     capable_cfg = _anthropic_provider("sonnet-4-6", model="claude-sonnet-4-6")
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     config = _config(
         [capable_cfg, incapable_cfg],
         chain=["sonnet-4-6", "sonnet-4-5"],
     )
     capable = FakeAnthropicAdapter(
         capable_cfg,
-        fail_with=AdapterError(
-            "rate limited", provider="sonnet-4-6", retryable=True
-        ),
+        fail_with=AdapterError("rate limited", provider="sonnet-4-6", retryable=True),
     )
-    incapable = FakeAnthropicAdapter(
-        incapable_cfg, text="degraded answer"
-    )
-    engine = _engine(
-        config, {"sonnet-4-6": capable, "sonnet-4-5": incapable}
-    )
+    incapable = FakeAnthropicAdapter(incapable_cfg, text="degraded answer")
+    engine = _engine(config, {"sonnet-4-6": capable, "sonnet-4-5": incapable})
 
     with caplog.at_level(logging.INFO, logger="coderouter"):
         resp = await engine.generate_anthropic(_thinking_request())
@@ -213,9 +196,7 @@ async def test_degrades_strips_thinking_from_wire_body() -> None:
     """The request handed to the non-capable adapter must not contain a
     `thinking` field — that would produce the exact 400 the gate exists
     to prevent."""
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     # Only one provider in chain, incapable — forces the degraded path.
     config = _config([incapable_cfg], chain=["sonnet-4-5"])
     incapable = FakeAnthropicAdapter(incapable_cfg, text="ok")
@@ -238,18 +219,14 @@ async def test_no_degraded_log_when_capable_handles_it(
     """If the capable provider succeeds, no capability-degraded log should
     fire (we only emit on the actual hand-off)."""
     capable_cfg = _anthropic_provider("sonnet-4-6", model="claude-sonnet-4-6")
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     config = _config(
         [capable_cfg, incapable_cfg],
         chain=["sonnet-4-6", "sonnet-4-5"],
     )
     capable = FakeAnthropicAdapter(capable_cfg, text="ok")
     incapable = FakeAnthropicAdapter(incapable_cfg, text="unused")
-    engine = _engine(
-        config, {"sonnet-4-6": capable, "sonnet-4-5": incapable}
-    )
+    engine = _engine(config, {"sonnet-4-6": capable, "sonnet-4-5": incapable})
 
     with caplog.at_level(logging.INFO, logger="coderouter"):
         await engine.generate_anthropic(_thinking_request())
@@ -264,9 +241,7 @@ async def test_no_degraded_log_for_plain_request(
 ) -> None:
     """Plain request → gate doesn't fire at all, even if the chain is
     mixed-capability."""
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     config = _config([incapable_cfg], chain=["sonnet-4-5"])
     incapable = FakeAnthropicAdapter(incapable_cfg, text="ok")
     engine = _engine(config, {"sonnet-4-5": incapable})
@@ -297,9 +272,7 @@ async def test_openai_compat_is_always_degraded_bucket() -> None:
     )
     capable = FakeAnthropicAdapter(capable_cfg, text="capable")
     compat = FakeOpenAIAdapter(compat_cfg, text="compat")
-    engine = _engine(
-        config, {"sonnet-4-6": capable, "openrouter-claude": compat}
-    )
+    engine = _engine(config, {"sonnet-4-6": capable, "openrouter-claude": compat})
 
     resp = await engine.generate_anthropic(_thinking_request())
     # Capable answered, compat never consulted.
@@ -318,18 +291,14 @@ async def test_yaml_thinking_true_promotes_provider_to_capable_bucket() -> None:
         model="claude-sonnet-5-0",  # not in heuristic
         thinking_override=True,
     )
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     config = _config(
         [incapable_cfg, capable_cfg],
         chain=["sonnet-4-5", "future-family"],
     )
     incapable = FakeAnthropicAdapter(incapable_cfg, text="no")
     capable = FakeAnthropicAdapter(capable_cfg, text="future")
-    engine = _engine(
-        config, {"sonnet-4-5": incapable, "future-family": capable}
-    )
+    engine = _engine(config, {"sonnet-4-5": incapable, "future-family": capable})
 
     resp = await engine.generate_anthropic(_thinking_request())
     assert resp.coderouter_provider == "future-family"
@@ -344,9 +313,7 @@ async def test_yaml_thinking_true_promotes_provider_to_capable_bucket() -> None:
 @pytest.mark.asyncio
 async def test_stream_reordering_prefers_capable() -> None:
     """Same ordering guarantee holds for stream_anthropic."""
-    incapable_cfg = _anthropic_provider(
-        "sonnet-4-5", model="claude-sonnet-4-5-20250929"
-    )
+    incapable_cfg = _anthropic_provider("sonnet-4-5", model="claude-sonnet-4-5-20250929")
     capable_cfg = _anthropic_provider("sonnet-4-6", model="claude-sonnet-4-6")
     config = _config(
         [incapable_cfg, capable_cfg],
@@ -354,9 +321,7 @@ async def test_stream_reordering_prefers_capable() -> None:
     )
     incapable = FakeAnthropicAdapter(incapable_cfg, text="nope")
     capable = FakeAnthropicAdapter(capable_cfg, text="streamed")
-    engine = _engine(
-        config, {"sonnet-4-5": incapable, "sonnet-4-6": capable}
-    )
+    engine = _engine(config, {"sonnet-4-5": incapable, "sonnet-4-6": capable})
 
     events = [ev async for ev in engine.stream_anthropic(_thinking_request())]
 

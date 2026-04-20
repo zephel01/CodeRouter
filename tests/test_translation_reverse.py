@@ -473,9 +473,7 @@ def test_to_chat_response_multiple_text_blocks_concatenated() -> None:
         ("stop_sequence", "stop"),
     ],
 )
-def test_to_chat_response_stop_reason_map(
-    anth_reason: str, openai_reason: str
-) -> None:
+def test_to_chat_response_stop_reason_map(anth_reason: str, openai_reason: str) -> None:
     resp = AnthropicResponse(
         id="msg_sr",
         model="x",
@@ -542,10 +540,7 @@ async def test_stream_reverse_text_only() -> None:
         _evt("message_stop", {}),
     ]
     chunks = [
-        c
-        async for c in stream_anthropic_to_chat_chunks(
-            _as_stream(events), provider_name="test"
-        )
+        c async for c in stream_anthropic_to_chat_chunks(_as_stream(events), provider_name="test")
     ]
     # First chunk: role=assistant.
     assert chunks[0].choices[0]["delta"].get("role") == "assistant"
@@ -557,9 +552,7 @@ async def test_stream_reverse_text_only() -> None:
     ]
     assert content_deltas == ["hello ", "world"]
     # Finish chunk: end_turn → stop.
-    finish = [
-        c for c in chunks if c.choices and c.choices[0].get("finish_reason")
-    ]
+    finish = [c for c in chunks if c.choices and c.choices[0].get("finish_reason")]
     assert finish[-1].choices[0]["finish_reason"] == "stop"
     # Trailing usage chunk (no choices).
     assert chunks[-1].choices == []
@@ -631,17 +624,10 @@ async def test_stream_reverse_tool_use_emits_tool_calls_deltas() -> None:
         _evt("message_stop", {}),
     ]
     chunks = [
-        c
-        async for c in stream_anthropic_to_chat_chunks(
-            _as_stream(events), provider_name="test"
-        )
+        c async for c in stream_anthropic_to_chat_chunks(_as_stream(events), provider_name="test")
     ]
     # Find tool_calls-bearing chunks.
-    tc_chunks = [
-        c
-        for c in chunks
-        if c.choices and c.choices[0].get("delta", {}).get("tool_calls")
-    ]
+    tc_chunks = [c for c in chunks if c.choices and c.choices[0].get("delta", {}).get("tool_calls")]
     # At least: one for block_start (name + empty args), plus one per partial_json.
     assert len(tc_chunks) >= 3
     start_delta = tc_chunks[0].choices[0]["delta"]["tool_calls"][0]
@@ -650,14 +636,11 @@ async def test_stream_reverse_tool_use_emits_tool_calls_deltas() -> None:
     assert start_delta["function"]["name"] == "search"
     # Concatenated partial_json reconstructs the original input.
     fragments = [
-        c.choices[0]["delta"]["tool_calls"][0]["function"].get("arguments", "")
-        for c in tc_chunks
+        c.choices[0]["delta"]["tool_calls"][0]["function"].get("arguments", "") for c in tc_chunks
     ]
     assert "".join(fragments) == '{"q":"x"}'
     # Finish chunk: tool_use → tool_calls.
-    finish = [
-        c for c in chunks if c.choices and c.choices[0].get("finish_reason")
-    ]
+    finish = [c for c in chunks if c.choices and c.choices[0].get("finish_reason")]
     assert finish[-1].choices[0]["finish_reason"] == "tool_calls"
 
 
@@ -730,16 +713,9 @@ async def test_stream_reverse_multiple_tool_use_blocks_get_distinct_indices() ->
         _evt("message_stop", {}),
     ]
     chunks = [
-        c
-        async for c in stream_anthropic_to_chat_chunks(
-            _as_stream(events), provider_name="test"
-        )
+        c async for c in stream_anthropic_to_chat_chunks(_as_stream(events), provider_name="test")
     ]
-    tc_chunks = [
-        c
-        for c in chunks
-        if c.choices and c.choices[0].get("delta", {}).get("tool_calls")
-    ]
+    tc_chunks = [c for c in chunks if c.choices and c.choices[0].get("delta", {}).get("tool_calls")]
     # First tool_use block → tool_calls[0].index=0 with name=a.
     # Second → tool_calls[0].index=1 with name=b.
     names_by_index: dict[int, str] = {}

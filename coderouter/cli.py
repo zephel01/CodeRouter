@@ -25,7 +25,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         default=None,
         help="Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
-             "./providers.yaml, or ~/.coderouter/providers.yaml.",
+        "./providers.yaml, or ~/.coderouter/providers.yaml.",
     )
     serve.add_argument(
         "--mode",
@@ -40,9 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--reload", action="store_true", help="Auto-reload on code change (dev only)."
     )
-    serve.add_argument(
-        "--log-level", default="info", help="uvicorn log level (default: info)"
-    )
+    serve.add_argument("--log-level", default="info", help="uvicorn log level (default: info)")
 
     # v0.7-B: `coderouter doctor --check-model <provider>` runs a small
     # live-probe suite against one provider and reports per-capability
@@ -87,6 +85,7 @@ def main(argv: list[str] | None = None) -> int:
         # We pass the config path via env so the app factory (loaded by uvicorn
         # in a fresh process when --reload is on) can pick it up.
         import os
+
         if args.config:
             os.environ["CODEROUTER_CONFIG"] = args.config
 
@@ -131,8 +130,8 @@ def _run_doctor(args: argparse.Namespace) -> int:
     """
     from coderouter.config.loader import load_config
     from coderouter.doctor import (
-        format_report,
         exit_code_for,
+        format_report,
         run_check_model_sync,
     )
 

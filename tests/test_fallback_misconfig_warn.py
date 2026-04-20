@@ -165,9 +165,7 @@ async def test_multi_attempt_uniform_401_fires_warn(
     fakes = {
         "local": FakeAdapter(
             basic_config.provider_by_name("local"),
-            fail_with=AdapterError(
-                "401", provider="local", status_code=401, retryable=False
-            ),
+            fail_with=AdapterError("401", provider="local", status_code=401, retryable=False),
         ),
         "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud")),
         "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
@@ -301,9 +299,7 @@ async def test_mixed_statuses_do_not_fire_warn(
     fakes = {
         "local": FakeAdapter(
             basic_config.provider_by_name("local"),
-            fail_with=AdapterError(
-                "429", provider="local", status_code=429, retryable=True
-            ),
+            fail_with=AdapterError("429", provider="local", status_code=429, retryable=True),
         ),
         "free-cloud": FakeAdapter(
             basic_config.provider_by_name("free-cloud"),

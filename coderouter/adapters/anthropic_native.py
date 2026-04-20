@@ -91,16 +91,12 @@ class AnthropicAdapter(BaseAdapter):
             base = base[: -len("/v1")]
         return f"{base}/v1/messages"
 
-    def _headers(
-        self, request: AnthropicRequest | None = None
-    ) -> dict[str, str]:
+    def _headers(self, request: AnthropicRequest | None = None) -> dict[str, str]:
         headers: dict[str, str] = {
             "Content-Type": "application/json",
             "User-Agent": "CodeRouter/0.1",
             "anthropic-version": str(
-                self.config.extra_body.get(
-                    "anthropic_version", _DEFAULT_ANTHROPIC_VERSION
-                )
+                self.config.extra_body.get("anthropic_version", _DEFAULT_ANTHROPIC_VERSION)
             ),
         }
         api_key = resolve_api_key(self.config.api_key_env)
@@ -116,9 +112,7 @@ class AnthropicAdapter(BaseAdapter):
             headers["anthropic-beta"] = request.anthropic_beta
         return headers
 
-    def _payload(
-        self, req: AnthropicRequest, *, stream: bool
-    ) -> dict[str, Any]:
+    def _payload(self, req: AnthropicRequest, *, stream: bool) -> dict[str, Any]:
         """Serialize the AnthropicRequest to an outbound JSON body.
 
         The provider's configured `model` ALWAYS wins — the client-sent
@@ -219,9 +213,7 @@ class AnthropicAdapter(BaseAdapter):
         """
         anth_req = to_anthropic_request(request)
         events = self.stream_anthropic(anth_req, overrides=overrides)
-        async for chunk in stream_anthropic_to_chat_chunks(
-            events, provider_name=self.name
-        ):
+        async for chunk in stream_anthropic_to_chat_chunks(events, provider_name=self.name):
             yield chunk
 
     # ------------------------------------------------------------------
@@ -326,9 +318,7 @@ class AnthropicAdapter(BaseAdapter):
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
-                resp = await client.post(
-                    url, json=payload, headers=self._headers(request)
-                )
+                resp = await client.post(url, json=payload, headers=self._headers(request))
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout contacting {url}", provider=self.name, retryable=True
@@ -420,78 +410,74 @@ class AnthropicAdapter(BaseAdapter):
         logged_flag: list[bool] = [False]
 
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=payload, headers=self._headers(request)
-                ) as resp:
-                    if resp.status_code >= 400:
-                        body = await resp.aread()
-                        raise AdapterError(
-                            f"{resp.status_code} from upstream: {body[:200]!r}",
-                            provider=self.name,
-                            status_code=resp.status_code,
-                            retryable=resp.status_code in _RETRYABLE_STATUSES,
-                        )
+            async with (
+                httpx.AsyncClient(timeout=timeout) as client,
+                client.stream("POST", url, json=payload, headers=self._headers(request)) as resp,
+            ):
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise AdapterError(
+                        f"{resp.status_code} from upstream: {body[:200]!r}",
+                        provider=self.name,
+                        status_code=resp.status_code,
+                        retryable=resp.status_code in _RETRYABLE_STATUSES,
+                    )
 
-                    # Anthropic SSE block shape:
-                    #   event: <event-type>
-                    #   data: <json>
-                    #   <blank line>
-                    # We buffer per-line and emit on blank-line boundary.
-                    current_event: str | None = None
-                    data_lines: list[str] = []
+                # Anthropic SSE block shape:
+                #   event: <event-type>
+                #   data: <json>
+                #   <blank line>
+                # We buffer per-line and emit on blank-line boundary.
+                current_event: str | None = None
+                data_lines: list[str] = []
 
-                    async for line in resp.aiter_lines():
-                        if line == "":
-                            # End of block — flush if well-formed.
-                            if current_event is not None and data_lines:
-                                data_str = "\n".join(data_lines)
-                                try:
-                                    data_obj = json.loads(data_str)
-                                except json.JSONDecodeError:
-                                    # Skip malformed blocks rather than
-                                    # abort the whole stream.
-                                    current_event = None
-                                    data_lines = []
-                                    continue
-                                for out_event in self._process_stream_event_for_filters(
-                                    AnthropicStreamEvent(
-                                        type=current_event, data=data_obj
-                                    ),
-                                    chains=filter_chains,
-                                    logged_flag=logged_flag,
-                                ):
-                                    yield out_event
-                            current_event = None
-                            data_lines = []
-                            continue
-
-                        if line.startswith(":"):
-                            # SSE comment / heartbeat
-                            continue
-                        if line.startswith("event:"):
-                            current_event = line[len("event:"):].strip()
-                        elif line.startswith("data:"):
-                            data_lines.append(line[len("data:"):].lstrip())
-                        # Silently ignore other field names (id:, retry:) —
-                        # Anthropic doesn't use them today.
-
-                    # Trailing block without terminating blank line.
-                    if current_event is not None and data_lines:
-                        data_str = "\n".join(data_lines)
-                        try:
-                            data_obj = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            data_obj = None
-                        if data_obj is not None:
+                async for line in resp.aiter_lines():
+                    if line == "":
+                        # End of block — flush if well-formed.
+                        if current_event is not None and data_lines:
+                            data_str = "\n".join(data_lines)
+                            try:
+                                data_obj = json.loads(data_str)
+                            except json.JSONDecodeError:
+                                # Skip malformed blocks rather than
+                                # abort the whole stream.
+                                current_event = None
+                                data_lines = []
+                                continue
                             for out_event in self._process_stream_event_for_filters(
-                                AnthropicStreamEvent(
-                                    type=current_event, data=data_obj
-                                ),
+                                AnthropicStreamEvent(type=current_event, data=data_obj),
                                 chains=filter_chains,
                                 logged_flag=logged_flag,
                             ):
                                 yield out_event
+                        current_event = None
+                        data_lines = []
+                        continue
+
+                    if line.startswith(":"):
+                        # SSE comment / heartbeat
+                        continue
+                    if line.startswith("event:"):
+                        current_event = line[len("event:") :].strip()
+                    elif line.startswith("data:"):
+                        data_lines.append(line[len("data:") :].lstrip())
+                    # Silently ignore other field names (id:, retry:) —
+                    # Anthropic doesn't use them today.
+
+                # Trailing block without terminating blank line.
+                if current_event is not None and data_lines:
+                    data_str = "\n".join(data_lines)
+                    try:
+                        data_obj = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        data_obj = None
+                    if data_obj is not None:
+                        for out_event in self._process_stream_event_for_filters(
+                            AnthropicStreamEvent(type=current_event, data=data_obj),
+                            chains=filter_chains,
+                            logged_flag=logged_flag,
+                        ):
+                            yield out_event
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout streaming from {url}", provider=self.name, retryable=True

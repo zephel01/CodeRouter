@@ -192,7 +192,9 @@ async def test_append_system_prompt_augments_existing_system_message(
         return httpx.Response(
             200,
             json={
-                "id": "x", "object": "chat.completion", "created": 0,
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
                 "model": "qwen3.5:4b",
                 "choices": [
                     {
@@ -294,7 +296,7 @@ async def test_streaming_payload_requests_upstream_usage(
     sse_body = (
         'data: {"id":"x","object":"chat.completion.chunk","created":0,'
         '"model":"qwen2.5-coder:14b","choices":[{"index":0,"delta":{"content":"hi"}}]}\n\n'
-        'data: [DONE]\n\n'
+        "data: [DONE]\n\n"
     )
     captured_body: dict[str, object] = {}
 
@@ -328,7 +330,7 @@ async def test_streaming_respects_extra_body_stream_options_override(
     disable include_usage for a misbehaving upstream), the adapter must
     NOT clobber it. `setdefault` is the contract.
     """
-    sse_body = 'data: [DONE]\n\n'
+    sse_body = "data: [DONE]\n\n"
     captured_body: dict[str, object] = {}
 
     def _capture(request: httpx.Request) -> httpx.Response:
@@ -379,7 +381,9 @@ async def test_overrides_append_system_prompt_replaces_provider(
         return httpx.Response(
             200,
             json={
-                "id": "x", "object": "chat.completion", "created": 0,
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
                 "model": "qwen3.5:4b",
                 "choices": [
                     {
@@ -430,7 +434,9 @@ async def test_overrides_append_empty_string_skips_injection(
         return httpx.Response(
             200,
             json={
-                "id": "x", "object": "chat.completion", "created": 0,
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
                 "model": "qwen3.5:4b",
                 "choices": [
                     {
@@ -480,7 +486,9 @@ async def test_overrides_none_preserves_provider_append_system_prompt(
         return httpx.Response(
             200,
             json={
-                "id": "x", "object": "chat.completion", "created": 0,
+                "id": "x",
+                "object": "chat.completion",
+                "created": 0,
                 "model": "qwen3.5:4b",
                 "choices": [
                     {
@@ -503,9 +511,7 @@ async def test_overrides_none_preserves_provider_append_system_prompt(
         append_system_prompt="/no_think",
     )
     req = ChatRequest(messages=[Message(role="user", content="hi")])
-    await OpenAICompatAdapter(provider).generate(
-        req, overrides=ProviderCallOverrides()
-    )
+    await OpenAICompatAdapter(provider).generate(req, overrides=ProviderCallOverrides())
 
     messages = captured["messages"]
     assert messages[0] == {"role": "system", "content": "/no_think"}

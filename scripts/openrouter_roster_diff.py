@@ -109,20 +109,11 @@ class RosterDiff:
 
     added: list[RosterEntry] = field(default_factory=list)
     removed: list[RosterEntry] = field(default_factory=list)
-    pricing_changed: list[tuple[RosterEntry, RosterEntry]] = field(
-        default_factory=list
-    )
-    context_changed: list[tuple[RosterEntry, RosterEntry]] = field(
-        default_factory=list
-    )
+    pricing_changed: list[tuple[RosterEntry, RosterEntry]] = field(default_factory=list)
+    context_changed: list[tuple[RosterEntry, RosterEntry]] = field(default_factory=list)
 
     def is_empty(self) -> bool:
-        return not (
-            self.added
-            or self.removed
-            or self.pricing_changed
-            or self.context_changed
-        )
+        return not (self.added or self.removed or self.pricing_changed or self.context_changed)
 
 
 # ---------------------------------------------------------------------------
@@ -192,18 +183,14 @@ def is_free(entry: RosterEntry) -> bool:
     during rollout), and future free models may drop the suffix. The
     pricing fields are the authoritative signal.
     """
-    return _is_zero_price(entry.pricing_prompt) and _is_zero_price(
-        entry.pricing_completion
-    )
+    return _is_zero_price(entry.pricing_prompt) and _is_zero_price(entry.pricing_completion)
 
 
 def filter_free(entries: list[RosterEntry]) -> list[RosterEntry]:
     return [e for e in entries if is_free(e)]
 
 
-def diff_rosters(
-    old: list[RosterEntry], new: list[RosterEntry]
-) -> RosterDiff:
+def diff_rosters(old: list[RosterEntry], new: list[RosterEntry]) -> RosterDiff:
     """Compute the additive / subtractive / modified delta.
 
     Pure function of two input lists. Returns entries in deterministic
@@ -212,14 +199,8 @@ def diff_rosters(
     old_by_id = {e.id: e for e in old}
     new_by_id = {e.id: e for e in new}
 
-    added = [
-        new_by_id[mid]
-        for mid in sorted(new_by_id.keys() - old_by_id.keys())
-    ]
-    removed = [
-        old_by_id[mid]
-        for mid in sorted(old_by_id.keys() - new_by_id.keys())
-    ]
+    added = [new_by_id[mid] for mid in sorted(new_by_id.keys() - old_by_id.keys())]
+    removed = [old_by_id[mid] for mid in sorted(old_by_id.keys() - new_by_id.keys())]
 
     pricing_changed: list[tuple[RosterEntry, RosterEntry]] = []
     context_changed: list[tuple[RosterEntry, RosterEntry]] = []
@@ -304,9 +285,7 @@ def format_markdown(diff: RosterDiff, *, now: datetime) -> str:
         lines.append(f"### Context changed ({len(diff.context_changed)})")
         lines.append("")
         for o, n in diff.context_changed:
-            lines.append(
-                f"- `{n.id}`: {o.context_length} → {n.context_length}"
-            )
+            lines.append(f"- `{n.id}`: {o.context_length} → {n.context_length}")
         lines.append("")
 
     return "\n".join(lines) + "\n"
@@ -334,9 +313,7 @@ def load_snapshot(path: Path) -> list[RosterEntry]:
     return out
 
 
-def save_snapshot(
-    path: Path, entries: list[RosterEntry], *, fetched_at: datetime
-) -> None:
+def save_snapshot(path: Path, entries: list[RosterEntry], *, fetched_at: datetime) -> None:
     """Atomic write via ``tmp → replace``. Entries are id-sorted so
     repeated runs with unchanged rosters produce byte-identical files
     (apart from the ``fetched_at`` timestamp)."""
@@ -382,9 +359,7 @@ def prepend_changes(changes_path: Path, section: str) -> None:
             # No previous sections yet — header only. Append.
             new_content = existing.rstrip() + "\n\n" + section
         else:
-            new_content = (
-                existing[: idx + 1] + section + existing[idx + 1 :]
-            )
+            new_content = existing[: idx + 1] + section + existing[idx + 1 :]
     else:
         new_content = _CHANGES_HEADER + section
     changes_path.write_text(new_content, encoding="utf-8")

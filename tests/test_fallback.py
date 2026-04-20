@@ -92,10 +92,7 @@ class FakeAdapter(BaseAdapter):
         if self.fail_with:
             raise self.fail_with
         for i, piece in enumerate(self.chunks):
-            if (
-                self.fail_after_chunks is not None
-                and i >= self.fail_after_chunks
-            ):
+            if self.fail_after_chunks is not None and i >= self.fail_after_chunks:
                 raise self.midstream_error or AdapterError(
                     "midstream failure",
                     provider=self.name,
@@ -109,9 +106,7 @@ class FakeAdapter(BaseAdapter):
             )
 
 
-def _engine_with(
-    config: CodeRouterConfig, fakes: dict[str, FakeAdapter]
-) -> FallbackEngine:
+def _engine_with(config: CodeRouterConfig, fakes: dict[str, FakeAdapter]) -> FallbackEngine:
     engine = FallbackEngine(config)
     engine._adapters = fakes  # type: ignore[assignment]  # tests poke internals
     return engine
@@ -144,9 +139,7 @@ async def test_fallback_skips_failed_provider(
             basic_config.provider_by_name("local"),
             fail_with=AdapterError("down", provider="local", retryable=True),
         ),
-        "free-cloud": FakeAdapter(
-            basic_config.provider_by_name("free-cloud"), text="from free"
-        ),
+        "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud"), text="from free"),
         "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
     }
     engine = _engine_with(basic_config, fakes)
@@ -194,9 +187,7 @@ async def test_paid_used_when_allow_paid_true(
             basic_config.provider_by_name("free-cloud"),
             fail_with=AdapterError("rate", provider="free-cloud", retryable=True),
         ),
-        "paid-cloud": FakeAdapter(
-            basic_config.provider_by_name("paid-cloud"), text="from paid"
-        ),
+        "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud"), text="from paid"),
     }
     engine = _engine_with(basic_config, fakes)
     resp = await engine.generate(_request())
@@ -229,9 +220,7 @@ async def test_streaming_first_provider_wins(
     basic_config: CodeRouterConfig,
 ) -> None:
     fakes = {
-        "local": FakeAdapter(
-            basic_config.provider_by_name("local"), chunks=["he", "llo"]
-        ),
+        "local": FakeAdapter(basic_config.provider_by_name("local"), chunks=["he", "llo"]),
         "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud")),
         "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
     }
@@ -254,9 +243,7 @@ async def test_streaming_falls_back_when_first_errors_immediately(
             basic_config.provider_by_name("local"),
             fail_with=AdapterError("down", provider="local", retryable=True),
         ),
-        "free-cloud": FakeAdapter(
-            basic_config.provider_by_name("free-cloud"), chunks=["hi"]
-        ),
+        "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud"), chunks=["hi"]),
         "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
     }
     engine = _engine_with(basic_config, fakes)
@@ -286,9 +273,7 @@ async def test_streaming_midstream_failure_raises_midstream_error(
             basic_config.provider_by_name("local"),
             chunks=["hel", "lo", "_never_"],
             fail_after_chunks=2,
-            midstream_error=AdapterError(
-                "connection reset", provider="local", retryable=True
-            ),
+            midstream_error=AdapterError("connection reset", provider="local", retryable=True),
         ),
         "free-cloud": FakeAdapter(
             basic_config.provider_by_name("free-cloud"), chunks=["shouldnt-see"]
@@ -326,13 +311,9 @@ async def test_streaming_initial_error_still_falls_back(
             basic_config.provider_by_name("local"),
             chunks=[],
             fail_after_chunks=0,  # fails before yielding anything
-            midstream_error=AdapterError(
-                "immediate failure", provider="local", retryable=True
-            ),
+            midstream_error=AdapterError("immediate failure", provider="local", retryable=True),
         ),
-        "free-cloud": FakeAdapter(
-            basic_config.provider_by_name("free-cloud"), chunks=["ok"]
-        ),
+        "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud"), chunks=["ok"]),
         "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud")),
     }
     engine = _engine_with(basic_config, fakes)
@@ -431,10 +412,7 @@ async def test_profile_override_append_system_prompt_replaces_provider() -> None
     fake = FakeAdapter(cfg.provider_by_name("p0"))
     engine = _engine_with(cfg, {"p0": fake})
     await engine.generate(_request())
-    assert (
-        fake.effective_append_system_prompt(fake.last_overrides)
-        == "/profile-directive"
-    )
+    assert fake.effective_append_system_prompt(fake.last_overrides) == "/profile-directive"
 
 
 @pytest.mark.asyncio
@@ -445,9 +423,7 @@ async def test_profile_override_append_empty_string_clears_provider() -> None:
     to none" (empty string → skip the directive entirely). This is the
     only way a profile can opt out of a directive its provider declares.
     """
-    cfg = _overrides_config(
-        profile_append="", provider_append="/provider-directive"
-    )
+    cfg = _overrides_config(profile_append="", provider_append="/provider-directive")
     fake = FakeAdapter(cfg.provider_by_name("p0"))
     engine = _engine_with(cfg, {"p0": fake})
     await engine.generate(_request())

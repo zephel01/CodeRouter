@@ -90,7 +90,7 @@ class RegistryCapabilities(BaseModel):
         default=None,
         description=(
             "Model reliably emits structured tool_calls. Declared here "
-            "as a glob default (e.g. \"qwen3-coder:*\" tools=true); the "
+            'as a glob default (e.g. "qwen3-coder:*" tools=true); the '
             "actual adapter-level handling sits in v0.3-A tool repair."
         ),
     )
@@ -242,12 +242,7 @@ class CapabilityRegistry:
             if not max_ctx_locked and caps.max_context_tokens is not None:
                 resolved_max_ctx = caps.max_context_tokens
                 max_ctx_locked = True
-            if (
-                thinking_locked
-                and reasoning_locked
-                and tools_locked
-                and max_ctx_locked
-            ):
+            if thinking_locked and reasoning_locked and tools_locked and max_ctx_locked:
                 break
 
         return ResolvedCapabilities(

@@ -37,10 +37,29 @@ class JsonLineFormatter(logging.Formatter):
         # Pick up custom attributes attached via `extra={...}`
         for key, value in record.__dict__.items():
             if key in {
-                "args", "asctime", "created", "exc_info", "exc_text", "filename",
-                "funcName", "levelname", "levelno", "lineno", "message", "module",
-                "msecs", "msg", "name", "pathname", "process", "processName",
-                "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+                "args",
+                "asctime",
+                "created",
+                "exc_info",
+                "exc_text",
+                "filename",
+                "funcName",
+                "levelname",
+                "levelno",
+                "lineno",
+                "message",
+                "module",
+                "msecs",
+                "msg",
+                "name",
+                "pathname",
+                "process",
+                "processName",
+                "relativeCreated",
+                "stack_info",
+                "thread",
+                "threadName",
+                "taskName",
             }:
                 continue
             payload[key] = value
@@ -207,7 +226,8 @@ def log_chain_paid_gate_blocked(
         "hint": hint,
     }
     logger.warning(
-        "chain-paid-gate-blocked", extra=payload  # type: ignore[arg-type]
+        "chain-paid-gate-blocked",
+        extra=payload,  # type: ignore[arg-type]
     )
 
 
@@ -278,5 +298,6 @@ def log_output_filter_applied(
         "streaming": streaming,
     }
     logger.info(
-        "output-filter-applied", extra=payload  # type: ignore[arg-type]
+        "output-filter-applied",
+        extra=payload,  # type: ignore[arg-type]
     )

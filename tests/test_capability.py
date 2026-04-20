@@ -18,7 +18,6 @@ from coderouter.routing.capability import (
     strip_thinking,
 )
 from coderouter.translation.anthropic import (
-    AnthropicMessage,
     AnthropicRequest,
 )
 
@@ -37,9 +36,7 @@ def _provider(
         name="t",
         kind=kind,  # type: ignore[arg-type]
         base_url=(
-            "https://api.anthropic.com"
-            if kind == "anthropic"
-            else "https://openrouter.ai/api/v1"
+            "https://api.anthropic.com" if kind == "anthropic" else "https://openrouter.ai/api/v1"
         ),
         model=model,
         capabilities=Capabilities(thinking=thinking),
@@ -51,7 +48,7 @@ def _provider(
     [
         "claude-sonnet-4-6",
         "claude-sonnet-4-6-20260101",  # future dated suffix
-        "claude-sonnet-4-7",            # forward-compat
+        "claude-sonnet-4-7",  # forward-compat
         "claude-opus-4-1",
         "claude-opus-4-6-20260201",
         "claude-haiku-4-5",
@@ -66,13 +63,13 @@ def test_heuristic_accepts_known_capable_families(model: str) -> None:
 @pytest.mark.parametrize(
     "model",
     [
-        "claude-sonnet-4-5-20250929",     # the v0.4-D footnote model
+        "claude-sonnet-4-5-20250929",  # the v0.4-D footnote model
         "claude-sonnet-4-5",
         "claude-sonnet-3-7",
         "claude-opus-3-5-20241022",
         "claude-haiku-3-5",
-        "gpt-4o",                          # unrelated model slug
-        "",                                # blank
+        "gpt-4o",  # unrelated model slug
+        "",  # blank
     ],
 )
 def test_heuristic_rejects_known_incapable_families(model: str) -> None:
@@ -250,9 +247,7 @@ def _cache_provider(
         name="t",
         kind=kind,  # type: ignore[arg-type]
         base_url=(
-            "https://api.anthropic.com"
-            if kind == "anthropic"
-            else "https://openrouter.ai/api/v1"
+            "https://api.anthropic.com" if kind == "anthropic" else "https://openrouter.ai/api/v1"
         ),
         model="whatever",
         capabilities=Capabilities(prompt_cache=prompt_cache),
@@ -266,26 +261,20 @@ def test_cache_control_supported_on_anthropic_kind_by_default() -> None:
 
 def test_cache_control_unsupported_on_openai_compat_kind_by_default() -> None:
     """OpenAI-shape translation drops cache_control — no wire equivalent."""
-    assert not provider_supports_cache_control(
-        _cache_provider(kind="openai_compat")
-    )
+    assert not provider_supports_cache_control(_cache_provider(kind="openai_compat"))
 
 
 def test_cache_control_explicit_prompt_cache_flag_promotes_openai_compat() -> None:
     """YAML escape hatch: `capabilities.prompt_cache: true` on an
     openai_compat provider tells the router the upstream extends the
     OpenAI wire to preserve the marker. Honor it verbatim."""
-    assert provider_supports_cache_control(
-        _cache_provider(kind="openai_compat", prompt_cache=True)
-    )
+    assert provider_supports_cache_control(_cache_provider(kind="openai_compat", prompt_cache=True))
 
 
 def test_cache_control_explicit_prompt_cache_flag_redundant_on_anthropic() -> None:
     """anthropic kind is always supported; setting prompt_cache: true
     changes nothing but must not break."""
-    assert provider_supports_cache_control(
-        _cache_provider(kind="anthropic", prompt_cache=True)
-    )
+    assert provider_supports_cache_control(_cache_provider(kind="anthropic", prompt_cache=True))
 
 
 # ----------------------------------------------------------------------
@@ -329,9 +318,7 @@ def test_has_cache_control_true_on_system_block() -> None:
 
 
 def test_has_cache_control_false_on_system_block_without_marker() -> None:
-    req = _req_with(
-        system=[{"type": "text", "text": "no marker here"}]
-    )
+    req = _req_with(system=[{"type": "text", "text": "no marker here"}])
     assert not anthropic_request_has_cache_control(req)
 
 
@@ -371,9 +358,7 @@ def test_has_cache_control_true_on_message_content_block() -> None:
 
 def test_has_cache_control_false_when_content_is_string() -> None:
     """String-form content cannot carry cache_control — shorthand only."""
-    req = _req_with(
-        messages=[{"role": "user", "content": "no list here"}]
-    )
+    req = _req_with(messages=[{"role": "user", "content": "no list here"}])
     assert not anthropic_request_has_cache_control(req)
 
 

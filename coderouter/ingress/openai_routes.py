@@ -51,7 +51,7 @@ async def list_models(request: Request) -> dict[str, object]:
 
 
 @router.post("/chat/completions")
-async def chat_completions(  # noqa: ANN201
+async def chat_completions(
     payload: dict,
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
@@ -80,10 +80,7 @@ async def chat_completions(  # noqa: ANN201
             available = sorted(config.mode_aliases.keys())
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"unknown mode {x_coderouter_mode!r}. "
-                    f"available modes: {available}"
-                ),
+                detail=(f"unknown mode {x_coderouter_mode!r}. available modes: {available}"),
             ) from exc
         logger.info(
             "mode-alias-resolved",
@@ -98,10 +95,7 @@ async def chat_completions(  # noqa: ANN201
             available = [p.name for p in config.profiles]
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"unknown profile {chat_req.profile!r}. "
-                    f"available: {available}"
-                ),
+                detail=(f"unknown profile {chat_req.profile!r}. available: {available}"),
             ) from exc
 
     if chat_req.stream:

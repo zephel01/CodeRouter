@@ -17,9 +17,7 @@ def test_load_from_explicit_path(yaml_config_path: Path) -> None:
     assert {p.name for p in cfg.providers} == {"local", "free-cloud", "paid-cloud"}
 
 
-def test_env_overrides_allow_paid(
-    yaml_config_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_env_overrides_allow_paid(yaml_config_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ALLOW_PAID", "true")
     cfg = load_config(yaml_config_path)
     assert cfg.allow_paid is True
@@ -204,9 +202,7 @@ def test_mode_aliases_empty_by_default(yaml_config_path: Path) -> None:
     assert cfg.mode_aliases == {}
 
 
-def test_missing_config_path_is_helpful(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
+def test_missing_config_path_is_helpful(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Run from an empty dir so Path.cwd()/providers.yaml (one of the loader's
     # fallback candidates) does not accidentally resolve to the project's
     # real providers.yaml when tests are invoked from the repo root.

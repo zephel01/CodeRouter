@@ -30,7 +30,6 @@ from coderouter.routing.capability import (
     log_capability_degraded,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shape / contract tests.
 # ---------------------------------------------------------------------------
@@ -73,10 +72,10 @@ def test_helper_emits_record_with_exact_shape(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """``log_capability_degraded`` must produce a record with:
-       - ``msg == "capability-degraded"``
-       - level INFO
-       - ``provider`` / ``dropped`` / ``reason`` fields reachable via
-         the LogRecord's attributes (what JsonLineFormatter picks up).
+    - ``msg == "capability-degraded"``
+    - level INFO
+    - ``provider`` / ``dropped`` / ``reason`` fields reachable via
+      the LogRecord's attributes (what JsonLineFormatter picks up).
     """
     test_logger = logging.getLogger("test.capability_helper")
     caplog.set_level(logging.INFO, logger="test.capability_helper")
@@ -92,9 +91,9 @@ def test_helper_emits_record_with_exact_shape(
     assert len(records) == 1
     rec = records[0]
     assert rec.levelno == logging.INFO
-    assert getattr(rec, "provider") == "openrouter-gpt-oss-free"
-    assert getattr(rec, "dropped") == ["thinking"]
-    assert getattr(rec, "reason") == "provider-does-not-support"
+    assert rec.provider == "openrouter-gpt-oss-free"
+    assert rec.dropped == ["thinking"]
+    assert rec.reason == "provider-does-not-support"
 
 
 @pytest.mark.parametrize(
@@ -119,13 +118,11 @@ def test_helper_accepts_all_three_v0_5_reasons(
     test_logger = logging.getLogger("test.capability_helper.all_reasons")
     caplog.set_level(logging.INFO, logger="test.capability_helper.all_reasons")
 
-    log_capability_degraded(
-        test_logger, provider="p", dropped=dropped, reason=reason
-    )
+    log_capability_degraded(test_logger, provider="p", dropped=dropped, reason=reason)
 
     rec = next(r for r in caplog.records if r.msg == "capability-degraded")
-    assert getattr(rec, "reason") == reason
-    assert getattr(rec, "dropped") == dropped
+    assert rec.reason == reason
+    assert rec.dropped == dropped
 
 
 def test_helper_preserves_caller_logger_name(
@@ -191,8 +188,8 @@ def test_helper_does_not_reuse_payload_dict_between_calls(
 
     degraded = [r for r in caplog.records if r.msg == "capability-degraded"]
     assert len(degraded) == 2
-    assert [getattr(r, "provider") for r in degraded] == ["a", "b"]
-    assert [getattr(r, "reason") for r in degraded] == [
+    assert [r.provider for r in degraded] == ["a", "b"]
+    assert [r.reason for r in degraded] == [
         "provider-does-not-support",
         "translation-lossy",
     ]

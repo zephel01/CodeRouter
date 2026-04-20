@@ -226,15 +226,10 @@ class CodeRouterConfig(BaseModel):
         request that uses that mode.
         """
         names = {p.name for p in self.profiles}
-        bad = {
-            mode: profile
-            for mode, profile in self.mode_aliases.items()
-            if profile not in names
-        }
+        bad = {mode: profile for mode, profile in self.mode_aliases.items() if profile not in names}
         if bad:
             raise ValueError(
-                f"mode_aliases points to unknown profile(s): {bad}. "
-                f"known profiles={sorted(names)}"
+                f"mode_aliases points to unknown profile(s): {bad}. known profiles={sorted(names)}"
             )
         return self
 

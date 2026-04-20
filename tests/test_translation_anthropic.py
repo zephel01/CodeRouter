@@ -123,9 +123,7 @@ def test_tool_use_and_tool_result_round_trip() -> None:
     assert assistant.tool_calls is not None
     assert assistant.tool_calls[0]["id"] == "toolu_abc"
     assert assistant.tool_calls[0]["function"]["name"] == "get_weather"
-    assert json.loads(assistant.tool_calls[0]["function"]["arguments"]) == {
-        "location": "Tokyo"
-    }
+    assert json.loads(assistant.tool_calls[0]["function"]["arguments"]) == {"location": "Tokyo"}
     tool_msg = chat.messages[2]
     assert tool_msg.tool_call_id == "toolu_abc"
     assert tool_msg.content == "Sunny, 20C"
@@ -290,9 +288,7 @@ def _make_chat_response(
         object="chat.completion",
         created=0,
         model="some-model",
-        choices=[
-            {"index": 0, "message": msg, "finish_reason": finish_reason}
-        ],
+        choices=[{"index": 0, "message": msg, "finish_reason": finish_reason}],
         usage=usage or {"prompt_tokens": 5, "completion_tokens": 3},
         coderouter_provider="provider-x",
     )
@@ -344,9 +340,7 @@ def test_finish_reason_map() -> None:
         ("content_filter", "end_turn"),
     ]
     for openai_fr, anth_sr in pairs:
-        resp = to_anthropic_response(
-            _make_chat_response(content="x", finish_reason=openai_fr)
-        )
+        resp = to_anthropic_response(_make_chat_response(content="x", finish_reason=openai_fr))
         assert resp.stop_reason == anth_sr
 
 
@@ -432,9 +426,7 @@ def test_repair_respects_allowlist() -> None:
     )
     resp = to_anthropic_response(chat_resp, allowed_tool_names=["Bash", "Read"])
     # Not repaired — falls through to text content block unchanged.
-    assert resp.content == [
-        {"type": "text", "text": '{"name": "NukeEverything", "arguments": {}}'}
-    ]
+    assert resp.content == [{"type": "text", "text": '{"name": "NukeEverything", "arguments": {}}'}]
     assert resp.stop_reason == "end_turn"
 
 
@@ -470,9 +462,7 @@ async def test_stream_text_only_events_in_order() -> None:
             choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}],
         ),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     types = [e.type for e in events]
     assert types == [
         "message_start",
@@ -546,9 +536,7 @@ async def test_stream_tool_use_events() -> None:
             choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}],
         ),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     types = [e.type for e in events]
     assert types == [
         "message_start",
@@ -566,11 +554,7 @@ async def test_stream_tool_use_events() -> None:
         "name": "get_weather",
         "input": {},
     }
-    frags = [
-        e.data["delta"]["partial_json"]
-        for e in events
-        if e.type == "content_block_delta"
-    ]
+    frags = [e.data["delta"]["partial_json"] for e in events if e.type == "content_block_delta"]
     assert frags == ['{"loca', 'tion":"Tokyo"}']
     stop_evt = next(e for e in events if e.type == "message_delta")
     assert stop_evt.data["delta"]["stop_reason"] == "tool_use"
@@ -599,19 +583,17 @@ async def test_stream_text_then_tool_use_closes_text_first() -> None:
         ),
         _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     types = [e.type for e in events]
     # text block starts, deltas, stops — THEN tool_use block starts.
     assert types == [
         "message_start",
-        "content_block_start",    # text idx 0
-        "content_block_delta",    # "thinking..."
-        "content_block_stop",     # close text
-        "content_block_start",    # tool_use idx 1
-        "content_block_delta",    # arguments "{}"
-        "content_block_stop",     # close tool_use
+        "content_block_start",  # text idx 0
+        "content_block_delta",  # "thinking..."
+        "content_block_stop",  # close text
+        "content_block_start",  # tool_use idx 1
+        "content_block_delta",  # arguments "{}"
+        "content_block_stop",  # close tool_use
         "message_delta",
         "message_stop",
     ]
@@ -660,9 +642,7 @@ async def test_stream_multiple_tool_calls_get_distinct_block_indices() -> None:
         ),
         _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     starts = [e for e in events if e.type == "content_block_start"]
     assert [s.data["index"] for s in starts] == [0, 1]
     assert starts[0].data["content_block"]["name"] == "f1"
@@ -698,9 +678,7 @@ async def test_stream_usage_uses_upstream_completion_tokens_when_present() -> No
             },
         ),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     usage = _message_delta_usage(events)
     assert usage["output_tokens"] == 7
     assert usage["input_tokens"] == 42
@@ -720,9 +698,7 @@ async def test_stream_usage_estimates_when_upstream_silent() -> None:
         _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
     ]
     # Chars = 4 + 5 + 6 = 15  -> (15 + 3) // 4 = 4
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     usage = _message_delta_usage(events)
     assert usage["output_tokens"] == 4
     # input_tokens is only reported when upstream provides it.
@@ -756,9 +732,7 @@ async def test_stream_usage_estimate_counts_tool_call_arguments() -> None:
         ),
         _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     usage = _message_delta_usage(events)
     # name "search" (6) + arguments '{"q":"hello world"}' (19) = 25 chars
     # → (25 + 3) // 4 = 7
@@ -774,9 +748,7 @@ async def test_stream_usage_empty_response_reports_zero() -> None:
         _chunk(choices=[{"index": 0, "delta": {"role": "assistant"}}]),
         _chunk(choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}]),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     usage = _message_delta_usage(events)
     assert usage["output_tokens"] == 0
 
@@ -804,9 +776,7 @@ async def test_stream_usage_upstream_wins_over_estimate() -> None:
             usage={"prompt_tokens": 10, "completion_tokens": 3},
         ),
     ]
-    events = [
-        ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))
-    ]
+    events = [ev async for ev in stream_chat_to_anthropic_events(_as_async(chunks))]
     usage = _message_delta_usage(events)
     assert usage["output_tokens"] == 3
     assert usage["input_tokens"] == 10
@@ -829,9 +799,7 @@ def _mk_anth_response(
         model="qwen-coder",
         content=content,
         stop_reason=stop_reason,
-        usage=AnthropicUsage(
-            input_tokens=input_tokens, output_tokens=output_tokens
-        ),
+        usage=AnthropicUsage(input_tokens=input_tokens, output_tokens=output_tokens),
         coderouter_provider="local",
     )
 
@@ -848,9 +816,7 @@ async def test_synthesize_stream_text_only_response() -> None:
         input_tokens=4,
         output_tokens=4,
     )
-    events = [
-        e async for e in synthesize_anthropic_stream_from_response(resp)
-    ]
+    events = [e async for e in synthesize_anthropic_stream_from_response(resp)]
     types = [e.type for e in events]
     assert types == [
         "message_start",
@@ -891,9 +857,7 @@ async def test_synthesize_stream_tool_use_response() -> None:
         ],
         stop_reason="tool_use",
     )
-    events = [
-        e async for e in synthesize_anthropic_stream_from_response(resp)
-    ]
+    events = [e async for e in synthesize_anthropic_stream_from_response(resp)]
     # Exactly one tool_use block — so one start, one delta, one stop.
     starts = [e for e in events if e.type == "content_block_start"]
     assert len(starts) == 1
@@ -909,6 +873,7 @@ async def test_synthesize_stream_tool_use_response() -> None:
     assert deltas[0].data["delta"]["type"] == "input_json_delta"
     # The partial_json must decode back to the original input dict.
     import json as _json
+
     assert _json.loads(deltas[0].data["delta"]["partial_json"]) == {
         "location": "Tokyo",
         "unit": "C",
@@ -934,16 +899,14 @@ async def test_synthesize_stream_mixed_text_and_tool_use() -> None:
         ],
         stop_reason="tool_use",
     )
-    events = [
-        e async for e in synthesize_anthropic_stream_from_response(resp)
-    ]
+    events = [e async for e in synthesize_anthropic_stream_from_response(resp)]
     types = [e.type for e in events]
     assert types == [
         "message_start",
-        "content_block_start",    # text idx 0
+        "content_block_start",  # text idx 0
         "content_block_delta",
         "content_block_stop",
-        "content_block_start",    # tool_use idx 1
+        "content_block_start",  # tool_use idx 1
         "content_block_delta",
         "content_block_stop",
         "message_delta",

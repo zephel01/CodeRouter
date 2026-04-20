@@ -27,7 +27,6 @@ from coderouter.output_filters import (
     validate_output_filters,
 )
 
-
 # ======================================================================
 # validate_output_filters
 # ======================================================================
@@ -157,10 +156,7 @@ def test_strip_thinking_eof_without_anything_pending() -> None:
 
 def test_strip_stop_markers_removes_all_defaults() -> None:
     f = StripStopMarkersFilter()
-    text = (
-        "a<|turn|>b<|end|>c<|python_tag|>d<|im_end|>e"
-        "<|eot_id|>f<|channel>thoughtg"
-    )
+    text = "a<|turn|>b<|end|>c<|python_tag|>d<|im_end|>e<|eot_id|>f<|channel>thoughtg"
     out = f.feed(text, eof=True)
     assert out == "abcdefg"
     assert f.modified is True
@@ -298,8 +294,6 @@ def test_apply_output_filters_empty_chain_is_identity() -> None:
 
 
 def test_apply_output_filters_clean_text_no_applied() -> None:
-    out, applied = apply_output_filters(
-        ["strip_thinking", "strip_stop_markers"], "plain text"
-    )
+    out, applied = apply_output_filters(["strip_thinking", "strip_stop_markers"], "plain text")
     assert out == "plain text"
     assert applied == []

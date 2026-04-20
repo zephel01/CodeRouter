@@ -128,10 +128,7 @@ class FakeOpenAIAdapter(BaseAdapter):
         if self.fail_with:
             raise self.fail_with
         for i, piece in enumerate(self.chunks):
-            if (
-                self.fail_after_chunks is not None
-                and i >= self.fail_after_chunks
-            ):
+            if self.fail_after_chunks is not None and i >= self.fail_after_chunks:
                 raise self.midstream_error or AdapterError(
                     "midstream failure", provider=self.name, retryable=True
                 )
@@ -139,9 +136,7 @@ class FakeOpenAIAdapter(BaseAdapter):
                 id=f"chatcmpl-{self.name}-stream",
                 created=int(time.time()),
                 model=self.config.model,
-                choices=[
-                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
-                ],
+                choices=[{"index": 0, "delta": {"content": piece}, "finish_reason": None}],
             )
         # Terminal chunk so the translator emits finish_reason=stop.
         yield StreamChunk(
@@ -213,10 +208,7 @@ class FakeAnthropicAdapter(AnthropicAdapter):
             raise self.fail_with
         events = self._events or _default_native_events(self.text, self.config.model)
         for i, ev in enumerate(events):
-            if (
-                self.stream_fail_after is not None
-                and i >= self.stream_fail_after
-            ):
+            if self.stream_fail_after is not None and i >= self.stream_fail_after:
                 raise self.stream_fail_with or AdapterError(
                     "midstream", provider=self.name, retryable=True
                 )
@@ -350,9 +342,7 @@ async def test_generate_native_passthrough() -> None:
     """kind: anthropic goes straight through generate_anthropic — no
     translation to ChatRequest and back."""
     config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("first"), text="from native"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("first"), text="from native")
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
@@ -369,9 +359,7 @@ async def test_generate_openai_compat_round_trip() -> None:
     """kind: openai_compat translates AnthropicRequest → ChatRequest and
     back. The text reaches the client through to_anthropic_response."""
     config = _mixed_config(first_kind="openai_compat", second_kind="openai_compat")
-    first = FakeOpenAIAdapter(
-        config.provider_by_name("first"), text="hello from oai"
-    )
+    first = FakeOpenAIAdapter(config.provider_by_name("first"), text="hello from oai")
     second = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": first, "second": second})
 
@@ -393,8 +381,7 @@ async def test_generate_tool_call_repair_runs_on_round_trip() -> None:
     first = FakeOpenAIAdapter(
         config.provider_by_name("first"),
         tool_as_text=(
-            "Let me look it up.\n"
-            '{"name": "get_weather", "arguments": {"location": "Tokyo"}}'
+            'Let me look it up.\n{"name": "get_weather", "arguments": {"location": "Tokyo"}}'
         ),
     )
     second = FakeOpenAIAdapter(config.provider_by_name("second"))
@@ -432,9 +419,7 @@ async def test_generate_mixed_chain_falls_back_from_native_to_openai() -> None:
         config.provider_by_name("first"),
         fail_with=AdapterError("down", provider="first", retryable=True),
     )
-    fallback = FakeOpenAIAdapter(
-        config.provider_by_name("second"), text="fallback answer"
-    )
+    fallback = FakeOpenAIAdapter(config.provider_by_name("second"), text="fallback answer")
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
     resp = await engine.generate_anthropic(_anth_req())
@@ -452,9 +437,7 @@ async def test_generate_mixed_chain_falls_back_from_openai_to_native() -> None:
         config.provider_by_name("first"),
         fail_with=AdapterError("rate", provider="first", retryable=True),
     )
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("second"), text="native saves the day"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("second"), text="native saves the day")
     engine = _engine_with_adapters(config, {"first": first, "second": native})
 
     resp = await engine.generate_anthropic(_anth_req())
@@ -486,9 +469,7 @@ async def test_generate_non_retryable_aborts_chain() -> None:
     config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
     native = FakeAnthropicAdapter(
         config.provider_by_name("first"),
-        fail_with=AdapterError(
-            "bad request", provider="first", status_code=400, retryable=False
-        ),
+        fail_with=AdapterError("bad request", provider="first", status_code=400, retryable=False),
     )
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
@@ -507,9 +488,7 @@ async def test_generate_non_retryable_aborts_chain() -> None:
 async def test_stream_native_is_real_streaming() -> None:
     """Native providers stream events one by one — no downgrade."""
     config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("first"), text="native text"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("first"), text="native text")
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
@@ -528,9 +507,7 @@ async def test_stream_native_is_real_streaming() -> None:
 async def test_stream_openai_without_tools_uses_real_streaming() -> None:
     """openai_compat without tools → real streaming path (no downgrade)."""
     config = _mixed_config(first_kind="openai_compat", second_kind="openai_compat")
-    first = FakeOpenAIAdapter(
-        config.provider_by_name("first"), chunks=["hel", "lo"]
-    )
+    first = FakeOpenAIAdapter(config.provider_by_name("first"), chunks=["hel", "lo"])
     second = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": first, "second": second})
 
@@ -555,8 +532,7 @@ async def test_stream_openai_with_tools_downgrades_and_repairs() -> None:
     first = FakeOpenAIAdapter(
         config.provider_by_name("first"),
         tool_as_text=(
-            "Calling the tool.\n"
-            '{"name": "get_weather", "arguments": {"location": "Tokyo"}}'
+            'Calling the tool.\n{"name": "get_weather", "arguments": {"location": "Tokyo"}}'
         ),
     )
     second = FakeOpenAIAdapter(config.provider_by_name("second"))
@@ -631,9 +607,7 @@ async def test_stream_midstream_raises_midstream_error() -> None:
     native = FakeAnthropicAdapter(
         config.provider_by_name("first"),
         stream_fail_after=2,
-        stream_fail_with=AdapterError(
-            "connection reset", provider="first", retryable=True
-        ),
+        stream_fail_with=AdapterError("connection reset", provider="first", retryable=True),
     )
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
@@ -660,9 +634,7 @@ async def test_stream_initial_error_still_falls_back() -> None:
         config.provider_by_name("first"),
         fail_with=AdapterError("down", provider="first", retryable=True),
     )
-    fallback = FakeOpenAIAdapter(
-        config.provider_by_name("second"), chunks=["ok"]
-    )
+    fallback = FakeOpenAIAdapter(config.provider_by_name("second"), chunks=["ok"])
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
     events = [ev async for ev in engine.stream_anthropic(_anth_req(stream=True))]
@@ -695,9 +667,7 @@ async def test_openai_generate_routes_to_kind_anthropic_via_reverse_translation(
     translation path (ChatRequest → AnthropicRequest → AnthropicResponse
     → ChatResponse) runs end-to-end without the engine needing changes."""
     config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("first"), text="from anthropic native"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("first"), text="from anthropic native")
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
@@ -719,9 +689,7 @@ async def test_openai_stream_routes_to_kind_anthropic_via_reverse_translation() 
     """OpenAI streaming ingress → kind:anthropic provider: emits a proper
     OpenAI StreamChunk sequence (role → content → finish → usage)."""
     config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("first"), text="hello stream"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("first"), text="hello stream")
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})
 
@@ -732,13 +700,10 @@ async def test_openai_stream_routes_to_kind_anthropic_via_reverse_translation() 
     assert chunks[0].choices[0]["delta"].get("role") == "assistant"
     # Some chunk carries the text.
     assert any(
-        c.choices and c.choices[0].get("delta", {}).get("content") == "hello stream"
-        for c in chunks
+        c.choices and c.choices[0].get("delta", {}).get("content") == "hello stream" for c in chunks
     )
     # A finish chunk exists with finish_reason=stop.
-    assert any(
-        c.choices and c.choices[0].get("finish_reason") == "stop" for c in chunks
-    )
+    assert any(c.choices and c.choices[0].get("finish_reason") == "stop" for c in chunks)
     # Trailing usage chunk (no choices).
     assert chunks[-1].choices == []
     assert chunks[-1].usage is not None
@@ -755,9 +720,7 @@ async def test_openai_generate_mixed_chain_falls_over_openai_to_anthropic() -> N
         config.provider_by_name("first"),
         fail_with=AdapterError("rate limited", provider="first", retryable=True),
     )
-    native = FakeAnthropicAdapter(
-        config.provider_by_name("second"), text="anthropic rescued it"
-    )
+    native = FakeAnthropicAdapter(config.provider_by_name("second"), text="anthropic rescued it")
     engine = _engine_with_adapters(config, {"first": first, "second": native})
 
     resp = await engine.generate(_chat_req())
@@ -779,9 +742,7 @@ async def test_openai_stream_midstream_kind_anthropic_raises_midstream_error() -
         # Fail after a few events — message_start + content_block_start
         # + content_block_delta have already emitted OpenAI chunks.
         stream_fail_after=3,
-        stream_fail_with=AdapterError(
-            "connection reset", provider="first", retryable=True
-        ),
+        stream_fail_with=AdapterError("connection reset", provider="first", retryable=True),
     )
     fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
     engine = _engine_with_adapters(config, {"first": native, "second": fallback})

@@ -73,9 +73,7 @@ class _RecordingEngine:
         self.seen_profiles: list[str | None] = []
         self.seen_requests: list[AnthropicRequest] = []
 
-    async def generate_anthropic(
-        self, request: AnthropicRequest
-    ) -> AnthropicResponse:
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         self.seen_profiles.append(request.profile)
         self.seen_requests.append(request)
         return AnthropicResponse(
@@ -150,9 +148,7 @@ class _FailingEngine:
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
 
-    async def generate_anthropic(
-        self, request: AnthropicRequest
-    ) -> AnthropicResponse:
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         raise NoProvidersAvailableError(self.profile, [])
 
     async def stream_anthropic(
@@ -174,9 +170,7 @@ class _MidStreamFailingEngine:
         self.provider = provider
         self.stream_calls = 0
 
-    async def generate_anthropic(
-        self, request: AnthropicRequest
-    ) -> AnthropicResponse:
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         raise AssertionError("generate_anthropic should not be called in stream tests")
 
     async def stream_anthropic(
@@ -351,10 +345,7 @@ def test_anthropic_beta_header_threads_through_to_request(
     )
     assert resp.status_code == 200, resp.text
     assert len(engine.seen_requests) == 1
-    assert (
-        engine.seen_requests[0].anthropic_beta
-        == "context-management-2025-06-27,fake-beta"
-    )
+    assert engine.seen_requests[0].anthropic_beta == "context-management-2025-06-27,fake-beta"
 
 
 def test_missing_anthropic_beta_header_leaves_field_none(

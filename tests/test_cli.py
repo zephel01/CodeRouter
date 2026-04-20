@@ -170,9 +170,7 @@ def test_doctor_invokes_run_check_model_sync_with_provider_name(
     def _fake_exit_code(report: object) -> int:
         return 0
 
-    monkeypatch.setattr(
-        "coderouter.config.loader.load_config", _fake_load_config
-    )
+    monkeypatch.setattr("coderouter.config.loader.load_config", _fake_load_config)
     monkeypatch.setattr(doctor_mod, "run_check_model_sync", _fake_run_check_model)
     monkeypatch.setattr(doctor_mod, "format_report", _fake_format_report)
     monkeypatch.setattr(doctor_mod, "exit_code_for", _fake_exit_code)
@@ -190,12 +188,8 @@ def test_doctor_propagates_needs_tuning_exit_code(
     """When the probe reports NEEDS_TUNING, CLI must exit 2 (CI contract)."""
     import coderouter.doctor as doctor_mod
 
-    monkeypatch.setattr(
-        "coderouter.config.loader.load_config", lambda path: _fake_config()
-    )
-    monkeypatch.setattr(
-        doctor_mod, "run_check_model_sync", lambda cfg, name: object()
-    )
+    monkeypatch.setattr("coderouter.config.loader.load_config", lambda path: _fake_config())
+    monkeypatch.setattr(doctor_mod, "run_check_model_sync", lambda cfg, name: object())
     monkeypatch.setattr(doctor_mod, "format_report", lambda r: "X")
     monkeypatch.setattr(doctor_mod, "exit_code_for", lambda r: 2)
 
@@ -209,9 +203,7 @@ def test_doctor_returns_one_when_provider_not_in_config(
     """Unknown provider → KeyError from check_model → CLI exits 1 with stderr."""
     import coderouter.doctor as doctor_mod
 
-    monkeypatch.setattr(
-        "coderouter.config.loader.load_config", lambda path: _fake_config()
-    )
+    monkeypatch.setattr("coderouter.config.loader.load_config", lambda path: _fake_config())
 
     def _raise_key(cfg: object, name: str) -> object:
         raise KeyError(f"provider {name!r} not found. Known: ['foo']")
@@ -229,6 +221,7 @@ def test_doctor_returns_one_when_config_file_missing(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Config file not found → CLI exits 1 with stderr."""
+
     def _raise_fnf(path: str | None) -> object:
         raise FileNotFoundError("providers.yaml not found. Searched: ...")
 
@@ -253,13 +246,9 @@ def test_doctor_honors_config_path(
         return _fake_config()
 
     monkeypatch.setattr("coderouter.config.loader.load_config", _fake_load_config)
-    monkeypatch.setattr(
-        doctor_mod, "run_check_model_sync", lambda cfg, name: object()
-    )
+    monkeypatch.setattr(doctor_mod, "run_check_model_sync", lambda cfg, name: object())
     monkeypatch.setattr(doctor_mod, "format_report", lambda r: "")
     monkeypatch.setattr(doctor_mod, "exit_code_for", lambda r: 0)
 
-    cli.main(
-        ["doctor", "--check-model", "foo", "--config", "/tmp/custom.yaml"]
-    )
+    cli.main(["doctor", "--check-model", "foo", "--config", "/tmp/custom.yaml"])
     assert captured["path"] == "/tmp/custom.yaml"

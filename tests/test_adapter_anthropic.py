@@ -84,9 +84,7 @@ def test_headers_use_x_api_key_not_authorization(monkeypatch) -> None:
 
 def test_anthropic_version_override_via_extra_body() -> None:
     """Users on a pinned minor version can set anthropic-version via extra_body."""
-    adapter = AnthropicAdapter(
-        _provider(extra_body={"anthropic_version": "2024-10-22"})
-    )
+    adapter = AnthropicAdapter(_provider(extra_body={"anthropic_version": "2024-10-22"}))
     headers = adapter._headers()
     assert headers["anthropic-version"] == "2024-10-22"
 
@@ -115,10 +113,7 @@ def test_headers_forward_anthropic_beta_when_set() -> None:
         messages=[AnthropicMessage(role="user", content="hi")],
     )
     req.anthropic_beta = "context-management-2025-06-27"
-    assert (
-        adapter._headers(req)["anthropic-beta"]
-        == "context-management-2025-06-27"
-    )
+    assert adapter._headers(req)["anthropic-beta"] == "context-management-2025-06-27"
 
 
 # ----------------------------------------------------------------------
@@ -293,18 +288,11 @@ async def test_openai_shaped_stream_reverse_translates(
     assert first_delta.get("role") == "assistant"
 
     # At least one chunk carries the text "hello".
-    text_chunks = [
-        c for c in chunks
-        if c.choices and c.choices[0].get("delta", {}).get("content")
-    ]
-    assert any(
-        c.choices[0]["delta"]["content"] == "hello" for c in text_chunks
-    )
+    text_chunks = [c for c in chunks if c.choices and c.choices[0].get("delta", {}).get("content")]
+    assert any(c.choices[0]["delta"]["content"] == "hello" for c in text_chunks)
 
     # Finish chunk: end_turn → stop.
-    finish_chunks = [
-        c for c in chunks if c.choices and c.choices[0].get("finish_reason")
-    ]
+    finish_chunks = [c for c in chunks if c.choices and c.choices[0].get("finish_reason")]
     assert finish_chunks and finish_chunks[-1].choices[0]["finish_reason"] == "stop"
 
     # Trailing usage chunk (no choices).
@@ -364,9 +352,7 @@ async def test_openai_shaped_stream_anthropic_error_event_is_non_retryable(
 
 
 @pytest.mark.asyncio
-async def test_generate_anthropic_sends_correct_payload(
-    httpx_mock: HTTPXMock, monkeypatch
-) -> None:
+async def test_generate_anthropic_sends_correct_payload(httpx_mock: HTTPXMock, monkeypatch) -> None:
     """Body must carry provider's model (client-sent model is ignored),
     stream=False, and the messages array verbatim."""
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
@@ -457,10 +443,7 @@ async def test_generate_anthropic_forwards_anthropic_beta_header(
     req.anthropic_beta = "context-management-2025-06-27"
     await adapter.generate_anthropic(req)
 
-    assert (
-        captured["headers"]["anthropic-beta"]
-        == "context-management-2025-06-27"
-    )
+    assert captured["headers"]["anthropic-beta"] == "context-management-2025-06-27"
     # Critical: the beta flag is a header hop, NOT a body field. If it
     # leaked into the body, Anthropic would 400 with
     # "Extra inputs are not permitted" (ironically, the exact class of
@@ -600,10 +583,7 @@ async def test_stream_anthropic_forwards_anthropic_beta_header(
     req = _request(stream=True)
     req.anthropic_beta = "context-management-2025-06-27"
     _ = [e async for e in adapter.stream_anthropic(req)]
-    assert (
-        captured["headers"]["anthropic-beta"]
-        == "context-management-2025-06-27"
-    )
+    assert captured["headers"]["anthropic-beta"] == "context-management-2025-06-27"
 
 
 @pytest.mark.asyncio

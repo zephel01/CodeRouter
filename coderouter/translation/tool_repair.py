@@ -49,26 +49,26 @@ __all__ = ["repair_tool_calls_in_text"]
 # ------------------------------------------------------------------
 
 
-def _looks_like_tool_call(
-    obj: Any, allowed: set[str] | None
-) -> tuple[str, Any] | None:
+def _looks_like_tool_call(obj: Any, allowed: set[str] | None) -> tuple[str, Any] | None:
     """Return (name, arguments) if obj looks like a tool call, else None."""
     if not isinstance(obj, dict):
         return None
 
     # Direct shape: {"name": "...", "arguments": ...}
     name = obj.get("name")
-    if isinstance(name, str) and "arguments" in obj:
-        if allowed is None or name in allowed:
-            return name, obj["arguments"]
+    if isinstance(name, str) and "arguments" in obj and (allowed is None or name in allowed):
+        return name, obj["arguments"]
 
     # OpenAI function shape: {"function": {"name": "...", "arguments": ...}}
     fn = obj.get("function")
     if isinstance(fn, dict):
         inner_name = fn.get("name")
-        if isinstance(inner_name, str) and "arguments" in fn:
-            if allowed is None or inner_name in allowed:
-                return inner_name, fn["arguments"]
+        if (
+            isinstance(inner_name, str)
+            and "arguments" in fn
+            and (allowed is None or inner_name in allowed)
+        ):
+            return inner_name, fn["arguments"]
 
     return None
 
@@ -184,11 +184,7 @@ def repair_tool_calls_in_text(
     if not isinstance(text, str) or not text:
         return text, []
 
-    allowed: set[str] | None
-    if allowed_tool_names is None:
-        allowed = None
-    else:
-        allowed = set(allowed_tool_names)
+    allowed: set[str] | None = None if allowed_tool_names is None else set(allowed_tool_names)
 
     extracted: list[dict[str, Any]] = []
 

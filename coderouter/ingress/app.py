@@ -29,9 +29,7 @@ def create_app(config_path: str | None = None) -> FastAPI:
         # so operators can tell at a glance whether a shell env is driving the
         # server ("oh, my .envrc set CODEROUTER_MODE") vs the YAML file
         # ("default_profile: coding was committed").
-        mode_source = (
-            "env" if os.environ.get("CODEROUTER_MODE", "").strip() else "config"
-        )
+        mode_source = "env" if os.environ.get("CODEROUTER_MODE", "").strip() else "config"
         logger.info(
             "coderouter-startup",
             extra={

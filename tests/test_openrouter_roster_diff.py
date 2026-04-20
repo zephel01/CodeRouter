@@ -33,15 +33,9 @@ from pathlib import Path
 import pytest
 from pytest_httpx import HTTPXMock
 
-_SCRIPT_PATH = (
-    Path(__file__).resolve().parent.parent
-    / "scripts"
-    / "openrouter_roster_diff.py"
-)
+_SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "openrouter_roster_diff.py"
 
-_spec = importlib.util.spec_from_file_location(
-    "openrouter_roster_diff", _SCRIPT_PATH
-)
+_spec = importlib.util.spec_from_file_location("openrouter_roster_diff", _SCRIPT_PATH)
 assert _spec is not None and _spec.loader is not None
 rd = importlib.util.module_from_spec(_spec)
 # dataclasses looks up __module__ in sys.modules while processing the
@@ -104,9 +98,9 @@ def test_parse_models_skips_malformed_rows() -> None:
     raw = {
         "data": [
             _model("ok/id"),
-            {"id": ""},                       # empty id — skipped
-            "not a dict",                      # not a dict — skipped
-            {"pricing": {"prompt": "0"}},      # no id — skipped
+            {"id": ""},  # empty id — skipped
+            "not a dict",  # not a dict — skipped
+            {"pricing": {"prompt": "0"}},  # no id — skipped
             _model("ok/id2"),
         ]
     }
@@ -129,9 +123,7 @@ def test_parse_models_invalid_context_length_becomes_none() -> None:
 
 
 def test_is_free_on_zero_pricing() -> None:
-    e = rd.RosterEntry(
-        id="x", context_length=4096, pricing_prompt="0", pricing_completion="0"
-    )
+    e = rd.RosterEntry(id="x", context_length=4096, pricing_prompt="0", pricing_completion="0")
     assert rd.is_free(e)
 
 
@@ -389,9 +381,7 @@ def test_run_dry_run_does_not_write_anything(
     assert not changes.exists()
 
 
-def test_run_filters_out_paid_models(
-    httpx_mock: HTTPXMock, paths: tuple[Path, Path]
-) -> None:
+def test_run_filters_out_paid_models(httpx_mock: HTTPXMock, paths: tuple[Path, Path]) -> None:
     """The cron only tracks free tier. Paid models must not appear in
     the snapshot (they'd churn constantly from price updates)."""
     snapshot, changes = paths
@@ -415,9 +405,7 @@ def test_run_filters_out_paid_models(
     assert {e["id"] for e in payload["entries"]} == {"free/a"}
 
 
-def test_run_noop_when_roster_unchanged(
-    httpx_mock: HTTPXMock, paths: tuple[Path, Path]
-) -> None:
+def test_run_noop_when_roster_unchanged(httpx_mock: HTTPXMock, paths: tuple[Path, Path]) -> None:
     """Two identical runs leave CHANGES.md untouched on the second."""
     snapshot, changes = paths
     # Two fetches with identical roster

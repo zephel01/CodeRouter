@@ -48,9 +48,7 @@ logger = get_logger(__name__)
 _RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
 
 
-def _strip_reasoning_field(
-    choices: list[dict[str, Any]] | None, *, delta_key: bool
-) -> bool:
+def _strip_reasoning_field(choices: list[dict[str, Any]] | None, *, delta_key: bool) -> bool:
     """Remove non-standard ``reasoning`` keys from a choices list, in place.
 
     v0.5-C: Some OpenRouter free models (confirmed on
@@ -221,14 +219,15 @@ class OpenAICompatAdapter(BaseAdapter):
 
         # v0.5-C: passive strip of non-standard `reasoning` field on choices.
         # No-op when the provider opted into passthrough.
-        if not self.config.capabilities.reasoning_passthrough:
-            if _strip_reasoning_field(data.get("choices"), delta_key=False):
-                log_capability_degraded(
-                    logger,
-                    provider=self.name,
-                    dropped=["reasoning"],
-                    reason="non-standard-field",
-                )
+        if not self.config.capabilities.reasoning_passthrough and _strip_reasoning_field(
+            data.get("choices"), delta_key=False
+        ):
+            log_capability_degraded(
+                logger,
+                provider=self.name,
+                dropped=["reasoning"],
+                reason="non-standard-field",
+            )
 
         # v1.0-A: apply output_filters chain to each choice's message.content
         # (the non-standard `reasoning` field was already removed above, so
@@ -277,66 +276,64 @@ class OpenAICompatAdapter(BaseAdapter):
         # across SSE chunk boundaries. One chain instance per request;
         # `output_filter_logged` dedupes the one-shot info log.
         filter_chain: OutputFilterChain | None = (
-            OutputFilterChain(self.config.output_filters)
-            if self.config.output_filters
-            else None
+            OutputFilterChain(self.config.output_filters) if self.config.output_filters else None
         )
         output_filter_logged = False
         # Captured for the closing flush chunk (if any): reuse the last
         # seen chunk's id/model so the flush emission looks native.
         last_chunk_template: dict[str, Any] | None = None
         try:
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                async with client.stream(
-                    "POST", url, json=payload, headers=self._headers()
-                ) as resp:
-                    if resp.status_code >= 400:
-                        body = await resp.aread()
-                        raise AdapterError(
-                            f"{resp.status_code} from upstream: {body[:200]!r}",
-                            provider=self.name,
-                            status_code=resp.status_code,
-                            retryable=resp.status_code in _RETRYABLE_STATUSES,
+            async with (
+                httpx.AsyncClient(timeout=timeout) as client,
+                client.stream("POST", url, json=payload, headers=self._headers()) as resp,
+            ):
+                if resp.status_code >= 400:
+                    body = await resp.aread()
+                    raise AdapterError(
+                        f"{resp.status_code} from upstream: {body[:200]!r}",
+                        provider=self.name,
+                        status_code=resp.status_code,
+                        retryable=resp.status_code in _RETRYABLE_STATUSES,
+                    )
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    # SSE format: lines start with "data: "
+                    if line.startswith(":"):
+                        continue  # comment / heartbeat
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[len("data:") :].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        payload_obj = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue  # skip malformed chunks rather than abort
+                    if strip_reasoning:
+                        stripped = _strip_reasoning_field(
+                            payload_obj.get("choices"), delta_key=True
                         )
-                    async for line in resp.aiter_lines():
-                        if not line:
-                            continue
-                        # SSE format: lines start with "data: "
-                        if line.startswith(":"):
-                            continue  # comment / heartbeat
-                        if not line.startswith("data:"):
-                            continue
-                        data_str = line[len("data:"):].strip()
-                        if data_str == "[DONE]":
-                            break
-                        try:
-                            payload_obj = json.loads(data_str)
-                        except json.JSONDecodeError:
-                            continue  # skip malformed chunks rather than abort
-                        if strip_reasoning:
-                            stripped = _strip_reasoning_field(
-                                payload_obj.get("choices"), delta_key=True
+                        if stripped and not reasoning_logged:
+                            log_capability_degraded(
+                                logger,
+                                provider=self.name,
+                                dropped=["reasoning"],
+                                reason="non-standard-field",
                             )
-                            if stripped and not reasoning_logged:
-                                log_capability_degraded(
-                                    logger,
-                                    provider=self.name,
-                                    dropped=["reasoning"],
-                                    reason="non-standard-field",
-                                )
-                                reasoning_logged = True
-                        if filter_chain is not None:
-                            for choice in payload_obj.get("choices") or []:
-                                if not isinstance(choice, dict):
-                                    continue
-                                delta = choice.get("delta")
-                                if not isinstance(delta, dict):
-                                    continue
-                                content = delta.get("content")
-                                if isinstance(content, str) and content:
-                                    delta["content"] = filter_chain.feed(content)
-                            last_chunk_template = payload_obj
-                        yield StreamChunk(**payload_obj)
+                            reasoning_logged = True
+                    if filter_chain is not None:
+                        for choice in payload_obj.get("choices") or []:
+                            if not isinstance(choice, dict):
+                                continue
+                            delta = choice.get("delta")
+                            if not isinstance(delta, dict):
+                                continue
+                            content = delta.get("content")
+                            if isinstance(content, str) and content:
+                                delta["content"] = filter_chain.feed(content)
+                        last_chunk_template = payload_obj
+                    yield StreamChunk(**payload_obj)
 
             # v1.0-A: flush the chain at end-of-stream. If filters held
             # back a partial-tag suffix that turned out NOT to be a tag,
@@ -348,14 +345,10 @@ class OpenAICompatAdapter(BaseAdapter):
                 if tail and last_chunk_template is not None:
                     flush_chunk: dict[str, Any] = {
                         "id": last_chunk_template.get("id", ""),
-                        "object": last_chunk_template.get(
-                            "object", "chat.completion.chunk"
-                        ),
+                        "object": last_chunk_template.get("object", "chat.completion.chunk"),
                         "created": last_chunk_template.get("created", 0),
                         "model": last_chunk_template.get("model", self.config.model),
-                        "choices": [
-                            {"index": 0, "delta": {"content": tail}}
-                        ],
+                        "choices": [{"index": 0, "delta": {"content": tail}}],
                     }
                     yield StreamChunk(**flush_chunk)
                 if filter_chain.any_applied and not output_filter_logged:

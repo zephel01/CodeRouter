@@ -33,7 +33,6 @@ from coderouter.routing.capability import (
     reset_default_registry,
 )
 
-
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
@@ -55,9 +54,7 @@ def _provider(
         name="t",
         kind=kind,  # type: ignore[arg-type]
         base_url=(
-            "https://api.anthropic.com"
-            if kind == "anthropic"
-            else "https://openrouter.ai/api/v1"
+            "https://api.anthropic.com" if kind == "anthropic" else "https://openrouter.ai/api/v1"
         ),
         model=model,
         capabilities=Capabilities(thinking=thinking),
@@ -139,9 +136,7 @@ def test_registry_file_rejects_empty_match_string() -> None:
 
 def test_registry_rule_kind_default_is_any() -> None:
     """Omitted ``kind`` means the rule applies regardless of adapter kind."""
-    rule = CapabilityRule.model_validate(
-        {"match": "anything-*", "capabilities": {"tools": True}}
-    )
+    rule = CapabilityRule.model_validate({"match": "anything-*", "capabilities": {"tools": True}})
     assert rule.kind == "any"
 
 
@@ -338,9 +333,9 @@ def test_bundled_yaml_loads_and_encodes_v0_5a_heuristic() -> None:
         ("claude-haiku-4-6", True),
     ]
     for model, expected in capable_models:
-        assert (
-            reg.lookup(kind="anthropic", model=model).thinking is expected
-        ), f"bundled YAML should declare thinking for {model}"
+        assert reg.lookup(kind="anthropic", model=model).thinking is expected, (
+            f"bundled YAML should declare thinking for {model}"
+        )
 
 
 def test_bundled_yaml_rejects_pre_4_6_sonnet() -> None:
@@ -348,18 +343,16 @@ def test_bundled_yaml_rejects_pre_4_6_sonnet() -> None:
     the bundled YAML must NOT declare thinking for it."""
     reg = CapabilityRegistry.load_default()
     for model in ["claude-sonnet-4-5", "claude-sonnet-4-5-20250929"]:
-        assert (
-            reg.lookup(kind="anthropic", model=model).thinking is None
-        ), f"bundled YAML must not declare thinking for {model}"
+        assert reg.lookup(kind="anthropic", model=model).thinking is None, (
+            f"bundled YAML must not declare thinking for {model}"
+        )
 
 
 def test_bundled_yaml_does_not_declare_openai_compat_thinking() -> None:
     """openai_compat queries must never get thinking=True from the bundled
     YAML — translation would drop the block anyway."""
     reg = CapabilityRegistry.load_default()
-    result = reg.lookup(
-        kind="openai_compat", model="anthropic/claude-sonnet-4-6"
-    )
+    result = reg.lookup(kind="openai_compat", model="anthropic/claude-sonnet-4-6")
     assert result.thinking is None
 
 

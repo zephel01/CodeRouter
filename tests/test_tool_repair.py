@@ -11,7 +11,6 @@ import json
 
 from coderouter.translation.tool_repair import repair_tool_calls_in_text
 
-
 # ----------------------------------------------------------------------
 # Empty / no-match cases
 # ----------------------------------------------------------------------
@@ -107,11 +106,7 @@ def test_fenced_json_block_is_extracted() -> None:
 
 
 def test_fenced_block_without_language_tag_is_extracted() -> None:
-    text = (
-        "```\n"
-        '{"name": "Read", "arguments": {"path": "/tmp/foo"}}\n'
-        "```"
-    )
+    text = '```\n{"name": "Read", "arguments": {"path": "/tmp/foo"}}\n```'
     cleaned, calls = repair_tool_calls_in_text(text)
     assert cleaned == ""
     assert len(calls) == 1
@@ -124,9 +119,7 @@ def test_fenced_block_without_language_tag_is_extracted() -> None:
 
 
 def test_openai_function_shape_is_normalised() -> None:
-    text = (
-        '{"function": {"name": "Bash", "arguments": "{\\"command\\": \\"pwd\\"}"}}'
-    )
+    text = '{"function": {"name": "Bash", "arguments": "{\\"command\\": \\"pwd\\"}"}}'
     cleaned, calls = repair_tool_calls_in_text(text)
     assert cleaned == ""
     assert len(calls) == 1

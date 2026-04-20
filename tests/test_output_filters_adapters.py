@@ -27,15 +27,12 @@ from coderouter.adapters.openai_compat import OpenAICompatAdapter
 from coderouter.config.schemas import Capabilities, ProviderConfig
 from coderouter.translation.anthropic import AnthropicRequest
 
-
 # ======================================================================
 # OpenAI-compat adapter
 # ======================================================================
 
 
-def _oai_provider(
-    filters: list[str] | None = None, *, passthrough: bool = False
-) -> ProviderConfig:
+def _oai_provider(filters: list[str] | None = None, *, passthrough: bool = False) -> ProviderConfig:
     return ProviderConfig(
         name="local-qwen",
         base_url="http://localhost:11434/v1",
@@ -249,8 +246,7 @@ async def test_oai_stream_strips_thinking_across_chunks(
 
     # Concatenate all delta.content we observed.
     observed = "".join(
-        (c.choices[0].get("delta", {}) or {}).get("content", "") or ""
-        for c in chunks
+        (c.choices[0].get("delta", {}) or {}).get("content", "") or "" for c in chunks
     )
     assert observed == "hello  world"
 
@@ -284,8 +280,7 @@ async def test_oai_stream_strips_stop_marker_split_across_chunks(
     chunks = [c async for c in adapter.stream(req)]
 
     observed = "".join(
-        (c.choices[0].get("delta", {}) or {}).get("content", "") or ""
-        for c in chunks
+        (c.choices[0].get("delta", {}) or {}).get("content", "") or "" for c in chunks
     )
     assert observed == "keepmore"
 
@@ -317,8 +312,7 @@ async def test_oai_stream_flushes_safe_tail_at_done(
     chunks = [c async for c in adapter.stream(req)]
 
     observed = "".join(
-        (c.choices[0].get("delta", {}) or {}).get("content", "") or ""
-        for c in chunks
+        (c.choices[0].get("delta", {}) or {}).get("content", "") or "" for c in chunks
     )
     # The dangling `<|` is legitimate content at EOF — must be released.
     assert observed == "answer<|"
@@ -351,8 +345,7 @@ async def test_oai_stream_empty_filters_does_not_flush(
         chunks = [c async for c in adapter.stream(req)]
 
     observed = "".join(
-        (c.choices[0].get("delta", {}) or {}).get("content", "") or ""
-        for c in chunks
+        (c.choices[0].get("delta", {}) or {}).get("content", "") or "" for c in chunks
     )
     assert observed == "hello <|partial"
     recs = [r for r in caplog.records if r.msg == "output-filter-applied"]
@@ -516,10 +509,8 @@ async def test_anth_stream_strips_thinking_across_text_deltas(
 
     # Every content_block_delta event must come BEFORE its
     # content_block_stop — i.e. the flush tail is inserted before stop.
-    stop_idx = next(
-        i for i, e in enumerate(emitted) if e.type == "content_block_stop"
-    )
-    for i, e in enumerate(emitted[:stop_idx]):
+    stop_idx = next(i for i, e in enumerate(emitted) if e.type == "content_block_stop")
+    for _i, e in enumerate(emitted[:stop_idx]):
         assert e.type != "content_block_stop"
 
     recs = [r for r in caplog.records if r.msg == "output-filter-applied"]

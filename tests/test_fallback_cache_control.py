@@ -35,7 +35,6 @@ from coderouter.translation.anthropic import (
     AnthropicMessage,
     AnthropicRequest,
 )
-
 from tests.test_fallback_anthropic import (
     FakeAnthropicAdapter,
     FakeOpenAIAdapter,
@@ -56,9 +55,7 @@ def _anthropic_provider(name: str) -> ProviderConfig:
     )
 
 
-def _openai_provider(
-    name: str, *, prompt_cache: bool = False
-) -> ProviderConfig:
+def _openai_provider(name: str, *, prompt_cache: bool = False) -> ProviderConfig:
     return ProviderConfig(
         name=name,
         kind="openai_compat",
@@ -68,9 +65,7 @@ def _openai_provider(
     )
 
 
-def _config(
-    providers: list[ProviderConfig], chain: list[str]
-) -> CodeRouterConfig:
+def _config(providers: list[ProviderConfig], chain: list[str]) -> CodeRouterConfig:
     return CodeRouterConfig(
         allow_paid=False,
         default_profile="default",
@@ -79,9 +74,7 @@ def _config(
     )
 
 
-def _engine(
-    config: CodeRouterConfig, adapters: dict[str, BaseAdapter]
-) -> FallbackEngine:
+def _engine(config: CodeRouterConfig, adapters: dict[str, BaseAdapter]) -> FallbackEngine:
     engine = FallbackEngine.__new__(FallbackEngine)
     engine.config = config
     engine._adapters = adapters  # type: ignore[attr-defined]
@@ -196,9 +189,7 @@ async def test_cache_control_does_not_reorder_chain(
     config = _config([compat_cfg, anth_cfg], chain=["ollama", "sonnet-4-6"])
     compat = FakeOpenAIAdapter(compat_cfg, text="compat first")
     anth = FakeAnthropicAdapter(anth_cfg, text="anthropic second")
-    engine = _engine(
-        config, {"ollama": compat, "sonnet-4-6": anth}
-    )
+    engine = _engine(config, {"ollama": compat, "sonnet-4-6": anth})
 
     with caplog.at_level(logging.INFO, logger="coderouter"):
         resp = await engine.generate_anthropic(_cache_request())
@@ -240,19 +231,13 @@ async def test_log_fires_on_each_provider_in_fallback_chain(
     actual handoff)."""
     compat_a_cfg = _openai_provider("ollama-a")
     compat_b_cfg = _openai_provider("ollama-b")
-    config = _config(
-        [compat_a_cfg, compat_b_cfg], chain=["ollama-a", "ollama-b"]
-    )
+    config = _config([compat_a_cfg, compat_b_cfg], chain=["ollama-a", "ollama-b"])
     compat_a = FakeOpenAIAdapter(
         compat_a_cfg,
-        fail_with=AdapterError(
-            "boom", provider="ollama-a", retryable=True
-        ),
+        fail_with=AdapterError("boom", provider="ollama-a", retryable=True),
     )
     compat_b = FakeOpenAIAdapter(compat_b_cfg, text="ok")
-    engine = _engine(
-        config, {"ollama-a": compat_a, "ollama-b": compat_b}
-    )
+    engine = _engine(config, {"ollama-a": compat_a, "ollama-b": compat_b})
 
     with caplog.at_level(logging.INFO, logger="coderouter"):
         await engine.generate_anthropic(_cache_request())

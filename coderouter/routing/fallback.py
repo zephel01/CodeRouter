@@ -80,9 +80,7 @@ class MidStreamError(Exception):
     def __init__(self, provider: str, original: AdapterError) -> None:
         self.provider = provider
         self.original = original
-        super().__init__(
-            f"provider {provider!r} failed mid-stream: {original}"
-        )
+        super().__init__(f"provider {provider!r} failed mid-stream: {original}")
 
 
 # ---------------------------------------------------------------------------
@@ -112,9 +110,7 @@ class MidStreamError(Exception):
 _AUTH_STATUS_CODES: Final[frozenset[int]] = frozenset({401, 403})
 
 
-def _warn_if_uniform_auth_failure(
-    errors: list[AdapterError], *, profile: str
-) -> None:
+def _warn_if_uniform_auth_failure(errors: list[AdapterError], *, profile: str) -> None:
     """Emit a ``chain-uniform-auth-failure`` warn when the whole chain 401/403'd.
 
     Called from each of the four ``raise NoProvidersAvailableError`` sites
@@ -157,9 +153,7 @@ class FallbackEngine:
             p.name: build_adapter(p) for p in config.providers
         }
 
-    def _resolve_profile_overrides(
-        self, profile_name: str | None
-    ) -> ProviderCallOverrides:
+    def _resolve_profile_overrides(self, profile_name: str | None) -> ProviderCallOverrides:
         """v0.6-B: build the ProviderCallOverrides for the active profile.
 
         Invariant across every adapter call on one chain (profiles are
@@ -218,9 +212,7 @@ class FallbackEngine:
             )
         return adapters
 
-    def _resolve_anthropic_chain(
-        self, request: AnthropicRequest
-    ) -> list[tuple[BaseAdapter, bool]]:
+    def _resolve_anthropic_chain(self, request: AnthropicRequest) -> list[tuple[BaseAdapter, bool]]:
         """Resolve a chain, annotating each adapter with a ``will_degrade`` flag.
 
         v0.5-A capability gate: when ``request`` carries ``thinking: {type:
@@ -302,11 +294,7 @@ class FallbackEngine:
                 first = await anext(stream_iter)
             except StopAsyncIteration:
                 # Adapter produced zero chunks — treat as failure, try next
-                errors.append(
-                    AdapterError(
-                        "empty stream", provider=adapter.name, retryable=True
-                    )
-                )
+                errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
                 continue
             except AdapterError as exc:
                 logger.warning(
@@ -365,9 +353,7 @@ class FallbackEngine:
     #       call the OpenAI-shaped methods, translate the result back.
     #       Tool-call repair + v0.3-D downgrade happen on this path.
 
-    async def generate_anthropic(
-        self, request: AnthropicRequest
-    ) -> AnthropicResponse:
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
         chain = self._resolve_anthropic_chain(request)
         overrides = self._resolve_profile_overrides(request.profile)
@@ -395,9 +381,9 @@ class FallbackEngine:
             # needed here (to_chat_request already handles it) and no
             # chain reorder is done (user ordering preserved). We just
             # emit a log line so operators can see the lossiness.
-            if anthropic_request_has_cache_control(
-                request
-            ) and not provider_supports_cache_control(adapter.config):
+            if anthropic_request_has_cache_control(request) and not provider_supports_cache_control(
+                adapter.config
+            ):
                 log_capability_degraded(
                     logger,
                     provider=adapter.name,
@@ -415,18 +401,12 @@ class FallbackEngine:
             )
             try:
                 if is_native:
-                    resp = await adapter.generate_anthropic(
-                        effective_request, overrides=overrides
-                    )
+                    resp = await adapter.generate_anthropic(effective_request, overrides=overrides)
                 else:
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await adapter.generate(
-                        chat_req, overrides=overrides
-                    )
-                    resp = to_anthropic_response(
-                        chat_resp, allowed_tool_names=tool_names
-                    )
+                    chat_resp = await adapter.generate(chat_req, overrides=overrides)
+                    resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
             except AdapterError as exc:
                 logger.warning(
                     "provider-failed",
@@ -487,9 +467,9 @@ class FallbackEngine:
                     reason="provider-does-not-support",
                 )
             # v0.5-B: mirror of the non-streaming path — see comment there.
-            if anthropic_request_has_cache_control(
-                request
-            ) and not provider_supports_cache_control(adapter.config):
+            if anthropic_request_has_cache_control(request) and not provider_supports_cache_control(
+                adapter.config
+            ):
                 log_capability_degraded(
                     logger,
                     provider=adapter.name,
@@ -514,23 +494,15 @@ class FallbackEngine:
             first: AnthropicStreamEvent
             try:
                 if is_native:
-                    event_iter = adapter.stream_anthropic(
-                        effective_request, overrides=overrides
-                    )
+                    event_iter = adapter.stream_anthropic(effective_request, overrides=overrides)
                     first = await anext(event_iter)
                 elif downgrading:
                     # v0.3-D downgrade: run non-streaming, repair, replay.
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await adapter.generate(
-                        chat_req, overrides=overrides
-                    )
-                    anth_resp = to_anthropic_response(
-                        chat_resp, allowed_tool_names=tool_names
-                    )
-                    event_iter = synthesize_anthropic_stream_from_response(
-                        anth_resp
-                    )
+                    chat_resp = await adapter.generate(chat_req, overrides=overrides)
+                    anth_resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
+                    event_iter = synthesize_anthropic_stream_from_response(anth_resp)
                     first = await anext(event_iter)
                 else:
                     chat_req = to_chat_request(effective_request)
@@ -540,11 +512,7 @@ class FallbackEngine:
                     )
                     first = await anext(event_iter)
             except StopAsyncIteration:
-                errors.append(
-                    AdapterError(
-                        "empty stream", provider=adapter.name, retryable=True
-                    )
-                )
+                errors.append(AdapterError("empty stream", provider=adapter.name, retryable=True))
                 continue
             except AdapterError as exc:
                 logger.warning(

@@ -60,10 +60,10 @@ from coderouter.config.schemas import (
     ProviderConfig,
 )
 from coderouter.doctor import (
+    _NUM_CTX_PROBE_CANARY,
     DoctorReport,
     ProbeResult,
     ProbeVerdict,
-    _NUM_CTX_PROBE_CANARY,
     _patch_model_capabilities_yaml,
     _patch_providers_yaml_capability,
     _patch_providers_yaml_num_ctx,
@@ -73,7 +73,6 @@ from coderouter.doctor import (
     exit_code_for,
     format_report,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures / helpers
@@ -205,9 +204,7 @@ def _sse_stream_count_body(
                     "object": "chat.completion.chunk",
                     "created": 0,
                     "model": "probe-stream",
-                    "choices": [
-                        {"index": 0, "delta": {"content": f"{i}\n"}}
-                    ],
+                    "choices": [{"index": 0, "delta": {"content": f"{i}\n"}}],
                 }
             )
             + "\n\n"
@@ -221,9 +218,7 @@ def _sse_stream_count_body(
                 "object": "chat.completion.chunk",
                 "created": 0,
                 "model": "probe-stream",
-                "choices": [
-                    {"index": 0, "delta": {}, "finish_reason": finish_reason}
-                ],
+                "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}],
             }
         )
         + "\n\n"
@@ -233,9 +228,7 @@ def _sse_stream_count_body(
     return "".join(pieces).encode("utf-8")
 
 
-def _add_sse_ok_mock(
-    httpx_mock: HTTPXMock, url: str, **kwargs: Any
-) -> None:
+def _add_sse_ok_mock(httpx_mock: HTTPXMock, url: str, **kwargs: Any) -> None:
     """Register a successful streaming mock in one call.
 
     Shared by existing Ollama-shape num_ctx tests that now need a 5th
@@ -393,9 +386,7 @@ async def test_auth_probe_401_returns_auth_fail_and_short_circuits(
         status_code=401,
         json={"error": "unauthorized"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     by_name = _probes_by_name(report.results)
     assert by_name["auth+basic-chat"].verdict == ProbeVerdict.AUTH_FAIL
     # Short-circuit: tool_calls / thinking / reasoning-leak all SKIP.
@@ -417,9 +408,7 @@ async def test_auth_probe_403_returns_auth_fail(
         status_code=403,
         json={"error": "forbidden"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     auth = _probes_by_name(report.results)["auth+basic-chat"]
     assert auth.verdict == ProbeVerdict.AUTH_FAIL
     # Detail names the env var so the operator knows where to look.
@@ -438,9 +427,7 @@ async def test_auth_probe_404_reports_model_not_installed(
         status_code=404,
         json={"error": "model not found"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     auth = _probes_by_name(report.results)["auth+basic-chat"]
     assert auth.verdict == ProbeVerdict.UNSUPPORTED
     # Hint surfaces the model name so the operator can cross-check.
@@ -455,9 +442,7 @@ async def test_auth_probe_transport_error_maps_to_transport_error() -> None:
         base_url="http://127.0.0.1:1/v1",  # invalid port forces connect fail
         timeout_s=1.0,
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     auth = _probes_by_name(report.results)["auth+basic-chat"]
     assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
     assert exit_code_for(report) == 1
@@ -475,9 +460,7 @@ async def test_auth_probe_2xx_unparseable_body(
         status_code=200,
         content=b"not json at all",
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     auth = _probes_by_name(report.results)["auth+basic-chat"]
     assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
 
@@ -517,9 +500,7 @@ async def test_num_ctx_skips_for_non_ollama_port(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     assert num_ctx.verdict == ProbeVerdict.SKIP
     assert "Ollama-shape" in num_ctx.detail
@@ -571,9 +552,7 @@ async def test_num_ctx_ollama_port_canary_missing_suggests_patch(
     )
     # v1.0-C streaming probe — succeeds; not the subject of this test.
     _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
     assert num_ctx.target_file == "providers.yaml"
@@ -620,9 +599,7 @@ async def test_num_ctx_declared_high_canary_echoed_is_ok(
         )
     # v1.0-C streaming probe — succeeds.
     _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     assert num_ctx.verdict == ProbeVerdict.OK
     assert "32768" in num_ctx.detail
@@ -666,9 +643,7 @@ async def test_num_ctx_declared_low_canary_missing_bumps(
         )
     # v1.0-C streaming probe — succeeds.
     _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
     assert "4096" in num_ctx.detail
@@ -711,9 +686,7 @@ async def test_num_ctx_declared_adequate_canary_missing_informs_intrinsic_limit(
         )
     # v1.0-C streaming probe — succeeds.
     _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
     # The detail should flag the model's intrinsic limit as the suspect.
@@ -758,9 +731,7 @@ async def test_num_ctx_extra_body_signal_fires_on_non_11434_port(
     # v1.0-C streaming probe — also fires on the non-11434 port because
     # the same Ollama-shape signal (declared options) triggers both.
     _add_sse_ok_mock(httpx_mock, "http://localhost:12345/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     num_ctx = _probes_by_name(report.results)["num_ctx"]
     # Must NOT be SKIP — the extra_body signal should fire.
     assert num_ctx.verdict == ProbeVerdict.OK
@@ -781,9 +752,7 @@ async def test_num_ctx_request_body_merges_extra_body_options(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(
-            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
-        )
+        return httpx.Response(200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY))
 
     httpx_mock.add_callback(
         _capture,
@@ -791,9 +760,7 @@ async def test_num_ctx_request_body_merges_extra_body_options(
         method="POST",
         is_reusable=True,
     )
-    await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     # Second request is the num_ctx probe (after auth). Its body should
     # carry the merged options.
     import json as _json
@@ -823,9 +790,7 @@ async def test_num_ctx_auth_fail_short_circuits_num_ctx_probe(
         status_code=401,
         json={"error": "unauthorized"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     by_name = _probes_by_name(report.results)
     assert by_name["auth+basic-chat"].verdict == ProbeVerdict.AUTH_FAIL
     assert by_name["num_ctx"].verdict == ProbeVerdict.SKIP
@@ -911,9 +876,7 @@ async def test_tool_calls_native_but_registry_silent_suggests_true(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     tool = _probes_by_name(report.results)["tool_calls"]
     assert tool.verdict == ProbeVerdict.NEEDS_TUNING
     assert tool.target_file == "providers.yaml"
@@ -942,9 +905,7 @@ async def test_tool_calls_text_json_only_with_declared_false_is_ok(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     tool = _probes_by_name(report.results)["tool_calls"]
     assert tool.verdict == ProbeVerdict.OK
     # Informational message mentions the repair path so operators know.
@@ -958,8 +919,7 @@ async def test_tool_calls_text_json_with_declared_true_needs_tuning(
     """Declaration says native, but model only wrote JSON-in-text → NEEDS_TUNING."""
     provider = _oa_provider()
     text_with_tool = (
-        "Calling echo:\n"
-        '```json\n{"name": "echo", "arguments": {"message": "probe"}}\n```'
+        'Calling echo:\n```json\n{"name": "echo", "arguments": {"message": "probe"}}\n```'
     )
     for body in (
         _openai_ok_response(content="PONG"),
@@ -1027,9 +987,7 @@ async def test_tool_calls_none_with_declared_false_is_ok(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     tool = _probes_by_name(report.results)["tool_calls"]
     assert tool.verdict == ProbeVerdict.OK
 
@@ -1060,9 +1018,7 @@ async def test_tool_calls_explicit_providers_caps_true_takes_precedence(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     tool = _probes_by_name(report.results)["tool_calls"]
     assert tool.verdict == ProbeVerdict.OK
 
@@ -1091,9 +1047,7 @@ async def test_thinking_skipped_for_openai_compat_without_opt_in(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     thinking = _probes_by_name(report.results)["thinking"]
     assert thinking.verdict == ProbeVerdict.SKIP
     assert "kind=openai_compat" in thinking.detail
@@ -1116,9 +1070,7 @@ async def test_thinking_skipped_for_openai_compat_with_opt_in_flag_warns(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     thinking = _probes_by_name(report.results)["thinking"]
     assert thinking.verdict == ProbeVerdict.SKIP
     assert "no effect" in thinking.detail
@@ -1129,9 +1081,7 @@ async def test_thinking_anthropic_block_emitted_matches_declared(
     httpx_mock: HTTPXMock,
 ) -> None:
     """Anthropic + block emitted + registry says thinking=true → OK."""
-    provider = _anthropic_provider(
-        model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY"
-    )
+    provider = _anthropic_provider(model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY")
     # basic chat ok
     httpx_mock.add_response(
         url="https://api.anthropic.com/v1/messages",
@@ -1151,9 +1101,7 @@ async def test_thinking_anthropic_block_emitted_matches_declared(
         url="https://api.anthropic.com/v1/messages",
         method="POST",
         status_code=200,
-        json=_anthropic_ok_response(
-            thinking_text="let me think", text_blocks=["4"]
-        ),
+        json=_anthropic_ok_response(thinking_text="let me think", text_blocks=["4"]),
     )
     # reasoning-leak probe is skipped for anthropic kind → no HTTP call.
     report = await check_model(
@@ -1171,9 +1119,7 @@ async def test_thinking_anthropic_no_block_but_declared_flags_tuning(
     httpx_mock: HTTPXMock,
 ) -> None:
     """Anthropic + declaration promises thinking + no block emitted → NEEDS_TUNING."""
-    provider = _anthropic_provider(
-        model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY"
-    )
+    provider = _anthropic_provider(model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY")
     for body in (
         _anthropic_ok_response(text_blocks=["PONG"]),
         _anthropic_ok_response(text_blocks=["no tool"]),
@@ -1201,9 +1147,7 @@ async def test_thinking_anthropic_400_rejection_with_declared_is_tuning(
     httpx_mock: HTTPXMock,
 ) -> None:
     """400 mentioning `thinking` + declaration promises support → NEEDS_TUNING."""
-    provider = _anthropic_provider(
-        model="claude-sonnet-3-5", api_key_env="CR_TEST_ANTH_KEY"
-    )
+    provider = _anthropic_provider(model="claude-sonnet-3-5", api_key_env="CR_TEST_ANTH_KEY")
     # basic chat OK
     httpx_mock.add_response(
         url="https://api.anthropic.com/v1/messages",
@@ -1274,13 +1218,9 @@ async def test_reasoning_leak_detected_is_informational_ok(
         url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
-        json=_openai_ok_response(
-            content="Paris", reasoning="I considered major European capitals"
-        ),
+        json=_openai_ok_response(content="Paris", reasoning="I considered major European capitals"),
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.OK
     assert "strip" in leak.detail.lower()
@@ -1305,9 +1245,7 @@ async def test_reasoning_leak_not_present_reports_clean(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.OK
     assert "nothing to strip" in leak.detail
@@ -1318,9 +1256,7 @@ async def test_reasoning_leak_skipped_for_anthropic_kind(
     httpx_mock: HTTPXMock,
 ) -> None:
     """Anthropic responses don't carry the non-standard field; probe SKIP."""
-    provider = _anthropic_provider(
-        model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY"
-    )
+    provider = _anthropic_provider(model="claude-opus-4-8", api_key_env="CR_TEST_ANTH_KEY")
     for body in (
         _anthropic_ok_response(text_blocks=["PONG"]),
         _anthropic_ok_response(text_blocks=["no tool"]),
@@ -1332,9 +1268,7 @@ async def test_reasoning_leak_skipped_for_anthropic_kind(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.SKIP
 
@@ -1378,14 +1312,10 @@ async def test_reasoning_leak_detects_content_embedded_think(
         url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
-        json=_openai_ok_response(
-            content="Answer: <think>reasoning happens here</think> Paris"
-        ),
+        json=_openai_ok_response(content="Answer: <think>reasoning happens here</think> Paris"),
     )
 
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.NEEDS_TUNING
     assert "<think>" in leak.detail
@@ -1423,9 +1353,7 @@ async def test_reasoning_leak_detects_stop_markers_in_content(
         json=_openai_ok_response(content="Paris<|eot_id|>"),
     )
 
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.NEEDS_TUNING
     assert "<|eot_id|>" in leak.detail
@@ -1460,9 +1388,7 @@ async def test_reasoning_leak_silent_when_filter_already_configured(
         json=_openai_ok_response(content="<think>x</think>Paris"),
     )
 
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.OK
 
@@ -1497,9 +1423,7 @@ async def test_streaming_skips_for_non_ollama_port(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.SKIP
     assert "Ollama-shape" in streaming.detail
@@ -1526,9 +1450,7 @@ async def test_streaming_skips_for_anthropic_kind(
             status_code=200,
             json=body,
         )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.SKIP
     # The SKIP reason should NOT be the auth fallback — auth succeeded.
@@ -1572,9 +1494,7 @@ async def test_streaming_ollama_port_successful_stream_is_ok(
         )
     # streaming — 30 chunks, finish_reason=stop, [DONE] terminator.
     _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.OK
     assert streaming.suggested_patch is None
@@ -1625,14 +1545,10 @@ async def test_streaming_finish_length_short_content_needs_tuning_with_num_predi
     httpx_mock.add_response(
         url="http://localhost:11434/v1/chat/completions",
         method="POST",
-        content=_sse_stream_count_body(
-            numbers=3, finish_reason="length", include_done=True
-        ),
+        content=_sse_stream_count_body(numbers=3, finish_reason="length", include_done=True),
         headers={"content-type": "text/event-stream"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.NEEDS_TUNING
     assert streaming.target_file == "providers.yaml"
@@ -1691,9 +1607,7 @@ async def test_streaming_zero_chunks_is_needs_tuning_no_patch(
         content=b'{"id":"x","object":"chat.completion","choices":[]}',
         headers={"content-type": "application/json"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.NEEDS_TUNING
     # Advisory — no patch because the remediation is server-side /
@@ -1748,9 +1662,7 @@ async def test_streaming_no_done_terminator_is_ok_with_note(
         content=_sse_stream_count_body(include_done=False),
         headers={"content-type": "text/event-stream"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.OK
     # The informational note should mention DONE / terminator so
@@ -1795,9 +1707,7 @@ async def test_streaming_extra_body_signal_fires_on_non_11434_port(
             json=body,
         )
     _add_sse_ok_mock(httpx_mock, "http://localhost:12345/v1/chat/completions")
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     # Must NOT be SKIP — extra_body signal fires even on non-11434.
     assert streaming.verdict == ProbeVerdict.OK
@@ -1817,9 +1727,7 @@ async def test_streaming_request_body_carries_stream_true_and_merges_extra_body(
     provider = _oa_provider(
         name="ollama-stream-merge",
         base_url="http://localhost:11434/v1",
-        extra_body={
-            "options": {"num_ctx": 32768, "num_predict": 4096, "keep_alive": "5m"}
-        },
+        extra_body={"options": {"num_ctx": 32768, "num_predict": 4096, "keep_alive": "5m"}},
     )
     captured: list[httpx.Request] = []
 
@@ -1840,9 +1748,7 @@ async def test_streaming_request_body_carries_stream_true_and_merges_extra_body(
                 headers={"content-type": "text/event-stream"},
             )
         # canary echoed for the num_ctx probe; generic OK otherwise.
-        return httpx.Response(
-            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
-        )
+        return httpx.Response(200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY))
 
     httpx_mock.add_callback(
         _capture,
@@ -1850,9 +1756,7 @@ async def test_streaming_request_body_carries_stream_true_and_merges_extra_body(
         method="POST",
         is_reusable=True,
     )
-    await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     # The last captured request is the streaming probe.
     streaming_body = json.loads(captured[-1].content.decode("utf-8"))
     assert streaming_body.get("stream") is True
@@ -1904,9 +1808,7 @@ async def test_streaming_http_500_skips(
         status_code=500,
         content=b"internal server error",
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     streaming = _probes_by_name(report.results)["streaming"]
     assert streaming.verdict == ProbeVerdict.SKIP
     assert "500" in streaming.detail
@@ -1929,9 +1831,7 @@ async def test_streaming_auth_fail_short_circuits_streaming_probe(
         status_code=401,
         json={"error": "unauthorized"},
     )
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     by_name = _probes_by_name(report.results)
     assert by_name["auth+basic-chat"].verdict == ProbeVerdict.AUTH_FAIL
     assert by_name["streaming"].verdict == ProbeVerdict.SKIP
@@ -1966,9 +1866,7 @@ def test_exit_code_needs_tuning_alone_is_two() -> None:
     )
     report.results = [
         ProbeResult(name="auth+basic-chat", verdict=ProbeVerdict.OK, detail=""),
-        ProbeResult(
-            name="tool_calls", verdict=ProbeVerdict.NEEDS_TUNING, detail=""
-        ),
+        ProbeResult(name="tool_calls", verdict=ProbeVerdict.NEEDS_TUNING, detail=""),
     ]
     assert exit_code_for(report) == 2
 
@@ -1982,9 +1880,7 @@ def test_exit_code_auth_fail_dominates_needs_tuning() -> None:
     )
     report.results = [
         ProbeResult(name="auth+basic-chat", verdict=ProbeVerdict.AUTH_FAIL, detail=""),
-        ProbeResult(
-            name="tool_calls", verdict=ProbeVerdict.NEEDS_TUNING, detail=""
-        ),
+        ProbeResult(name="tool_calls", verdict=ProbeVerdict.NEEDS_TUNING, detail=""),
     ]
     assert exit_code_for(report) == 1
 
@@ -2048,9 +1944,7 @@ async def test_api_key_env_set_adds_authorization_header(
     )
     # All three openai_compat probes (auth, tool_calls, reasoning-leak)
     # hit the same endpoint — thinking probe is SKIP and doesn't call.
-    report = await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     assert captured[0].headers["Authorization"] == "Bearer sk-probe"
     assert len(captured) == 3
     assert exit_code_for(report) == 0
@@ -2067,9 +1961,7 @@ async def test_anthropic_probe_uses_x_api_key_not_bearer(
 
     def _capture(request: httpx.Request) -> httpx.Response:
         captured.append(request)
-        return httpx.Response(
-            200, json=_anthropic_ok_response(text_blocks=["PONG"])
-        )
+        return httpx.Response(200, json=_anthropic_ok_response(text_blocks=["PONG"]))
 
     httpx_mock.add_callback(
         _capture,
@@ -2077,9 +1969,7 @@ async def test_anthropic_probe_uses_x_api_key_not_bearer(
         method="POST",
         is_reusable=True,
     )
-    await check_model(
-        _config_for([provider]), provider.name, registry=_empty_registry()
-    )
+    await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
     assert captured[0].headers["x-api-key"] == "sk-ant-abc"
     assert "Authorization" not in captured[0].headers
 
@@ -2106,9 +1996,7 @@ def test_format_report_includes_provider_details_and_exit_line() -> None:
             name="tool_calls",
             verdict=ProbeVerdict.NEEDS_TUNING,
             detail="model needs tools=false",
-            suggested_patch=_patch_providers_yaml_capability(
-                "myprov", "tools", False
-            ),
+            suggested_patch=_patch_providers_yaml_capability("myprov", "tools", False),
             target_file="providers.yaml",
         ),
     ]

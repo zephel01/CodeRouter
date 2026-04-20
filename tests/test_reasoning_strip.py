@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import logging
 
-import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
@@ -32,7 +31,6 @@ from coderouter.adapters.openai_compat import (
     _strip_reasoning_field,
 )
 from coderouter.config.schemas import Capabilities, ProviderConfig
-
 
 # ======================================================================
 # Unit tests — _strip_reasoning_field helper
@@ -71,9 +69,7 @@ def test_strip_helper_removes_reasoning_from_delta() -> None:
 
 
 def test_strip_helper_is_noop_when_reasoning_absent() -> None:
-    choices = [
-        {"index": 0, "message": {"role": "assistant", "content": "clean"}}
-    ]
+    choices = [{"index": 0, "message": {"role": "assistant", "content": "clean"}}]
     stripped = _strip_reasoning_field(choices, delta_key=False)
 
     assert stripped is False
@@ -179,9 +175,9 @@ async def test_generate_strips_reasoning_from_message(
 
     # Structured log fired exactly once, tagged non-standard-field.
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert len(recs) == 1
     assert recs[0].provider == "openrouter-gpt-oss-free"
@@ -217,9 +213,9 @@ async def test_generate_no_log_when_reasoning_absent(
         await adapter.generate(_request())
 
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert recs == []
 
@@ -259,9 +255,9 @@ async def test_generate_passthrough_preserves_reasoning(
 
     assert resp.choices[0]["message"].get("reasoning") == "kept"
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert recs == []
 
@@ -355,9 +351,9 @@ async def test_stream_strips_reasoning_from_each_delta(
 
     # Log fires exactly once even though two chunks carried the field.
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert len(recs) == 1
     assert recs[0].provider == "openrouter-gpt-oss-free"
@@ -389,9 +385,9 @@ async def test_stream_no_log_when_no_chunk_carries_reasoning(
         _ = [c async for c in adapter.stream(req)]
 
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert recs == []
 
@@ -423,9 +419,9 @@ async def test_stream_passthrough_preserves_reasoning(
     assert chunks[0].choices[0]["delta"].get("reasoning") == "kept"
     # No log.
     recs = [
-        r for r in caplog.records
-        if r.msg == "capability-degraded"
-        and getattr(r, "reason", None) == "non-standard-field"
+        r
+        for r in caplog.records
+        if r.msg == "capability-degraded" and getattr(r, "reason", None) == "non-standard-field"
     ]
     assert recs == []
 

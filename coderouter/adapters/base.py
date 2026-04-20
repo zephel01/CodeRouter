@@ -128,17 +128,13 @@ class BaseAdapter(ABC):
         return self.config.name
 
     # ---- v0.6-B override resolution helpers -----------------------------
-    def effective_timeout(
-        self, overrides: ProviderCallOverrides | None
-    ) -> float:
+    def effective_timeout(self, overrides: ProviderCallOverrides | None) -> float:
         """Profile override wins when set; else provider default."""
         if overrides is not None and overrides.timeout_s is not None:
             return overrides.timeout_s
         return self.config.timeout_s
 
-    def effective_append_system_prompt(
-        self, overrides: ProviderCallOverrides | None
-    ) -> str | None:
+    def effective_append_system_prompt(self, overrides: ProviderCallOverrides | None) -> str | None:
         """Profile override replaces provider directive when set.
 
         ``None`` means no override → fall through to provider. ``""``

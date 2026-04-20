@@ -133,10 +133,7 @@ def _convert_anthropic_message(
             src = block.get("source", {})
             src_type = src.get("type")
             if src_type == "base64":
-                url = (
-                    f"data:{src.get('media_type', 'image/png')};"
-                    f"base64,{src.get('data', '')}"
-                )
+                url = f"data:{src.get('media_type', 'image/png')};base64,{src.get('data', '')}"
             elif src_type == "url":
                 url = src.get("url", "")
             else:
@@ -345,9 +342,7 @@ def to_anthropic_response(
         # Rare: multimodal assistant response. Flatten text parts.
         for part in text:
             if part.get("type") == "text":
-                content_blocks.append(
-                    {"type": "text", "text": part.get("text", "")}
-                )
+                content_blocks.append({"type": "text", "text": part.get("text", "")})
 
     for tc in tool_calls:
         content_blocks.append(_tool_call_to_tool_use_block(tc))
@@ -363,9 +358,9 @@ def to_anthropic_response(
     )
 
     return AnthropicResponse(
-        id=f"msg_{resp.id}" if resp.id and not resp.id.startswith("msg_") else (
-            resp.id or f"msg_{uuid.uuid4().hex[:24]}"
-        ),
+        id=f"msg_{resp.id}"
+        if resp.id and not resp.id.startswith("msg_")
+        else (resp.id or f"msg_{uuid.uuid4().hex[:24]}"),
         model=resp.model,
         content=content_blocks,
         stop_reason=_FINISH_REASON_MAP.get(finish_reason or "stop", "end_turn"),
@@ -485,9 +480,7 @@ def _open_tool_use_block(
     ]
 
 
-def _handle_delta(
-    state: _StreamState, delta: dict[str, Any]
-) -> list[AnthropicStreamEvent]:
+def _handle_delta(state: _StreamState, delta: dict[str, Any]) -> list[AnthropicStreamEvent]:
     """Translate one OpenAI delta dict into zero-or-more Anthropic events."""
     out: list[AnthropicStreamEvent] = []
 
@@ -789,8 +782,8 @@ def _openai_image_url_to_anthropic_source(url: str) -> dict[str, Any]:
     if url.startswith("data:"):
         comma = url.find(",")
         if comma > 0:
-            header = url[len("data:"):comma]
-            data = url[comma + 1:]
+            header = url[len("data:") : comma]
+            data = url[comma + 1 :]
             parts = [p.strip() for p in header.split(";")]
             media_type = parts[0] or "image/png"
             is_base64 = any(p == "base64" for p in parts[1:])
@@ -924,8 +917,7 @@ def _openai_tools_to_anthropic(
             {
                 "name": fn.get("name", ""),
                 "description": fn.get("description", ""),
-                "input_schema": fn.get("parameters")
-                or {"type": "object", "properties": {}},
+                "input_schema": fn.get("parameters") or {"type": "object", "properties": {}},
             }
         )
     return out or None
@@ -972,9 +964,7 @@ def to_anthropic_request(chat_req: ChatRequest) -> AnthropicRequest:
 
     def _flush_tool_results() -> None:
         if pending_tool_results:
-            messages_out.append(
-                {"role": "user", "content": list(pending_tool_results)}
-            )
+            messages_out.append({"role": "user", "content": list(pending_tool_results)})
             pending_tool_results.clear()
 
     for msg in chat_req.messages:
@@ -1012,11 +1002,7 @@ def to_anthropic_request(chat_req: ChatRequest) -> AnthropicRequest:
     system_joined = "\n".join(s for s in system_texts if s) or None
 
     tools_list = _openai_tools_to_anthropic(chat_req.tools)
-    anth_tools = (
-        [AnthropicTool.model_validate(t) for t in tools_list]
-        if tools_list
-        else None
-    )
+    anth_tools = [AnthropicTool.model_validate(t) for t in tools_list] if tools_list else None
 
     req = AnthropicRequest(
         # Placeholder — AnthropicAdapter._payload always overrides with
@@ -1065,9 +1051,7 @@ def to_chat_response(resp: AnthropicResponse) -> ChatResponse:
                     "type": "function",
                     "function": {
                         "name": block.get("name", ""),
-                        "arguments": json.dumps(
-                            block.get("input", {}), ensure_ascii=False
-                        ),
+                        "arguments": json.dumps(block.get("input", {}), ensure_ascii=False),
                     },
                 }
             )
@@ -1081,9 +1065,7 @@ def to_chat_response(resp: AnthropicResponse) -> ChatResponse:
     if tool_calls:
         message["tool_calls"] = tool_calls
 
-    finish_reason = _REVERSE_FINISH_REASON_MAP.get(
-        resp.stop_reason or "end_turn", "stop"
-    )
+    finish_reason = _REVERSE_FINISH_REASON_MAP.get(resp.stop_reason or "end_turn", "stop")
 
     usage_in = resp.usage.input_tokens
     usage_out = resp.usage.output_tokens

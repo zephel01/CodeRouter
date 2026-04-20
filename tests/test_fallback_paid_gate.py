@@ -191,9 +191,7 @@ async def test_allow_paid_true_does_not_warn(
     fakes = {
         "local": FakeAdapter(basic_config.provider_by_name("local")),
         "free-cloud": FakeAdapter(basic_config.provider_by_name("free-cloud")),
-        "paid-cloud": FakeAdapter(
-            basic_config.provider_by_name("paid-cloud"), text="from paid"
-        ),
+        "paid-cloud": FakeAdapter(basic_config.provider_by_name("paid-cloud"), text="from paid"),
     }
     engine = _engine_with(basic_config, fakes)
 

@@ -10,10 +10,9 @@ through unchanged if a client sends them.
 
 from __future__ import annotations
 
-from typing import Any, Literal, Union
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
-
 
 # ============================================================
 # Content blocks
@@ -66,13 +65,13 @@ class AnthropicToolResultBlock(BaseModel):
 
 # Discriminated-union style isn't strictly required here — we union-type at
 # the parsing boundary (AnthropicMessage.content) and dispatch on `type`.
-AnthropicContentBlock = Union[
-    AnthropicTextBlock,
-    AnthropicImageBlock,
-    AnthropicToolUseBlock,
-    AnthropicToolResultBlock,
-    dict,  # forward-compat for unknown block types (thinking, document, etc.)
-]
+AnthropicContentBlock = (
+    AnthropicTextBlock
+    | AnthropicImageBlock
+    | AnthropicToolUseBlock
+    | AnthropicToolResultBlock
+    | dict  # forward-compat for unknown block types (thinking, document, etc.)
+)
 
 
 # ============================================================
@@ -168,9 +167,7 @@ class AnthropicResponse(BaseModel):
     role: Literal["assistant"] = "assistant"
     model: str
     content: list[dict[str, Any]]
-    stop_reason: (
-        Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None
-    ) = None
+    stop_reason: Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"] | None = None
     stop_sequence: str | None = None
     usage: AnthropicUsage = Field(default_factory=AnthropicUsage)
 
