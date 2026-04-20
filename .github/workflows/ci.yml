@@ -126,7 +126,7 @@ jobs:
         run: uv run --with pip-audit pip-audit --strict -r requirements-audit.txt
 
       - name: OSV-Scanner (lockfile mode)
-        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
         with:
           scan-args: |-
             --lockfile=./uv.lock
