@@ -56,7 +56,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.6-B — profile-level `timeout_s` / `append_system_prompt` override (2026-04-20)
+## Status: v0.6-C — 宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` warn (2026-04-20)
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -79,7 +79,8 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **`reasoning` field passive strip (v0.5-C)** — some OpenRouter free models (confirmed on `openai/gpt-oss-120b:free`) return a non-standard `reasoning` field on each choice's `message` / `delta`. Strict OpenAI-shape clients can reject the unknown key, so the `openai_compat` adapter now removes it before the response leaves the adapter and emits `capability-degraded` (`reason: "non-standard-field"`). Streaming: one log per stream, not per chunk. YAML escape hatch: `capabilities.reasoning_passthrough: true` keeps the field intact when CodeRouter is intentionally fronting a reasoning-aware downstream.
 - [x] **`--mode` CLI / `CODEROUTER_MODE` env (v0.6-A)** — pick the active profile at server-launch time without editing the config (`coderouter serve --mode claude-code-direct`). Startup validates the name against the loaded config and fails fast with the list of valid profiles instead of deferring to the first request. Per-request overrides (header / body) still win.
 - [x] **Profile-level parameter override (v0.6-B)** — a profile can override `timeout_s` and `append_system_prompt` for every attempt in its chain (replace semantics: profile value wins entirely when set). `append_system_prompt: ""` explicitly clears the provider's directive for this profile. Threaded through a `ProviderCallOverrides` dataclass so adapters never need to know the profile concept.
-- [x] JSON-line structured logging, `/healthz`, tests (**283 green**)
+- [x] **Declarative `ALLOW_PAID` gate (v0.6-C)** — when the paid gate filters the entire chain to empty, a single aggregate `chain-paid-gate-blocked` warn fires (with `profile` / `blocked_providers` / `hint` fields) so the root cause is grep-visible in one line, instead of getting buried under `NoProvidersAvailableError`. Per-provider `skip-paid-provider` INFO is preserved for traceability; mixed chains where a free provider survives stay silent (the normal `provider-failed` trail narrates them).
+- [x] JSON-line structured logging, `/healthz`, tests (**291 green**)
 
 ### Use it with Claude Code
 
@@ -155,7 +156,6 @@ Semantics: the profile value **replaces** the provider's value when set (not app
 
 Coming next (see [plan.md §18](./plan.md)):
 
-- v0.6-C — Declarative `ALLOW_PAID` gate with `chain-paid-gate-blocked` structured log
 - v0.6-D — `mode_aliases` YAML block for `X-CodeRouter-Mode: coding` → profile name mapping
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers

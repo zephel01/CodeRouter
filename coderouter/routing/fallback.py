@@ -38,7 +38,7 @@ from coderouter.adapters.base import (
 )
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
-from coderouter.logging import get_logger
+from coderouter.logging import get_logger, log_chain_paid_gate_blocked
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
@@ -174,11 +174,20 @@ class FallbackEngine:
         )
 
     def _resolve_chain(self, profile_name: str | None) -> list[BaseAdapter]:
-        """Return the list of adapters to try, in order, for this profile."""
+        """Return the list of adapters to try, in order, for this profile.
+
+        v0.6-C declarative ALLOW_PAID gate: when the paid gate filters
+        the chain to zero adapters, emit ``chain-paid-gate-blocked`` at
+        warn level via :func:`log_chain_paid_gate_blocked`. Per-provider
+        ``skip-paid-provider`` info lines are still emitted (one per
+        blocked provider) so per-provider traceability is intact; the
+        warn sits at chain granularity for operator diagnosis.
+        """
         chosen = profile_name or self.config.default_profile
         chain = self.config.profile_by_name(chosen)
 
         adapters: list[BaseAdapter] = []
+        blocked_by_paid: list[str] = []
         for prov_name in chain.providers:
             try:
                 provider_cfg = self.config.provider_by_name(prov_name)
@@ -193,8 +202,20 @@ class FallbackEngine:
                     "skip-paid-provider",
                     extra={"profile": chosen, "provider": prov_name},
                 )
+                blocked_by_paid.append(prov_name)
                 continue
             adapters.append(self._adapters[prov_name])
+
+        # v0.6-C: aggregate warn fires ONLY when the paid gate left the
+        # chain empty. A mixed chain where at least one free provider
+        # survives stays quiet (the normal try-provider / provider-
+        # failed trail already narrates what happened).
+        if not adapters and blocked_by_paid:
+            log_chain_paid_gate_blocked(
+                logger,
+                profile=chosen,
+                blocked_providers=blocked_by_paid,
+            )
         return adapters
 
     def _resolve_anthropic_chain(

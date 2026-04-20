@@ -136,3 +136,76 @@ def log_capability_degraded(
         "reason": reason,
     }
     logger.info("capability-degraded", extra=payload)  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# v0.6-C: chain-paid-gate-blocked log shape
+#
+# Motivation (plan.md §9.3 #3, "宣言的 ALLOW_PAID gate"):
+#   v0.1 already filters ``paid: true`` providers from the chain when
+#   ``allow_paid=False`` (per-provider INFO ``skip-paid-provider``), but
+#   when the gate ends up filtering the ENTIRE chain to empty, the
+#   operator-visible symptom is a generic ``NoProvidersAvailableError``.
+#   A dedicated aggregate warn makes the gate "declarative" in the same
+#   sense as v0.5's capability gates: the rule is visible in one line.
+#
+# Scope:
+#   - Fires once per request (the 4 engine entry points), only when the
+#     chain resolves to ZERO adapters AND at least one provider was
+#     filtered out by the paid gate. Mixed chains where at least one
+#     free provider survives stay quiet — they proceed into the normal
+#     try-provider / provider-failed trail.
+#   - ``skip-paid-provider`` is still emitted per-provider at INFO so
+#     per-provider traceability is intact. This warn sits at a coarser
+#     granularity (one line per blocked chain).
+# ---------------------------------------------------------------------------
+
+_DEFAULT_PAID_GATE_HINT: str = (
+    "set ALLOW_PAID=true, mark a provider paid=false, "
+    "or add a free provider to this profile's chain"
+)
+
+
+class ChainPaidGateBlockedPayload(TypedDict):
+    """Structured shape of the ``chain-paid-gate-blocked`` log record.
+
+    Fields
+        profile: the active profile name (resolved, not user-supplied —
+            so after falling back to ``default_profile``).
+        blocked_providers: names of providers on this chain that were
+            ``paid: true`` and filtered out by the gate. Order matches
+            their position in the chain (same as what the ``skip-paid-
+            provider`` INFO lines report individually).
+        hint: a one-line remediation suggestion — stable text so it can
+            be grepped, overridable at the call site when context-
+            specific advice is warranted.
+    """
+
+    profile: str
+    blocked_providers: list[str]
+    hint: str
+
+
+def log_chain_paid_gate_blocked(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    blocked_providers: list[str],
+    hint: str = _DEFAULT_PAID_GATE_HINT,
+) -> None:
+    """Emit a ``chain-paid-gate-blocked`` warn with the unified shape.
+
+    Single chokepoint mirroring :func:`log_capability_degraded`. Warn
+    level (not info) because an empty chain is always a config problem
+    the operator needs to see — whereas the per-provider
+    ``skip-paid-provider`` can stay info (the chain as a whole may still
+    be viable).
+    """
+    payload: ChainPaidGateBlockedPayload = {
+        "profile": profile,
+        "blocked_providers": blocked_providers,
+        "hint": hint,
+    }
+    logger.warning(
+        "chain-paid-gate-blocked", extra=payload  # type: ignore[arg-type]
+    )

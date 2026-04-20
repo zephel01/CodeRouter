@@ -6,6 +6,40 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.6-C] — 2026-04-20 (宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` 集約 warn)
+
+**Theme: 「宣言された gate」を chain-granularity の 1 行に昇格。** v0.1 から既に `paid: true` provider は `ALLOW_PAID=false` のとき filter されていたが、per-provider INFO (`skip-paid-provider`) だけで、「chain 全体が paid gate で空になった」ケースは `NoProvidersAvailableError` に埋もれていた。v0.6-C で**集約 warn** (`chain-paid-gate-blocked`) を追加し、gate が chain を empty にした瞬間に hint 付きで 1 行出る。v0.5 capability gate の `capability-degraded` と同じ「typed payload + chokepoint helper + logging.py 居住」パターンを踏襲。
+
+- Tests: 283 → **291** (+8, `tests/test_fallback_paid_gate.py` 新規)
+- 振る舞い変更ゼロ: 既存 `NoProvidersAvailableError` の例外 shape は非破壊、`skip-paid-provider` INFO は per-provider レベルで温存
+- 4 entry point (generate / stream / generate_anthropic / stream_anthropic) 全てで発火 — `_resolve_chain` に一本化したので共通経路 1 箇所の変更で済んだ
+
+### Added
+
+- **`coderouter/logging.py`**
+  - `ChainPaidGateBlockedPayload` TypedDict — `profile` / `blocked_providers: list[str]` / `hint: str` の 3 field
+  - `log_chain_paid_gate_blocked(logger, *, profile, blocked_providers, hint=...)` chokepoint helper (warn level)
+  - `_DEFAULT_PAID_GATE_HINT` — `"set ALLOW_PAID=true, mark a provider paid=false, or add a free provider to this profile's chain"` のデフォルト文言 (grep-friendly, 必要なら call site で差し替え可)
+- **`coderouter/routing/fallback.py`**
+  - `_resolve_chain` が paid-blocked provider 名を `blocked_by_paid` リストで収集。chain 解決後に `adapters == [] and blocked_by_paid` なら `log_chain_paid_gate_blocked` を発火
+  - `from coderouter.logging import get_logger, log_chain_paid_gate_blocked`
+- **`tests/test_fallback_paid_gate.py`** (新規 +8) — 全 paid chain で warn 発火 / multi-paid で blocked_providers が chain 順 / mixed chain では warn しない (free が生き残るから) / ALLOW_PAID=true では skip-paid も warn も無し / unknown-only chain では warn しない / streaming / generate_anthropic / stream_anthropic 各 path で warn 発火を確認
+
+### Design notes
+
+- **集約 warn が必要だった理由.** `skip-paid-provider` は per-provider INFO なので、chain=[paid-A, paid-B, paid-C] のとき 3 行吐かれる。operator が「これが chain 全体を空にした原因か？」を判断するには `skip-paid-provider` → `NoProvidersAvailableError` の時系列を grep で組み直す必要があった。v0.6-C はこれを「1 行で宣言的に」示す
+- **warn vs info の選択.** v0.5 の `capability-degraded` は info (gate は常時動いてる normal path)。v0.6-C は warn (chain が empty = 設定ミスの疑いが濃厚、operator の目線を奪う価値がある)。`skip-paid-provider` 側は info のまま (chain は生き延びる余地がある瞬間もある)
+- **`logging.py` 居住の継続.** `routing/capability.py` ではなく `logging.py` に helper を置く方針 (v0.5.1 A-1) を踏襲。理由も同じ: `routing/__init__.py` が eager import で `FallbackEngine` を引くので、adapter 側から paid-gate warn を撃ちたい将来の拡張に対して循環を避けておく
+- **mixed chain で warn しない理由.** paid-blocked な provider が居ても、free な provider が 1 つでも生きていれば chain は exercise される。その場合の「全 free が失敗した」診断は `provider-failed` のレーンが既に narrate してくれるので、warn が被るだけ。v0.5.1 A-3 (`chain-uniform-auth-failure`) と同じ「aggregate は empty/uniform の時だけ吠える」ルール
+- **`retry_max` / startup enumeration は scope 外.** §9.3 #3 には「起動時に paid provider を列挙」という旨も含意されていたが、現 v0.6-A で `coderouter-startup` log に全 provider 情報が既に出ているので別口で足すよりコストが高い。今は chain 時 warn を優先
+
+### Follow-ons
+
+- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
+- **v0.6+**: `chain-paid-gate-blocked` の hint 文言を profile 単位で override できると便利 (例: `claude-code-direct` profile なら "set ANTHROPIC_API_KEY and ALLOW_PAID=true" みたいな文脈追加)。現状は helper の `hint=` で call site 上書きが可能
+
+---
+
 ## [v0.6-B] — 2026-04-20 (profile-level `timeout_s` / `append_system_prompt` override)
 
 **Theme: profile を「providers の並び + 制御パラメータ」に昇格。** v0.6-A で profile 選択そのものは CLI/env で差し替えられるようになったが、profile ごとに「こっちは local の低レイテンシー想定だから timeout は短く」「あっちの /no_think 付与は fast-profile だけ」といった**制御パラメータ差分は provider-level にしか存在しなかった**。v0.6-B で `FallbackChain` に optional `timeout_s` / `append_system_prompt` を足し、engine が profile 解決時に一度だけ `ProviderCallOverrides` を組み立てて chain 全体に配る。
