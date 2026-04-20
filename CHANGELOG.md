@@ -6,6 +6,18 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.6.0] — 2026-04-20 (umbrella tag for v0.6-A / v0.6-B / v0.6-C / v0.6-D)
+
+**Theme: Chain as a first-class object.** v0.6-A (launch-time profile selection + startup validation), v0.6-B (profile-level parameter override `timeout_s` / `append_system_prompt` + `ProviderCallOverrides`), v0.6-C (宣言的 `ALLOW_PAID` gate + `chain-paid-gate-blocked` 集約 warn), v0.6-D (`mode_aliases` + `X-CodeRouter-Mode` header — intent / implementation 名前空間分離) の 4 サブリリースを一本の tag にまとめる意味合い。**startup fast-fail validator** (4 例) と **typed log payload + chokepoint helper** (v0.6-C = v0.5.1 A-1 パターンの 2 例目) が minor 全体に通底する設計 spine として確立。`_resolve_chain` が 4 engine entry-points を束ねる chokepoint であることが v0.6-C warn 配置で再確認された (v0.4-A の polymorphic chain 化の dividend)。§9.3 の v0.5 未着手分は capability mismatch→chain skip (v1.0+ / vision 同梱) を除いて全消化。
+
+- Commits: v0.6-A → v0.6-B → v0.6-C → v0.6-D (+ 各 sub-release docs commit)
+- Tests: 267 → **306** (+39, +15%)
+- Narrative & design through-lines: [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md)
+- Per-sub-release detail: sections `[v0.6-A]` / `[v0.6-B]` / `[v0.6-C]` / `[v0.6-D]` below.
+- 5-dep bound 維持 (SDK 非依存、v0.5 で確認した「translation 層は SDK より薄い」賭けが routing / ingress 層にも継続)
+
+---
+
 ## [v0.6-D] — 2026-04-20 (`mode_aliases` — `X-CodeRouter-Mode: coding` → profile 名 mapping)
 
 **Theme: 「intent と implementation を名前空間で分ける」。** v0.1 から `profile` (body/header) で chain を選べたが、client 側はいつも「`default` / `fast` / `long-context`」のような**実装寄りの名前**を直接指している状態だった。v0.6-D で `mode_aliases` YAML block と `X-CodeRouter-Mode` header を導入し、client は**意図** (`coding` / `long` / `fast` ...) を送れば済むようにした。profile 名は router 内の実装詳細に格下げされ、裏の chain を付け替えても client には影響しない。§9.3 残 #5 を消化。

@@ -56,7 +56,9 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.6-D — `mode_aliases` + `X-CodeRouter-Mode` header → profile resolution (2026-04-20)
+## Status: v0.6.0 — umbrella tag for v0.6-A / v0.6-B / v0.6-C / v0.6-D (2026-04-20)
+
+Retrospective & design through-lines: [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md). Per-sub-release detail in [CHANGELOG.md](./CHANGELOG.md) sections `[v0.6-A]` through `[v0.6-D]` plus the `[v0.6.0]` umbrella summary.
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
