@@ -39,6 +39,7 @@ logger = get_logger(__name__)
 
 _PROFILE_HEADER = "x-coderouter-profile"
 _ANTHROPIC_VERSION_HEADER = "anthropic-version"
+_ANTHROPIC_BETA_HEADER = "anthropic-beta"
 
 
 @router.post("/messages")
@@ -48,6 +49,9 @@ async def messages(
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
     anthropic_version: str | None = Header(
         default=None, alias=_ANTHROPIC_VERSION_HEADER
+    ),
+    anthropic_beta: str | None = Header(
+        default=None, alias=_ANTHROPIC_BETA_HEADER
     ),
 ):
     engine: FallbackEngine = request.app.state.engine
@@ -64,6 +68,15 @@ async def messages(
         anth_req = AnthropicRequest.model_validate(payload)
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    # v0.4-D: forward the `anthropic-beta` header through to the native
+    # adapter. Without this, any body field gated behind a beta header
+    # (`context_management`, newer cache_control/thinking variants, etc.)
+    # is rejected by api.anthropic.com with 400 "Extra inputs are not
+    # permitted". We stash it on the request model with exclude=True so
+    # the adapter can reach it without leaking into the wire body.
+    if anthropic_beta:
+        anth_req.anthropic_beta = anthropic_beta
 
     # Profile selection — body field wins over header (same policy as OpenAI route).
     if anth_req.profile is None and x_coderouter_profile:

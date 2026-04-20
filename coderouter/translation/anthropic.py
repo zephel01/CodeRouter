@@ -137,6 +137,14 @@ class AnthropicRequest(BaseModel):
     # CodeRouter-specific extension, not sent upstream.
     profile: str | None = Field(default=None, exclude=True)
 
+    # Populated from the `anthropic-beta` HTTP header by the Anthropic
+    # ingress (v0.4-D). Not a wire field — it's a header passthrough
+    # hop, not part of the JSON body. When set, the native adapter
+    # forwards it to `api.anthropic.com` verbatim. This is what unlocks
+    # beta-gated body fields like `context_management`, `cache_control`,
+    # `thinking` beyond what the default minor version accepts.
+    anthropic_beta: str | None = Field(default=None, exclude=True)
+
 
 # ============================================================
 # Response

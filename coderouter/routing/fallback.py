@@ -129,6 +129,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 errors.append(exc)
@@ -171,6 +172,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 errors.append(exc)
@@ -197,6 +199,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 raise MidStreamError(adapter.name, exc) from exc
@@ -255,6 +258,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 errors.append(exc)
@@ -349,6 +353,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 errors.append(exc)
@@ -378,6 +383,7 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "status": exc.status_code,
                         "retryable": exc.retryable,
+                        "error": str(exc)[:500],
                     },
                 )
                 raise MidStreamError(adapter.name, exc) from exc

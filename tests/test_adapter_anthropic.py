@@ -91,6 +91,36 @@ def test_anthropic_version_override_via_extra_body() -> None:
     assert headers["anthropic-version"] == "2024-10-22"
 
 
+def test_headers_omit_anthropic_beta_when_not_set() -> None:
+    """No request, or request without anthropic_beta → no header (default)."""
+    adapter = AnthropicAdapter(_provider())
+    assert "anthropic-beta" not in adapter._headers()
+    req = AnthropicRequest(
+        max_tokens=8,
+        messages=[AnthropicMessage(role="user", content="hi")],
+    )
+    assert "anthropic-beta" not in adapter._headers(req)
+
+
+def test_headers_forward_anthropic_beta_when_set() -> None:
+    """v0.4-D: request.anthropic_beta is forwarded verbatim as a header.
+
+    Claude Code sends this for body fields gated behind a beta flag
+    (e.g. context_management). Without forwarding, api.anthropic.com
+    400s those fields as "Extra inputs are not permitted".
+    """
+    adapter = AnthropicAdapter(_provider())
+    req = AnthropicRequest(
+        max_tokens=8,
+        messages=[AnthropicMessage(role="user", content="hi")],
+    )
+    req.anthropic_beta = "context-management-2025-06-27"
+    assert (
+        adapter._headers(req)["anthropic-beta"]
+        == "context-management-2025-06-27"
+    )
+
+
 # ----------------------------------------------------------------------
 # BaseAdapter contract — OpenAI-shaped calls work via v0.4-A reverse path
 # ----------------------------------------------------------------------
@@ -391,6 +421,54 @@ async def test_generate_anthropic_sends_correct_payload(
 
 
 @pytest.mark.asyncio
+async def test_generate_anthropic_forwards_anthropic_beta_header(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v0.4-D: when request.anthropic_beta is set, the outbound request
+    carries an `anthropic-beta` header AND the field is NOT serialized
+    into the JSON body (it's a Field(exclude=True) stash).
+    """
+    captured: dict = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_beta",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+    )
+
+    adapter = AnthropicAdapter(_provider())
+    req = _request()
+    req.anthropic_beta = "context-management-2025-06-27"
+    await adapter.generate_anthropic(req)
+
+    assert (
+        captured["headers"]["anthropic-beta"]
+        == "context-management-2025-06-27"
+    )
+    # Critical: the beta flag is a header hop, NOT a body field. If it
+    # leaked into the body, Anthropic would 400 with
+    # "Extra inputs are not permitted" (ironically, the exact class of
+    # bug this fix is for).
+    assert "anthropic_beta" not in captured["body"]
+
+
+@pytest.mark.asyncio
 async def test_generate_anthropic_429_is_retryable(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         url="https://api.anthropic.com/v1/messages",
@@ -492,6 +570,40 @@ async def test_stream_anthropic_parses_sse_into_events(
     # Each event.data round-trips the upstream JSON.
     delta_ev = events[2]
     assert delta_ev.data["delta"]["text"] == "hello"
+
+
+@pytest.mark.asyncio
+async def test_stream_anthropic_forwards_anthropic_beta_header(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v0.4-D: streaming path must also forward the anthropic-beta header.
+
+    Mirror of the non-streaming test — the header is how beta body fields
+    get unlocked, and streaming is the default path Claude Code uses.
+    """
+    captured: dict = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["headers"] = dict(request.headers)
+        return httpx.Response(
+            200,
+            content=b"",
+            headers={"content-type": "text/event-stream"},
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+    )
+    adapter = AnthropicAdapter(_provider())
+    req = _request(stream=True)
+    req.anthropic_beta = "context-management-2025-06-27"
+    _ = [e async for e in adapter.stream_anthropic(req)]
+    assert (
+        captured["headers"]["anthropic-beta"]
+        == "context-management-2025-06-27"
+    )
 
 
 @pytest.mark.asyncio

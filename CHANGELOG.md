@@ -6,6 +6,68 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.4-D] — 2026-04-20
+
+### `anthropic-beta` header passthrough (Claude Code 400 fix)
+
+Claude Code → CodeRouter → `anthropic-direct` を実機で叩くと Anthropic から
+`400 Bad Gateway` が返ってくる件の修正。ルートコーズは body field
+`context_management` が `anthropic-beta: context-management-2025-06-27` header
+なしでは拒否されること。Claude Code は header を送ってきていたが CodeRouter が
+それを `api.anthropic.com` まで転送していなかった。
+
+#### Added
+
+- **`coderouter/translation/anthropic.py`**
+  - `AnthropicRequest.anthropic_beta: str | None = Field(default=None, exclude=True)`
+    — header-hop 用の stash。`exclude=True` なので `model_dump()` には出てこず、
+    wire body にリークしない
+- **`coderouter/ingress/anthropic_routes.py`**
+  - `anthropic_beta: str | None = Header(alias="anthropic-beta")` を `messages()`
+    ハンドラ引数に追加
+  - 値が来ていれば `anth_req.anthropic_beta = anthropic_beta` で request に積む
+- **`coderouter/adapters/anthropic_native.py`**
+  - `_headers(request: AnthropicRequest | None = None)` シグネチャ変更。
+    `request.anthropic_beta` が set なら `headers["anthropic-beta"]` に verbatim
+    forward。`/v1/chat/completions` 逆翻訳パスは request を渡さないので OpenAI
+    クライアントの既存挙動は変わらない (OpenAI 側は header を持たない前提)
+  - `generate_anthropic` / `stream_anthropic` の `self._headers()` コールを
+    `self._headers(request)` に置換。`healthcheck()` は request 文脈なしで呼ぶ
+    ので引数なしのまま
+
+#### Changed
+
+- **`coderouter/routing/fallback.py`** — 診断性能の底上げ。
+  `provider-failed` / `provider-failed-midstream` ログ 6 箇所に
+  `"error": str(exc)[:500]` を追加。今回の 400 の中身 (`context_management`
+  rejection の正確な wording) がこれで構造化ログに乗った。将来の同種のバグも
+  server log を見るだけで当たりがつく
+
+#### Tests
+
+- **+6 件** (合計 **153 件 green**)
+  - `test_adapter_anthropic.py` +4:
+    `test_headers_omit_anthropic_beta_when_not_set` /
+    `test_headers_forward_anthropic_beta_when_set` /
+    `test_generate_anthropic_forwards_anthropic_beta_header` /
+    `test_stream_anthropic_forwards_anthropic_beta_header`
+  - `test_ingress_anthropic.py` +2:
+    `test_anthropic_beta_header_threads_through_to_request` /
+    `test_missing_anthropic_beta_header_leaves_field_none`
+- カバー範囲: (a) field が body に leak しないこと (`Field(exclude=True)` の
+  実挙動を outbound JSON で検証) / (b) header が outbound request に乗ること
+  (streaming / non-streaming 両パス) / (c) ingress が header を抽出して
+  request に積むこと / (d) 負のケース (header 未指定 → None のまま)
+
+#### Notes
+
+- 将来、他の beta feature も同じ経路で通せる。`anthropic-beta` はカンマ区切りで
+  複数 feature flag を取る仕様なので、値は触らず verbatim forward が正しい
+- v0.2 §8.4.1 の `?beta=true` クエリ文字列問題とは別件。あちらは Anthropic 側が
+  黙殺するだけだが、今回は body field 不許可で 400 を返す heavier failure mode
+
+---
+
 ## [v0.4-A] — 2026-04-20
 
 ### ChatRequest → AnthropicRequest 逆翻訳 (OpenAI ingress → kind:anthropic provider)

@@ -86,7 +86,9 @@ class AnthropicAdapter(BaseAdapter):
             base = base[: -len("/v1")]
         return f"{base}/v1/messages"
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(
+        self, request: AnthropicRequest | None = None
+    ) -> dict[str, str]:
         headers: dict[str, str] = {
             "Content-Type": "application/json",
             "User-Agent": "CodeRouter/0.1",
@@ -99,6 +101,14 @@ class AnthropicAdapter(BaseAdapter):
         api_key = resolve_api_key(self.config.api_key_env)
         if api_key:
             headers["x-api-key"] = api_key
+        # v0.4-D: forward the client's anthropic-beta header verbatim.
+        # This is what unlocks beta-gated body fields Claude Code relies on
+        # (context_management, newer cache_control / thinking variants).
+        # When the entry point is `/v1/chat/completions` (reverse
+        # translation), the request won't carry one and we skip the header
+        # — OpenAI clients wouldn't know what to put there anyway.
+        if request is not None and request.anthropic_beta:
+            headers["anthropic-beta"] = request.anthropic_beta
         return headers
 
     def _payload(
@@ -214,7 +224,9 @@ class AnthropicAdapter(BaseAdapter):
 
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
-                resp = await client.post(url, json=payload, headers=self._headers())
+                resp = await client.post(
+                    url, json=payload, headers=self._headers(request)
+                )
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout contacting {url}", provider=self.name, retryable=True
@@ -266,7 +278,7 @@ class AnthropicAdapter(BaseAdapter):
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
                 async with client.stream(
-                    "POST", url, json=payload, headers=self._headers()
+                    "POST", url, json=payload, headers=self._headers(request)
                 ) as resp:
                     if resp.status_code >= 400:
                         body = await resp.aread()

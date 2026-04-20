@@ -334,6 +334,39 @@ def test_anthropic_version_header_is_accepted(
     assert resp.status_code == 200, resp.text
 
 
+def test_anthropic_beta_header_threads_through_to_request(
+    client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """v0.4-D: `anthropic-beta` header lands on AnthropicRequest.anthropic_beta.
+
+    The engine sees the beta flag so the native adapter can forward it to
+    api.anthropic.com. Without this, body fields like `context_management`
+    that Claude Code relies on 400 with "Extra inputs are not permitted".
+    """
+    client, engine = client_and_engine
+    resp = client.post(
+        "/v1/messages",
+        json=_MINIMAL_BODY,
+        headers={"anthropic-beta": "context-management-2025-06-27,fake-beta"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert len(engine.seen_requests) == 1
+    assert (
+        engine.seen_requests[0].anthropic_beta
+        == "context-management-2025-06-27,fake-beta"
+    )
+
+
+def test_missing_anthropic_beta_header_leaves_field_none(
+    client_and_engine: tuple[TestClient, _RecordingEngine],
+) -> None:
+    """No header → no beta flag — the adapter won't add one either."""
+    client, engine = client_and_engine
+    resp = client.post("/v1/messages", json=_MINIMAL_BODY)
+    assert resp.status_code == 200, resp.text
+    assert engine.seen_requests[0].anthropic_beta is None
+
+
 # ----------------------------------------------------------------------
 # Profile selection
 # ----------------------------------------------------------------------

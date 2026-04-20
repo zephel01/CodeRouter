@@ -783,10 +783,16 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - streaming 版: OpenAI shape の delta 列 + trailing usage chunk + [DONE] で完全再構築、Anthropic event 漏れなし
    - `/v1/messages` → `anthropic-direct` (native passthrough): `cache_control: {type: "ephemeral"}` が API まで届き、call 1 で `cache_creation_input_tokens: 1321`、call 2 で `cache_read_input_tokens: 1321` を確認 → cache_control ロスレス運搬を数値で証明
    - server log の `native_anthropic: true` フラグが Anthropic ingress 経由でのみ立つことも確認 → engine の分岐設計どおり
+9. [x] **v0.4-D: `anthropic-beta` header passthrough** (2026-04-20) — Claude Code → `anthropic-direct` が 400 Bad Gateway で落ちる件の修正。
+   - 原因: Claude Code は `context_management` body field を送る際に `anthropic-beta: context-management-2025-06-27` header を添える。CodeRouter はこの header を転送していなかったため Anthropic が `"context_management: Extra inputs are not permitted"` で拒否
+   - 修正: `AnthropicRequest.anthropic_beta: str | None = Field(default=None, exclude=True)` を追加 (body にはリークさせない header-hop 用 stash)。Anthropic ingress が `Header(alias="anthropic-beta")` で抽出して request に積む。native adapter の `_headers(request)` が値を `api.anthropic.com` へ verbatim forward
+   - 診断性能強化: `fallback.py` の `provider-failed` / `provider-failed-midstream` ログ 6 箇所に `"error": str(exc)[:500]` を追加 → 400 の body を構造化ログで取れるように。これが `context_management` エラーの特定を可能にした
+   - tests +6 件 (`test_adapter_anthropic.py` +4 / `test_ingress_anthropic.py` +2) → 合計 **153 件**
 
 ### 低優先 (v0.5 以降で拾う)
 
 - [ ] プロファイル / capability / ALLOW_PAID の完全版は §9 (v0.5) スコープ
+- [ ] **Thinking / beta-gated body field capability gate (v0.5 候補)** — Claude Code は `thinking: {"type": "enabled", "budget_tokens": ...}` や `context_management` を送るが、古い model (例: Sonnet 4.5) は adaptive thinking を受け付けず 400 になる。現状ユーザは `provider.model` を手動で新しいものに差し替える必要がある。adapter 層で `provider.capabilities` (or 新設の `provider.features`) を見て、サポートされない block を strip / normalize する gate があれば「どの model を選んでも Claude Code が動く」が実現できる。2026-04-20 `v0.4-D` 実機検証で顕在化。
 - [ ] 14 ケース回帰テスト / Code Mode / 出力クリーニングは §10 (v1.0) スコープ
 - [ ] launcher / doctor は §11 (v1.1)、計測は §12 (v1.5)、プラグイン / MCP は §13 (v2.0)
 

@@ -192,10 +192,17 @@ providers:
   # only features (cache_control / thinking) still require the
   # `/v1/messages` ingress, but basic chat / tools / vision work from
   # either side.
+  # Model: `claude-sonnet-4-6` — chosen because Claude Code sends
+  # adaptive-thinking requests (`thinking.type: enabled` with dynamic
+  # budget) for some side calls (topic naming / auto-compact summaries).
+  # Older models like `claude-sonnet-4-5-20250929` 400 those with
+  # `"adaptive thinking is not supported on this model"`. Verified real-
+  # machine on 2026-04-20 against live Claude Code traffic — see
+  # CHANGELOG [v0.4-D] for the full diagnostic chain.
   - name: anthropic-direct
     kind: anthropic
     base_url: https://api.anthropic.com
-    model: claude-sonnet-4-5-20250929
+    model: claude-sonnet-4-6
     api_key_env: ANTHROPIC_API_KEY
     paid: true
     timeout_s: 60
