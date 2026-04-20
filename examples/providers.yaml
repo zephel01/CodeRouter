@@ -277,3 +277,18 @@ profiles:
       - ollama-qwen-coder-14b
       - openrouter-free
       - openrouter-gpt-oss-free
+
+  # v0.5 real-machine verify — openai_compat-only chain. This profile exists so
+  # `scripts/verify_v0_5.sh` can reliably fire the capability-degraded log for
+  # all three gates (thinking / cache_control / reasoning) on a single provider
+  # that is known to be non-capable for them. Using this profile with:
+  #   - /v1/messages + `thinking` block  → reason: provider-does-not-support
+  #   - /v1/messages + `cache_control`   → reason: translation-lossy
+  #   - /v1/chat/completions             → reason: non-standard-field
+  #                                        (gpt-oss emits a stray `reasoning` key)
+  # Not intended for production use — ordinary `claude-code-direct` traffic
+  # should keep anthropic-direct in the chain so thinking / cache_control are
+  # preserved natively.
+  - name: verify-gpt-oss
+    providers:
+      - openrouter-gpt-oss-free
