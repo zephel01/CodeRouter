@@ -768,7 +768,11 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - `claude-code` profile: 7b → 14b → 2 free → paid (openrouter-claude)。14B timeout は 300s で Claude Code の 15-20K token system prompt 前提
    - `claude-code-direct` profile (NEW): 最終 paid を `anthropic-direct` (kind: anthropic) に差し替えたバリアント。cache_control / thinking ブロックを無傷で扱える
    - README「Use it with Claude Code」に profile の YAML snippet を明示
-6. [ ] **OpenRouter 無料モデル一覧の棚卸** — 2026-04 時点で安定して使える無料モデルを選定し、`examples/` 同梱
+6. [x] **OpenRouter 無料モデル一覧の棚卸** (v0.4-B, 2026-04-20) — `/api/v1/models` で全 342 モデルを検証。
+   - `qwen/qwen3-coder:free` (262K ctx / tools) は健在、primary として継続
+   - `deepseek/deepseek-r1:free` は free roster から消失 → `openai/gpt-oss-120b:free` に 1:1 差し替え (ベンダ分散 + tools + 131K ctx + agentic/production 設計)
+   - provider 名を `openrouter-deepseek-free` → `openrouter-gpt-oss-free` に改名、4 profile チェーン全て更新
+   - ヘッダコメントに「DIFFERENT vendor families を選ぶこと」「2026-04-20 時点の roster 検証結果」を明記
 7. [x] **README 更新** — v0.3 / v0.4-A の実装状況を Quickstart / Status セクションに反映 (2026-04-20)。
    - Status を `v0.4-A — Symmetric OpenAI ⇄ Anthropic routing` に
    - 147 tests green / native adapter / 逆翻訳 (v0.4-A) を箇条書きに追加

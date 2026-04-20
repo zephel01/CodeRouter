@@ -17,8 +17,9 @@
 #                         — 7b first for latency, 14b as quality fallback, 14b has
 #                           timeout_s=300 because Claude Code sends 15-20K-token
 #                           system prompts every turn that take ~100s to prefill.
-#                           Then 2 free OpenRouter models (qwen3-coder / deepseek-r1)
-#                           as cloud escape hatches, Claude as paid last resort.
+#                           Then 2 free OpenRouter models (qwen3-coder / gpt-oss-120b,
+#                           different vendors for rate-limit diversity) as cloud
+#                           escape hatches, Claude as paid last resort.
 #   - claude-code-direct  same as claude-code but the paid last resort is
 #                         `anthropic-direct` (kind: anthropic) instead of
 #                         `openrouter-claude` (kind: openai_compat). Use this when:
@@ -37,7 +38,15 @@
 # Free-tier notes (2026-04):
 #   OpenRouter free models are rate-limited to ~20 req/min and ~200 req/day
 #   per model per account. Listing TWO free providers in each profile gives
-#   you one escape hatch when one of them returns 429.
+#   you one escape hatch when one of them returns 429. Prefer picking from
+#   DIFFERENT vendor families (e.g. qwen + openai/gpt-oss) since per-account
+#   quotas can be shared across same-vendor SKUs.
+#   Current roster verified against https://openrouter.ai/api/v1/models on
+#   2026-04-20:
+#     - qwen/qwen3-coder:free       (262K ctx, tools, agentic coding spec.) ✓
+#     - openai/gpt-oss-120b:free    (131K ctx, tools, 117B MoE/5.1B active) ✓
+#   deepseek/deepseek-r1:free was removed from the free roster at some point
+#   in 2026 Q1 — don't re-introduce it without confirming it's back.
 # ============================================================
 
 allow_paid: false
@@ -128,16 +137,21 @@ providers:
       streaming: true
       tools: true
 
-  # Rate-limit escape hatch for when openrouter-free returns 429. DeepSeek R1
-  # is reasoning-oriented (164K context, free). Tool-call reliability is less
-  # proven than Qwen3-Coder, but the repair path covers its quirks too.
-  - name: openrouter-deepseek-free
+  # Rate-limit escape hatch for when openrouter-free returns 429. Chosen for
+  # vendor diversity (different account / quota pool from Qwen) so that a
+  # Qwen-side 429 doesn't also hit this entry. gpt-oss-120b is OpenAI's
+  # open-weight 117B MoE (5.1B active), 131K context, built for agentic /
+  # production use with native tool calling.
+  #
+  # Note (2026-04): Previously this slot was `deepseek/deepseek-r1:free`, but
+  # that SKU was removed from OpenRouter's free roster. gpt-oss replaces it.
+  - name: openrouter-gpt-oss-free
     kind: openai_compat
     base_url: https://openrouter.ai/api/v1
-    model: deepseek/deepseek-r1:free
+    model: openai/gpt-oss-120b:free
     api_key_env: OPENROUTER_API_KEY
     paid: false
-    timeout_s: 90                # reasoning models are slower
+    timeout_s: 60
     capabilities:
       chat: true
       streaming: true
@@ -199,7 +213,7 @@ profiles:
     providers:
       - ollama-qwen-coder-7b
       - openrouter-free
-      - openrouter-deepseek-free
+      - openrouter-gpt-oss-free
       - openrouter-claude
 
   # Tuned for `ANTHROPIC_BASE_URL=http://localhost:8088 claude`.
@@ -214,7 +228,7 @@ profiles:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
       - openrouter-free
-      - openrouter-deepseek-free
+      - openrouter-gpt-oss-free
       - openrouter-claude
 
   # Same shape as `claude-code` but swaps the paid last resort from
@@ -230,7 +244,7 @@ profiles:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
       - openrouter-free
-      - openrouter-deepseek-free
+      - openrouter-gpt-oss-free
       - anthropic-direct
 
   # Alias — historically used for code-heavy tasks. Kept for backward compat.
@@ -238,7 +252,7 @@ profiles:
     providers:
       - ollama-qwen-coder-7b
       - openrouter-free
-      - openrouter-deepseek-free
+      - openrouter-gpt-oss-free
       - openrouter-claude
 
   # Strictly no paid providers, even if ALLOW_PAID=true.
@@ -247,4 +261,4 @@ profiles:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
       - openrouter-free
-      - openrouter-deepseek-free
+      - openrouter-gpt-oss-free
