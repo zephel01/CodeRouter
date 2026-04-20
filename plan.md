@@ -788,6 +788,7 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
    - 修正: `AnthropicRequest.anthropic_beta: str | None = Field(default=None, exclude=True)` を追加 (body にはリークさせない header-hop 用 stash)。Anthropic ingress が `Header(alias="anthropic-beta")` で抽出して request に積む。native adapter の `_headers(request)` が値を `api.anthropic.com` へ verbatim forward
    - 診断性能強化: `fallback.py` の `provider-failed` / `provider-failed-midstream` ログ 6 箇所に `"error": str(exc)[:500]` を追加 → 400 の body を構造化ログで取れるように。これが `context_management` エラーの特定を可能にした
    - tests +6 件 (`test_adapter_anthropic.py` +4 / `test_ingress_anthropic.py` +2) → 合計 **153 件**
+10. [x] **v0.4 retrospective + docs pass** (2026-04-20) — v0.4-A/B/D を一気通貫で振り返り、README の stale 箇所 (tests 件数 / deepseek-r1 / "Coming next") を全て reconcile。新設 2 セクション「Choosing `kind: openai_compat` vs `kind: anthropic`」「Troubleshooting」。詳細なナラティブは [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md) — v0.5 計画の primary source。
 
 ### 低優先 (v0.5 以降で拾う)
 
