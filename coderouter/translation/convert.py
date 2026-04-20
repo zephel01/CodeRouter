@@ -17,20 +17,24 @@ through as opaque dicts (extra="allow" on the models).
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from collections.abc import AsyncIterator
 from typing import Any
 
 from coderouter.adapters.base import (
+    AdapterError,
     ChatRequest,
     ChatResponse,
     Message,
     StreamChunk,
 )
 from coderouter.translation.anthropic import (
+    AnthropicMessage,
     AnthropicRequest,
     AnthropicResponse,
     AnthropicStreamEvent,
+    AnthropicTool,
     AnthropicUsage,
 )
 from coderouter.translation.tool_repair import repair_tool_calls_in_text
@@ -746,3 +750,552 @@ async def synthesize_anthropic_stream_from_response(
         },
     )
     yield _event("message_stop", {})
+
+
+# ============================================================
+# Internal → Anthropic (request direction, v0.4-A)
+# ============================================================
+#
+# Symmetric to to_chat_request / to_anthropic_response /
+# stream_chat_to_anthropic_events. These are used when an OpenAI-shaped
+# ingress (/v1/chat/completions) routes to a kind:anthropic provider —
+# AnthropicAdapter internally converts ChatRequest → AnthropicRequest,
+# calls the native Messages API, and converts AnthropicResponse /
+# AnthropicStreamEvent back to OpenAI shape.
+
+# Anthropic requires max_tokens on every request. OpenAI ChatRequest
+# leaves it optional, so we need a sensible default. 4096 covers typical
+# chat / coding turns; users who need more should set max_tokens on the
+# client request.
+_DEFAULT_ANTHROPIC_MAX_TOKENS = 4096
+
+
+_REVERSE_FINISH_REASON_MAP = {
+    "end_turn": "stop",
+    "max_tokens": "length",
+    "tool_use": "tool_calls",
+    "stop_sequence": "stop",
+}
+
+
+def _openai_image_url_to_anthropic_source(url: str) -> dict[str, Any]:
+    """Convert an OpenAI image_url.url value to Anthropic image source shape.
+
+    Handles both remote URLs (https://...) and inline data URIs
+    (data:image/png;base64,<b64>). Data URIs without the ;base64 marker
+    are treated as URL sources so the upstream can reject them rather
+    than CodeRouter silently corrupting them.
+    """
+    if url.startswith("data:"):
+        comma = url.find(",")
+        if comma > 0:
+            header = url[len("data:"):comma]
+            data = url[comma + 1:]
+            parts = [p.strip() for p in header.split(";")]
+            media_type = parts[0] or "image/png"
+            is_base64 = any(p == "base64" for p in parts[1:])
+            if is_base64:
+                return {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": data,
+                }
+    return {"type": "url", "url": url}
+
+
+def _openai_user_content_to_anthropic(
+    content: str | list[dict[str, Any]] | None,
+) -> str | list[dict[str, Any]]:
+    """OpenAI user content → Anthropic user content.
+
+    Returns either a plain string (simple text case) or a list of
+    Anthropic content blocks (multimodal or mixed). Empty results
+    collapse to an empty string so the caller can skip the turn.
+    """
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    blocks: list[dict[str, Any]] = []
+    for part in content:
+        ptype = part.get("type")
+        if ptype == "text":
+            blocks.append({"type": "text", "text": part.get("text", "")})
+        elif ptype == "image_url":
+            iu = part.get("image_url", {}) or {}
+            url = iu.get("url", "")
+            if url:
+                blocks.append(
+                    {
+                        "type": "image",
+                        "source": _openai_image_url_to_anthropic_source(url),
+                    }
+                )
+        # Unknown part types: skip silently (v0.4-A scope).
+    if not blocks:
+        return ""
+    return blocks
+
+
+def _openai_assistant_to_anthropic(msg: Message) -> dict[str, Any]:
+    """OpenAI assistant message → Anthropic assistant message.
+
+    Assistant turns may carry text content AND tool_calls. Anthropic
+    represents both as content blocks in a single turn, so we flatten
+    here. Malformed tool_call arguments (non-JSON) are preserved as
+    {"_raw": <string>} to mirror the forward translator's behavior.
+    """
+    blocks: list[dict[str, Any]] = []
+    content = msg.content
+    if isinstance(content, str) and content:
+        blocks.append({"type": "text", "text": content})
+    elif isinstance(content, list):
+        for part in content:
+            if part.get("type") == "text":
+                blocks.append({"type": "text", "text": part.get("text", "")})
+            # Assistant turns with images are rare — skip to keep scope tight.
+    for tc in msg.tool_calls or []:
+        fn = tc.get("function", {}) or {}
+        raw_args = fn.get("arguments", "") or ""
+        if isinstance(raw_args, dict):
+            parsed_args: dict[str, Any] = raw_args
+        else:
+            try:
+                parsed_args = json.loads(raw_args) if raw_args else {}
+            except json.JSONDecodeError:
+                parsed_args = {"_raw": raw_args}
+        blocks.append(
+            {
+                "type": "tool_use",
+                "id": tc.get("id", f"toolu_{uuid.uuid4().hex[:16]}"),
+                "name": fn.get("name", ""),
+                "input": parsed_args,
+            }
+        )
+    if not blocks:
+        # Anthropic rejects turns with zero content blocks; emit an empty
+        # text placeholder so the turn is still syntactically valid.
+        blocks.append({"type": "text", "text": ""})
+    return {"role": "assistant", "content": blocks}
+
+
+def _openai_tool_message_to_block(msg: Message) -> dict[str, Any]:
+    """OpenAI role=tool message → Anthropic tool_result block.
+
+    OpenAI tool results are normally a flat string; we also accept a list
+    of text parts (multimodal tool output) and flatten those here.
+    """
+    content = msg.content
+    if isinstance(content, list):
+        text_parts: list[str] = []
+        for part in content:
+            if part.get("type") == "text":
+                text_parts.append(str(part.get("text", "")))
+        content_str = "\n".join(text_parts)
+    elif isinstance(content, str):
+        content_str = content
+    else:
+        content_str = ""
+    return {
+        "type": "tool_result",
+        "tool_use_id": msg.tool_call_id or "",
+        "content": content_str,
+    }
+
+
+def _openai_tools_to_anthropic(
+    tools: list[dict[str, Any]] | None,
+) -> list[dict[str, Any]] | None:
+    """OpenAI tools array → Anthropic tools array.
+
+    OpenAI: {type: "function", function: {name, description, parameters}}
+    Anthropic: {name, description, input_schema}
+
+    Non-function tool types are skipped (Anthropic has no analog yet).
+    """
+    if not tools:
+        return None
+    out: list[dict[str, Any]] = []
+    for tool in tools:
+        if tool.get("type") != "function":
+            continue
+        fn = tool.get("function", {}) or {}
+        out.append(
+            {
+                "name": fn.get("name", ""),
+                "description": fn.get("description", ""),
+                "input_schema": fn.get("parameters")
+                or {"type": "object", "properties": {}},
+            }
+        )
+    return out or None
+
+
+def _openai_tool_choice_to_anthropic(tc: Any | None) -> dict[str, Any] | None:
+    """OpenAI tool_choice → Anthropic tool_choice."""
+    if tc is None:
+        return None
+    if isinstance(tc, str):
+        if tc == "auto":
+            return {"type": "auto"}
+        if tc == "none":
+            return {"type": "none"}
+        if tc == "required":
+            return {"type": "any"}
+        return None
+    if isinstance(tc, dict) and tc.get("type") == "function":
+        fn = tc.get("function", {}) or {}
+        return {"type": "tool", "name": fn.get("name", "")}
+    return None
+
+
+def to_anthropic_request(chat_req: ChatRequest) -> AnthropicRequest:
+    """Internal ChatRequest → AnthropicRequest (reverse of to_chat_request).
+
+    Key transformations:
+        - role=system messages → top-level ``system`` field (joined with
+          newlines when multiple — OpenAI allows repeats, Anthropic takes
+          one string or block list).
+        - Consecutive role=tool messages → merged into a single user turn
+          with multiple ``tool_result`` blocks (Anthropic's canonical shape).
+        - tool_calls on assistant → ``tool_use`` content blocks.
+        - image_url parts → ``image`` blocks with base64 or url source.
+        - max_tokens is Anthropic-required; defaults to 4096 when omitted.
+
+    The returned request's ``model`` is a placeholder — the AnthropicAdapter
+    always overrides it with ``provider.config.model`` on the wire (same
+    routing rule as the OpenAI-compat adapter).
+    """
+    system_texts: list[str] = []
+    messages_out: list[dict[str, Any]] = []
+    pending_tool_results: list[dict[str, Any]] = []
+
+    def _flush_tool_results() -> None:
+        if pending_tool_results:
+            messages_out.append(
+                {"role": "user", "content": list(pending_tool_results)}
+            )
+            pending_tool_results.clear()
+
+    for msg in chat_req.messages:
+        role = msg.role
+        if role == "system":
+            _flush_tool_results()
+            content = msg.content
+            if isinstance(content, str):
+                if content:
+                    system_texts.append(content)
+            elif isinstance(content, list):
+                parts: list[str] = []
+                for p in content:
+                    if p.get("type") == "text":
+                        parts.append(str(p.get("text", "")))
+                joined = "\n".join(parts)
+                if joined:
+                    system_texts.append(joined)
+            continue
+        if role == "tool":
+            pending_tool_results.append(_openai_tool_message_to_block(msg))
+            continue
+        # Any other role flushes pending tool_results first.
+        _flush_tool_results()
+        if role == "user":
+            translated = _openai_user_content_to_anthropic(msg.content)
+            # Skip empty user turns rather than send a block Anthropic will reject.
+            if translated == "" or translated == []:
+                continue
+            messages_out.append({"role": "user", "content": translated})
+        elif role == "assistant":
+            messages_out.append(_openai_assistant_to_anthropic(msg))
+    _flush_tool_results()
+
+    system_joined = "\n".join(s for s in system_texts if s) or None
+
+    tools_list = _openai_tools_to_anthropic(chat_req.tools)
+    anth_tools = (
+        [AnthropicTool.model_validate(t) for t in tools_list]
+        if tools_list
+        else None
+    )
+
+    req = AnthropicRequest(
+        # Placeholder — AnthropicAdapter._payload always overrides with
+        # provider.config.model. We keep the client-supplied value for
+        # diagnostic fidelity only.
+        model=chat_req.model or "placeholder",
+        max_tokens=chat_req.max_tokens or _DEFAULT_ANTHROPIC_MAX_TOKENS,
+        messages=[AnthropicMessage.model_validate(m) for m in messages_out],
+        system=system_joined,
+        tools=anth_tools,
+        tool_choice=_openai_tool_choice_to_anthropic(chat_req.tool_choice),
+        temperature=chat_req.temperature,
+        top_p=chat_req.top_p,
+        stop_sequences=chat_req.stop,
+        stream=chat_req.stream,
+    )
+    # Propagate CodeRouter routing hint.
+    req.profile = chat_req.profile
+    return req
+
+
+# ============================================================
+# Anthropic → internal (response direction, v0.4-A)
+# ============================================================
+
+
+def to_chat_response(resp: AnthropicResponse) -> ChatResponse:
+    """AnthropicResponse → internal ChatResponse (reverse of to_anthropic_response).
+
+    Anthropic `content` may contain multiple text blocks (e.g. around tool_use
+    interjections) — we concatenate them into one OpenAI `content` string
+    since OpenAI's single-message shape doesn't model interleaving. tool_use
+    blocks lift into the top-level `tool_calls` array.
+    """
+    text_parts: list[str] = []
+    tool_calls: list[dict[str, Any]] = []
+
+    for block in resp.content:
+        btype = block.get("type")
+        if btype == "text":
+            text_parts.append(str(block.get("text", "")))
+        elif btype == "tool_use":
+            tool_calls.append(
+                {
+                    "id": block.get("id", ""),
+                    "type": "function",
+                    "function": {
+                        "name": block.get("name", ""),
+                        "arguments": json.dumps(
+                            block.get("input", {}), ensure_ascii=False
+                        ),
+                    },
+                }
+            )
+        # Unknown block types (thinking, etc.) are skipped silently.
+
+    joined_text = "".join(text_parts)
+
+    message: dict[str, Any] = {"role": "assistant"}
+    # OpenAI spec: content may be null when tool_calls is populated.
+    message["content"] = joined_text if joined_text else None
+    if tool_calls:
+        message["tool_calls"] = tool_calls
+
+    finish_reason = _REVERSE_FINISH_REASON_MAP.get(
+        resp.stop_reason or "end_turn", "stop"
+    )
+
+    usage_in = resp.usage.input_tokens
+    usage_out = resp.usage.output_tokens
+    usage: dict[str, Any] = {
+        "prompt_tokens": usage_in,
+        "completion_tokens": usage_out,
+        "total_tokens": usage_in + usage_out,
+    }
+
+    return ChatResponse(
+        id=resp.id,
+        object="chat.completion",
+        created=int(time.time()),
+        model=resp.model,
+        choices=[
+            {
+                "index": 0,
+                "message": message,
+                "finish_reason": finish_reason,
+            }
+        ],
+        usage=usage,
+        coderouter_provider=resp.coderouter_provider,
+    )
+
+
+# ============================================================
+# Stream translation (Anthropic events → OpenAI chunks, v0.4-A)
+# ============================================================
+
+
+class _ReverseStreamState:
+    """Bookkeeping for Anthropic events → OpenAI StreamChunk translation.
+
+    Mirrors _StreamState but in the opposite direction. We map Anthropic's
+    per-block index space to OpenAI's flat tool_calls[].index space: only
+    tool_use blocks get a mapping; text blocks are transparent (OpenAI's
+    delta.content is non-indexed).
+    """
+
+    def __init__(self) -> None:
+        self.started: bool = False
+        self.message_id: str = f"chatcmpl-{uuid.uuid4().hex[:16]}"
+        self.model: str = "unknown"
+        self.created: int = 0
+        self.block_idx_to_tool_idx: dict[int, int] = {}
+        self.next_tool_idx: int = 0
+        self.stop_reason_anthropic: str | None = None
+        self.usage_in: int = 0
+        self.usage_out: int = 0
+
+
+def _make_chunk(
+    state: _ReverseStreamState,
+    delta: dict[str, Any],
+    *,
+    finish_reason: str | None = None,
+) -> StreamChunk:
+    return StreamChunk(
+        id=state.message_id,
+        created=state.created,
+        model=state.model,
+        choices=[
+            {
+                "index": 0,
+                "delta": delta,
+                "finish_reason": finish_reason,
+            }
+        ],
+    )
+
+
+async def stream_anthropic_to_chat_chunks(
+    events: AsyncIterator[AnthropicStreamEvent],
+    *,
+    provider_name: str = "anthropic",
+) -> AsyncIterator[StreamChunk]:
+    """Translate Anthropic SSE events → OpenAI StreamChunk async iterator.
+
+    Emits, in order:
+        1. First chunk with ``delta.role = "assistant"`` (OpenAI convention).
+        2. For each text_delta: chunk with ``delta.content``.
+        3. For each tool_use block_start: chunk with
+           ``delta.tool_calls[].function.name`` (and empty arguments).
+        4. For each input_json_delta: chunk with
+           ``delta.tool_calls[].function.arguments``.
+        5. Final chunk with empty delta and ``finish_reason`` set.
+        6. Usage chunk (``choices: []``) mirroring OpenAI's
+           ``stream_options.include_usage=true`` pattern.
+
+    Anthropic ``event: error`` is converted to ``AdapterError(retryable=False)``
+    so the engine's mid-stream guard can re-raise it as ``MidStreamError``.
+
+    ``provider_name`` is attached to any raised AdapterError; the
+    FallbackEngine overrides this with the actual adapter name on
+    mid-stream conversion, but having a sensible default keeps tests
+    and direct callers sane.
+    """
+    state = _ReverseStreamState()
+
+    async for ev in events:
+        etype = ev.type
+        data = ev.data or {}
+
+        if etype == "message_start":
+            msg = data.get("message", {}) or {}
+            if msg.get("id"):
+                state.message_id = msg["id"]
+            if msg.get("model"):
+                state.model = msg["model"]
+            state.created = int(time.time())
+            usage = msg.get("usage", {}) or {}
+            state.usage_in = int(usage.get("input_tokens", 0) or 0)
+            state.started = True
+            # Initial role=assistant chunk (OpenAI clients expect this).
+            yield _make_chunk(state, {"role": "assistant", "content": ""})
+            continue
+
+        if etype == "content_block_start":
+            idx = int(data.get("index", 0) or 0)
+            block = data.get("content_block", {}) or {}
+            if block.get("type") == "tool_use":
+                tool_idx = state.next_tool_idx
+                state.next_tool_idx += 1
+                state.block_idx_to_tool_idx[idx] = tool_idx
+                yield _make_chunk(
+                    state,
+                    {
+                        "tool_calls": [
+                            {
+                                "index": tool_idx,
+                                "id": block.get("id", ""),
+                                "type": "function",
+                                "function": {
+                                    "name": block.get("name", ""),
+                                    "arguments": "",
+                                },
+                            }
+                        ]
+                    },
+                )
+            # text blocks: no emit — the content_block_delta will carry text.
+            continue
+
+        if etype == "content_block_delta":
+            idx = int(data.get("index", 0) or 0)
+            delta = data.get("delta", {}) or {}
+            dtype = delta.get("type")
+            if dtype == "text_delta":
+                text = delta.get("text", "")
+                if text:
+                    yield _make_chunk(state, {"content": text})
+            elif dtype == "input_json_delta":
+                partial = delta.get("partial_json", "")
+                if partial and idx in state.block_idx_to_tool_idx:
+                    tool_idx = state.block_idx_to_tool_idx[idx]
+                    yield _make_chunk(
+                        state,
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": tool_idx,
+                                    "function": {"arguments": partial},
+                                }
+                            ]
+                        },
+                    )
+            continue
+
+        if etype == "content_block_stop":
+            # OpenAI has no per-block stop — no emit.
+            continue
+
+        if etype == "message_delta":
+            delta = data.get("delta", {}) or {}
+            sr = delta.get("stop_reason")
+            if sr:
+                state.stop_reason_anthropic = sr
+            usage = data.get("usage", {}) or {}
+            if isinstance(usage.get("output_tokens"), int):
+                state.usage_out = int(usage["output_tokens"])
+            if isinstance(usage.get("input_tokens"), int):
+                state.usage_in = int(usage["input_tokens"])
+            continue
+
+        if etype == "message_stop":
+            finish = _REVERSE_FINISH_REASON_MAP.get(
+                state.stop_reason_anthropic or "end_turn", "stop"
+            )
+            yield _make_chunk(state, {}, finish_reason=finish)
+            # Final usage chunk (no choices) — parallels OpenAI's
+            # stream_options.include_usage=true trailing chunk.
+            yield StreamChunk(
+                id=state.message_id,
+                created=state.created,
+                model=state.model,
+                choices=[],
+                usage={
+                    "prompt_tokens": state.usage_in,
+                    "completion_tokens": state.usage_out,
+                    "total_tokens": state.usage_in + state.usage_out,
+                },
+            )
+            return
+
+        if etype == "error":
+            err = data.get("error", {}) or {}
+            msg_text = err.get("message") or err.get("type") or "anthropic error event"
+            raise AdapterError(
+                f"upstream Anthropic error event: {msg_text}",
+                provider=provider_name,
+                retryable=False,
+            )
+
+        # Unknown event types are skipped silently (forward-compat).

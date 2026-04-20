@@ -9,6 +9,13 @@ These verify:
     - mixed chains (native → openai_compat fallback) work both directions,
     - mid-stream guard + NoProvidersAvailableError semantics are preserved.
 
+The file also covers the v0.4-A symmetry case: the OpenAI-shaped
+`generate` / `stream` entry points (used by /v1/chat/completions) routing
+into a `kind: anthropic` provider via the AnthropicAdapter's reverse
+translation path. Engine logic is unchanged — the adapter's generate/
+stream internally perform ChatRequest → AnthropicRequest and
+AnthropicResponse → ChatResponse.
+
 No HTTP: the adapters are replaced with scripted fakes that implement
 the minimal surface each engine path exercises.
 """
@@ -26,6 +33,7 @@ from coderouter.adapters.base import (
     BaseAdapter,
     ChatRequest,
     ChatResponse,
+    Message,
     StreamChunk,
 )
 from coderouter.config.schemas import (
@@ -640,3 +648,131 @@ async def test_stream_initial_error_still_falls_back() -> None:
 
     assert events  # got something
     assert fallback.stream_calls  # fell through
+
+
+# ----------------------------------------------------------------------
+# v0.4-A: OpenAI-shaped entry points routing to kind:anthropic providers
+# ----------------------------------------------------------------------
+#
+# These mirror the generate_anthropic / stream_anthropic suites above but
+# exercise FallbackEngine.generate / .stream (the /v1/chat/completions
+# ingress path). The engine itself is polymorphic — the v0.4-A work is
+# entirely inside AnthropicAdapter.generate / .stream which now perform
+# the reverse translation instead of raising non-retryable.
+
+
+def _chat_req(*, stream: bool = False) -> ChatRequest:
+    return ChatRequest(
+        messages=[Message(role="user", content="hi")],
+        stream=stream,
+    )
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_routes_to_kind_anthropic_via_reverse_translation() -> None:
+    """OpenAI ingress → kind:anthropic provider: the adapter's reverse
+    translation path (ChatRequest → AnthropicRequest → AnthropicResponse
+    → ChatResponse) runs end-to-end without the engine needing changes."""
+    config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
+    native = FakeAnthropicAdapter(
+        config.provider_by_name("first"), text="from anthropic native"
+    )
+    fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
+    engine = _engine_with_adapters(config, {"first": native, "second": fallback})
+
+    resp = await engine.generate(_chat_req())
+
+    # Adapter internally called generate_anthropic — the fake recorded it.
+    assert native.generate_calls, "native.generate_anthropic should have been invoked"
+    # Client sees an OpenAI-shaped ChatResponse.
+    assert resp.choices[0]["message"]["content"] == "from anthropic native"
+    assert resp.choices[0]["finish_reason"] == "stop"  # end_turn → stop
+    # Provider tag preserved on the reverse path.
+    assert resp.coderouter_provider == "first"
+    # Fallback was not consulted.
+    assert fallback.generate_calls == []
+
+
+@pytest.mark.asyncio
+async def test_openai_stream_routes_to_kind_anthropic_via_reverse_translation() -> None:
+    """OpenAI streaming ingress → kind:anthropic provider: emits a proper
+    OpenAI StreamChunk sequence (role → content → finish → usage)."""
+    config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
+    native = FakeAnthropicAdapter(
+        config.provider_by_name("first"), text="hello stream"
+    )
+    fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
+    engine = _engine_with_adapters(config, {"first": native, "second": fallback})
+
+    chunks = [c async for c in engine.stream(_chat_req(stream=True))]
+
+    assert native.stream_calls, "native.stream_anthropic should have been invoked"
+    # First chunk carries role=assistant (OpenAI convention).
+    assert chunks[0].choices[0]["delta"].get("role") == "assistant"
+    # Some chunk carries the text.
+    assert any(
+        c.choices and c.choices[0].get("delta", {}).get("content") == "hello stream"
+        for c in chunks
+    )
+    # A finish chunk exists with finish_reason=stop.
+    assert any(
+        c.choices and c.choices[0].get("finish_reason") == "stop" for c in chunks
+    )
+    # Trailing usage chunk (no choices).
+    assert chunks[-1].choices == []
+    assert chunks[-1].usage is not None
+    # Fallback was not consulted.
+    assert fallback.stream_calls == []
+
+
+@pytest.mark.asyncio
+async def test_openai_generate_mixed_chain_falls_over_openai_to_anthropic() -> None:
+    """Fallback crossover: an openai_compat provider fails retryably; the
+    next provider is kind:anthropic and must answer via reverse translation."""
+    config = _mixed_config(first_kind="openai_compat", second_kind="anthropic")
+    first = FakeOpenAIAdapter(
+        config.provider_by_name("first"),
+        fail_with=AdapterError("rate limited", provider="first", retryable=True),
+    )
+    native = FakeAnthropicAdapter(
+        config.provider_by_name("second"), text="anthropic rescued it"
+    )
+    engine = _engine_with_adapters(config, {"first": first, "second": native})
+
+    resp = await engine.generate(_chat_req())
+
+    assert first.generate_calls  # tried first
+    assert native.generate_calls  # fell through to kind:anthropic
+    assert resp.choices[0]["message"]["content"] == "anthropic rescued it"
+    assert resp.coderouter_provider == "second"
+
+
+@pytest.mark.asyncio
+async def test_openai_stream_midstream_kind_anthropic_raises_midstream_error() -> None:
+    """Mid-stream guard must also apply to the reverse-translated path:
+    once chunks have been yielded, a later AnthropicAdapter error must
+    surface as MidStreamError — no silent fallback to the next provider."""
+    config = _mixed_config(first_kind="anthropic", second_kind="openai_compat")
+    native = FakeAnthropicAdapter(
+        config.provider_by_name("first"),
+        # Fail after a few events — message_start + content_block_start
+        # + content_block_delta have already emitted OpenAI chunks.
+        stream_fail_after=3,
+        stream_fail_with=AdapterError(
+            "connection reset", provider="first", retryable=True
+        ),
+    )
+    fallback = FakeOpenAIAdapter(config.provider_by_name("second"))
+    engine = _engine_with_adapters(config, {"first": native, "second": fallback})
+
+    received: list[StreamChunk] = []
+    with pytest.raises(MidStreamError) as exc_info:
+        async for chunk in engine.stream(_chat_req(stream=True)):
+            received.append(chunk)
+
+    assert exc_info.value.provider == "first"
+    # Confirm chunks shipped before the mid-stream failure.
+    assert len(received) >= 1
+    # Fallback was NOT consulted.
+    assert fallback.stream_calls == []
+    assert fallback.generate_calls == []

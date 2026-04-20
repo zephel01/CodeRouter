@@ -2,8 +2,11 @@
 
 Covers:
     - Auth header (x-api-key, anthropic-version) and URL construction.
-    - The OpenAI-shaped BaseAdapter entry points (generate/stream) raise
-      a non-retryable AdapterError — reverse translation is out of scope.
+    - The OpenAI-shaped BaseAdapter entry points (generate/stream) work via
+      reverse translation in v0.4-A: ChatRequest → AnthropicRequest →
+      native call → (AnthropicResponse / AnthropicStreamEvent) → ChatResponse
+      / StreamChunk. Retryable semantics are preserved through the reverse
+      path.
     - generate_anthropic: happy path, error mapping, JSON parse failure.
     - stream_anthropic: SSE parsing, error status on initial response,
       mid-stream-style upstream error is never silently swallowed.
@@ -89,27 +92,239 @@ def test_anthropic_version_override_via_extra_body() -> None:
 
 
 # ----------------------------------------------------------------------
-# BaseAdapter contract — OpenAI-shaped calls are NOT supported
+# BaseAdapter contract — OpenAI-shaped calls work via v0.4-A reverse path
 # ----------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_openai_shaped_generate_raises_non_retryable() -> None:
+async def test_openai_shaped_generate_reverse_translates(
+    httpx_mock: HTTPXMock, monkeypatch
+) -> None:
+    """OpenAI ChatRequest → Anthropic body (system lifted, tool_result batched)
+    → Anthropic response (text + tool_use) → OpenAI ChatResponse.
+
+    End-to-end check that the v0.4-A reverse path preserves the shape on
+    both sides with realistic structure (system/user/assistant-tool_calls/
+    tool/user and a tool_use-terminated response).
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+    captured: dict = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_42",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [
+                    {"type": "text", "text": "calling tool..."},
+                    {
+                        "type": "tool_use",
+                        "id": "toolu_abc",
+                        "name": "weather",
+                        "input": {"city": "Tokyo"},
+                    },
+                ],
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 42, "output_tokens": 9},
+            },
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+    )
+
+    adapter = AnthropicAdapter(_provider(api_key_env="ANTHROPIC_API_KEY"))
+    req = ChatRequest(
+        model="gpt-4o-ignored",  # client-sent model is a routing placeholder
+        messages=[
+            Message(role="system", content="you are terse"),
+            Message(role="user", content="weather in Tokyo?"),
+            Message(
+                role="assistant",
+                content=None,
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "weather",
+                            "arguments": '{"city": "Tokyo"}',
+                        },
+                    }
+                ],
+            ),
+            Message(role="tool", tool_call_id="call_1", content="sunny, 22C"),
+            Message(role="user", content="ok and tomorrow?"),
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+        tool_choice="auto",
+    )
+
+    resp = await adapter.generate(req)
+
+    # ---- Outbound body assertions ---------------------------------------
+    body = captured["body"]
+    # Provider config's model always wins on the wire.
+    assert body["model"] == "claude-sonnet-4-6"
+    # System role lifted to top-level `system` field.
+    assert body["system"] == "you are terse"
+    assert body["stream"] is False
+    # Anthropic requires max_tokens; default kicks in when ChatRequest omits it.
+    assert body["max_tokens"] == 4096
+    # Role sequence: user / assistant(tool_use) / user(tool_result) / user.
+    roles = [m["role"] for m in body["messages"]]
+    assert roles == ["user", "assistant", "user", "user"]
+    asst_blocks = body["messages"][1]["content"]
+    assert any(b.get("type") == "tool_use" for b in asst_blocks)
+    # Tool result is batched as a user turn with tool_result blocks.
+    tr_blocks = body["messages"][2]["content"]
+    assert isinstance(tr_blocks, list)
+    assert tr_blocks[0]["type"] == "tool_result"
+    assert tr_blocks[0]["tool_use_id"] == "call_1"
+    assert tr_blocks[0]["content"] == "sunny, 22C"
+    # Tools carry Anthropic-shape (name / input_schema).
+    assert body["tools"][0]["name"] == "weather"
+    assert "input_schema" in body["tools"][0]
+    assert body["tool_choice"] == {"type": "auto"}
+
+    # ---- Response conversion assertions --------------------------------
+    msg = resp.choices[0]["message"]
+    assert msg["role"] == "assistant"
+    assert msg["content"] == "calling tool..."
+    assert msg["tool_calls"][0]["function"]["name"] == "weather"
+    args = json.loads(msg["tool_calls"][0]["function"]["arguments"])
+    assert args == {"city": "Tokyo"}
+    # tool_use → finish_reason=tool_calls
+    assert resp.choices[0]["finish_reason"] == "tool_calls"
+    assert resp.coderouter_provider == "anthropic-native"
+    assert resp.usage["prompt_tokens"] == 42
+    assert resp.usage["completion_tokens"] == 9
+
+
+@pytest.mark.asyncio
+async def test_openai_shaped_generate_429_is_retryable(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Retryable upstream statuses propagate through the reverse path unchanged."""
+    httpx_mock.add_response(
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+        status_code=429,
+        json={"type": "error", "error": {"type": "rate_limit_error"}},
+    )
     adapter = AnthropicAdapter(_provider())
     req = ChatRequest(messages=[Message(role="user", content="hi")])
     with pytest.raises(AdapterError) as info:
         await adapter.generate(req)
-    assert info.value.retryable is False
+    assert info.value.status_code == 429
+    assert info.value.retryable is True
 
 
 @pytest.mark.asyncio
-async def test_openai_shaped_stream_raises_non_retryable() -> None:
+async def test_openai_shaped_stream_reverse_translates(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Anthropic SSE events → OpenAI StreamChunk sequence.
+
+    Verifies: (1) initial role=assistant chunk, (2) content deltas carry
+    text, (3) final finish chunk uses the reverse stop_reason map, (4)
+    trailing usage chunk mirrors OpenAI's stream_options.include_usage.
+    """
+    httpx_mock.add_response(
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+        content=_SSE_TEXT_STREAM.encode("utf-8"),
+        headers={"content-type": "text/event-stream"},
+    )
     adapter = AnthropicAdapter(_provider())
-    req = ChatRequest(messages=[Message(role="user", content="hi")])
-    req.stream = True
+    req = ChatRequest(
+        messages=[Message(role="user", content="hi")],
+        stream=True,
+    )
+    chunks = [c async for c in adapter.stream(req)]
+
+    # 1st chunk: role=assistant (OpenAI convention).
+    first_delta = chunks[0].choices[0]["delta"]
+    assert first_delta.get("role") == "assistant"
+
+    # At least one chunk carries the text "hello".
+    text_chunks = [
+        c for c in chunks
+        if c.choices and c.choices[0].get("delta", {}).get("content")
+    ]
+    assert any(
+        c.choices[0]["delta"]["content"] == "hello" for c in text_chunks
+    )
+
+    # Finish chunk: end_turn → stop.
+    finish_chunks = [
+        c for c in chunks if c.choices and c.choices[0].get("finish_reason")
+    ]
+    assert finish_chunks and finish_chunks[-1].choices[0]["finish_reason"] == "stop"
+
+    # Trailing usage chunk (no choices).
+    assert chunks[-1].choices == []
+    assert chunks[-1].usage["prompt_tokens"] == 5
+    assert chunks[-1].usage["completion_tokens"] == 3
+    assert chunks[-1].usage["total_tokens"] == 8
+
+
+@pytest.mark.asyncio
+async def test_openai_shaped_stream_anthropic_error_event_is_non_retryable(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Anthropic `event: error` mid-stream → AdapterError(retryable=False).
+
+    The engine's v0.3-B mid-stream guard re-raises this as MidStreamError
+    once at least one chunk has already been delivered. Here we assert the
+    translator's half of that contract: retryable=False at the source.
+    """
+    body = (
+        "event: message_start\n"
+        'data: {"type":"message_start","message":{"id":"msg_x","type":"message",'
+        '"role":"assistant","model":"claude","content":[],'
+        '"stop_reason":null,"stop_sequence":null,'
+        '"usage":{"input_tokens":0,"output_tokens":0}}}\n'
+        "\n"
+        "event: error\n"
+        'data: {"type":"error","error":{"type":"overloaded_error",'
+        '"message":"service overloaded"}}\n'
+        "\n"
+    )
+    httpx_mock.add_response(
+        url="https://api.anthropic.com/v1/messages",
+        method="POST",
+        content=body.encode("utf-8"),
+        headers={"content-type": "text/event-stream"},
+    )
+    adapter = AnthropicAdapter(_provider())
+    req = ChatRequest(
+        messages=[Message(role="user", content="hi")],
+        stream=True,
+    )
+    collected: list = []
     with pytest.raises(AdapterError) as info:
-        async for _ in adapter.stream(req):
-            pass
+        async for chunk in adapter.stream(req):
+            collected.append(chunk)
+    # The first chunk (role=assistant from message_start) was already delivered
+    # before the error event. This is the condition the engine needs to convert
+    # the error into MidStreamError.
+    assert collected, "expected at least one chunk before error"
     assert info.value.retryable is False
 
 

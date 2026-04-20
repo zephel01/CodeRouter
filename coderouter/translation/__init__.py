@@ -26,10 +26,13 @@ from coderouter.translation.anthropic import (
     AnthropicUsage,
 )
 from coderouter.translation.convert import (
+    stream_anthropic_to_chat_chunks,
     stream_chat_to_anthropic_events,
     synthesize_anthropic_stream_from_response,
+    to_anthropic_request,
     to_anthropic_response,
     to_chat_request,
+    to_chat_response,
 )
 
 __all__ = [
@@ -44,8 +47,11 @@ __all__ = [
     "AnthropicToolResultBlock",
     "AnthropicToolUseBlock",
     "AnthropicUsage",
+    "stream_anthropic_to_chat_chunks",
     "stream_chat_to_anthropic_events",
     "synthesize_anthropic_stream_from_response",
+    "to_anthropic_request",
     "to_anthropic_response",
     "to_chat_request",
+    "to_chat_response",
 ]

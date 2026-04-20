@@ -154,16 +154,18 @@ providers:
   # Claude direct via Anthropic's native Messages API (v0.3.x-1).
   # Unlike the OpenRouter entry above, this uses `kind: anthropic` — the
   # router passes the request body straight through `/v1/messages` to
-  # api.anthropic.com with no OpenAI-shape translation in between. This
-  # preserves Anthropic-native features (cache_control, thinking blocks,
-  # structured tool_use SSE events) that would otherwise be lossy through
-  # the ChatRequest round-trip.
+  # api.anthropic.com with no OpenAI-shape translation in between when
+  # reached via the Anthropic ingress. This preserves native features
+  # (cache_control, thinking blocks, structured tool_use SSE events)
+  # that would otherwise be lossy through the ChatRequest round-trip.
   #
-  # Use this when the ingress is `/v1/messages` (e.g. Claude Code with
-  # `ANTHROPIC_BASE_URL=http://localhost:8088`). OpenAI-shape ingress
-  # (`/v1/chat/completions`) cannot reach a kind:anthropic provider — the
-  # reverse translation is intentionally out of scope (see CHANGELOG
-  # v0.3.x-1 design decision F).
+  # v0.4-A update: this provider is ALSO reachable from the OpenAI-shape
+  # ingress (`/v1/chat/completions`). AnthropicAdapter internally runs
+  # ChatRequest → AnthropicRequest → native call → ChatResponse, and the
+  # streaming path produces proper OpenAI-shape StreamChunks. Anthropic-
+  # only features (cache_control / thinking) still require the
+  # `/v1/messages` ingress, but basic chat / tools / vision work from
+  # either side.
   - name: anthropic-direct
     kind: anthropic
     base_url: https://api.anthropic.com

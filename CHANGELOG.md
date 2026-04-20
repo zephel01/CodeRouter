@@ -6,6 +6,126 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.4-A] — 2026-04-20
+
+### ChatRequest → AnthropicRequest 逆翻訳 (OpenAI ingress → kind:anthropic provider)
+
+v0.3.x-1 の設計決定 F で意図的に out of scope としていた「OpenAI クライアントから
+Anthropic-native provider を叩く」経路を埋める。`AnthropicAdapter.generate` /
+`.stream` が retryable=False で reject していたのをやめ、
+`ChatRequest → AnthropicRequest` および `AnthropicResponse → ChatResponse` /
+`AnthropicStreamEvent* → StreamChunk*` の逆方向翻訳で上流 Anthropic Messages API
+を呼ぶようにする。これにより `/v1/chat/completions` ingress と `kind: anthropic`
+provider の組み合わせが対称的に動作するようになる。
+
+#### Added
+
+- **`coderouter/translation/convert.py`** — 逆方向の翻訳ヘルパを追加 (~300 lines)
+  - `to_anthropic_request(ChatRequest) → AnthropicRequest`
+    - `role: "system"` メッセージを top-level `system` フィールドに集約（複数 system
+      メッセージは `\n` で結合）
+    - 連続する `role: "tool"` メッセージを 1 つの user turn にまとめ、複数の
+      `tool_result` block として格納（Anthropic canonical shape）
+    - assistant の `tool_calls` を `tool_use` content block に変換
+    - `image_url` content part を `data:` URI 判定で base64 / url source に振り分け
+    - OpenAI `tools` → Anthropic `tools`（`parameters` → `input_schema`）
+    - `tool_choice` 双方向マップ: `"auto"↔{type:auto}` / `"required"↔{type:any}` /
+      `"none"↔{type:none}` / `{type:function}↔{type:tool}`
+    - `max_tokens` 省略時は 4096 をデフォルト（Anthropic は必須、OpenAI は optional）
+    - malformed JSON な `tool_calls.arguments` は `{"_raw": <string>}` に保持
+  - `to_chat_response(AnthropicResponse) → ChatResponse`
+    - 複数 text block は連結、`tool_use` block は top-level `tool_calls` に昇格
+    - stop_reason 逆マップ: `end_turn→stop` / `max_tokens→length` /
+      `tool_use→tool_calls` / `stop_sequence→stop`
+    - `usage.input_tokens`/`output_tokens` → OpenAI `prompt_tokens` /
+      `completion_tokens` / `total_tokens`
+  - `stream_anthropic_to_chat_chunks(AnthropicStreamEvent*) → StreamChunk*`
+    - stateful 翻訳: Anthropic の per-block index → OpenAI `tool_calls[].index` を
+      `_ReverseStreamState.block_idx_to_tool_idx` で対応付け
+    - 初期 `message_start` で `delta.role = "assistant"` を emit（OpenAI 慣例）
+    - `text_delta` → `delta.content`
+    - `tool_use` block_start → `delta.tool_calls[].function.name`（args 空）
+    - `input_json_delta` → `delta.tool_calls[].function.arguments` 断片
+    - 終端で finish_reason 付きチャンク + `choices: []` な usage チャンクを emit
+      （OpenAI `stream_options.include_usage=true` と同形式）
+    - Anthropic `event: error` は `AdapterError(retryable=False)` を raise。engine の
+      v0.3-B mid-stream guard が `MidStreamError` に変換する経路はそのまま
+- **`coderouter/adapters/anthropic_native.py`** — `generate` / `stream` を実装に差替
+  - `generate(ChatRequest) → ChatResponse`:
+    `to_anthropic_request` → `self.generate_anthropic` → `to_chat_response`
+  - `stream(ChatRequest) → AsyncIterator[StreamChunk]`:
+    `to_anthropic_request` → `self.stream_anthropic` → `stream_anthropic_to_chat_chunks`
+  - retryable semantics は内部で呼ぶ `generate_anthropic` / `stream_anthropic` の
+    ステータスコード分類をそのまま引き継ぐ（429 は retryable、400 は not）
+  - `coderouter_provider` タグは両方向で保持
+- **`coderouter/translation/__init__.py`** — 新規 export
+  - `to_anthropic_request` / `to_chat_response` / `stream_anthropic_to_chat_chunks`
+
+#### Changed
+
+- **`FallbackEngine.generate` / `.stream`** — コード変更なし。`AnthropicAdapter` の
+  OpenAI-shape メソッドが正しく動くようになったため、engine の polymorphic ループが
+  自然に kind:anthropic provider を含む profile を扱えるようになる（混在 chain も含む）
+- **`coderouter/ingress/openai_routes.py`** — 変更なし。`/v1/chat/completions` が
+  `kind: anthropic` provider に到達できる経路が開通（従来は即 500）
+
+#### Tests
+
+v0.3.x-1 完了時点 110 件 → **147 件 (+37 件)**:
+
+- `tests/test_adapter_anthropic.py` — OpenAI-shape エントリポイントの 2 件を
+  「retryable=False で reject」テストから「reverse 翻訳で正常動作」テストに差替 (+2 net)
+  - `test_openai_shaped_generate_reverse_translates`: system / user / assistant+tool_calls /
+    tool / user の 5 メッセージ → 送信 body（system 昇格 / tool_result batching /
+    tools shape / tool_choice map / max_tokens default）を検証、text+tool_use の
+    レスポンスが `ChatResponse` に戻ることを確認
+  - `test_openai_shaped_generate_429_is_retryable`: 429 → retryable=True が reverse
+    経路でも保持される
+  - `test_openai_shaped_stream_reverse_translates`: SSE を `adapter.stream` で消費し、
+    role 初期チャンク / content delta / finish / trailing usage の順を検証
+  - `test_openai_shaped_stream_anthropic_error_event_is_non_retryable`: upstream
+    `event: error` が `AdapterError(retryable=False)` として surface する
+- `tests/test_translation_reverse.py` **31 件（新設）**
+  - `to_anthropic_request`: simple text / system 昇格 / 複数 system join / system list /
+    assistant tool_calls / 連続 tool batching / tool-then-user flush / image data URI /
+    image URL / tools 変換 / tool_choice 4 ケース / max_tokens passthrough /
+    malformed JSON args / 空 user 省略 / 空 assistant placeholder / stream+profile+stop
+  - `to_chat_response`: text only / tool_use only / mixed / 複数 text 連結 /
+    stop_reason 4 ケース
+  - `stream_anthropic_to_chat_chunks`: text stream / tool_use stream (args 断片結合) /
+    parallel tool_use blocks の index 分離 / `event: error` → retryable=False
+- `tests/test_fallback_anthropic.py` **+4 件**
+  - `test_openai_generate_routes_to_kind_anthropic_via_reverse_translation`
+  - `test_openai_stream_routes_to_kind_anthropic_via_reverse_translation`
+  - `test_openai_generate_mixed_chain_falls_over_openai_to_anthropic`
+  - `test_openai_stream_midstream_kind_anthropic_raises_midstream_error`
+
+テスト合計: **147 passed**。lint: v0.4-A で導入した issue は 0。
+
+#### Design Decisions
+
+- **A**: adapter 層で透過的に変換する（engine を変えない）。`FallbackEngine.generate` /
+  `.stream` は provider kind を気にせずループするため、reverse 翻訳は
+  `AnthropicAdapter.generate` / `.stream` の内部実装で閉じる
+- **B**: client 送信の `model` は placeholder 扱いとし、provider config の `model` が
+  常に優先（v0.3.x-1 の openai_compat / anthropic-native ルールと同じ）
+- **C**: OpenAI の `role: "tool"` を複数連続して受けた場合、Anthropic の canonical shape
+  （1 つの user turn に複数の `tool_result` block）にまとめる
+- **D**: Anthropic `event: error` → `AdapterError(retryable=False)`。初期の
+  `message_start` で既に role チャンクを emit 済みなので engine の mid-stream guard
+  が `MidStreamError` に変換する動作も検証済み
+
+#### Known Limitations
+
+- 「OpenAI ingress → kind:anthropic provider」経路で送る場合、`max_tokens` を
+  client が省略すると 4096 にデフォルトされる。精密に制御したいユーザは
+  `/v1/chat/completions` body に `max_tokens` を明示する必要あり
+- Anthropic 独自の `cache_control` / `thinking` ブロックは OpenAI 側に等価表現が
+  ないため、OpenAI ingress からは設定不可。cache_control を活かしたい場合は
+  v0.3.x-1 で追加した `/v1/messages` ingress を使う
+
+---
+
 ## [v0.3.x-1] — 2026-04-20
 
 ### Anthropic Native Adapter (passthrough)

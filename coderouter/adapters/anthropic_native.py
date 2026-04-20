@@ -1,17 +1,18 @@
-"""Native Anthropic Messages API adapter (v0.3.x-1).
+"""Native Anthropic Messages API adapter (v0.3.x-1, extended in v0.4-A).
 
 A passthrough adapter that speaks the Anthropic wire format directly, used
 when the Anthropic ingress routes to a `kind: "anthropic"` provider (most
 commonly api.anthropic.com itself, but also any server that speaks the
 Anthropic Messages protocol — e.g. AWS Bedrock's Anthropic shim).
 
-Design decisions (v0.3.x):
+Design decisions:
     - No SDK dependency (plan.md §5.4): all calls are plain httpx.
-    - ChatRequest → AnthropicRequest reverse translation is out of scope.
-      `generate()` and `stream()` — the OpenAI-ingress entry points — raise
-      a non-retryable AdapterError, so mixing a `kind: anthropic` provider
-      into a profile consumed by /v1/chat/completions fails fast with a
-      clear message instead of silently skipping.
+    - v0.3.x-1 introduced `generate_anthropic` / `stream_anthropic` as the
+      native passthrough entry points for the Anthropic ingress.
+    - v0.4-A fills in the OpenAI-shaped `generate` / `stream` methods via
+      reverse translation (ChatRequest ↔ AnthropicRequest). That means a
+      `kind: anthropic` provider is now reachable from both /v1/messages
+      (native passthrough) AND /v1/chat/completions (reverse-translated).
     - Streaming is parse-based (event/data → AnthropicStreamEvent) rather
       than pure byte passthrough. This preserves the v0.3-B mid-stream
       guard: upstream errors that surface after the first chunk still
@@ -47,6 +48,11 @@ from coderouter.translation.anthropic import (
     AnthropicRequest,
     AnthropicResponse,
     AnthropicStreamEvent,
+)
+from coderouter.translation.convert import (
+    stream_anthropic_to_chat_chunks,
+    to_anthropic_request,
+    to_chat_response,
 )
 
 # Mirror openai_compat._RETRYABLE_STATUSES — same reasoning applies.
@@ -151,41 +157,49 @@ class AnthropicAdapter(BaseAdapter):
             return False
 
     async def generate(self, request: ChatRequest) -> ChatResponse:
-        """OpenAI-shaped entry point — NOT supported on native Anthropic.
+        """OpenAI-shaped generate (v0.4-A): reverse-translate → native call → back.
 
-        Reverse translation (ChatRequest → AnthropicRequest) is out of
-        scope for v0.3.x. Users who want to reach Anthropic via
-        /v1/chat/completions should configure an `openai_compat` provider
-        pointing at OpenRouter (which exposes anthropic/* models on an
-        OpenAI-shaped endpoint).
+        ChatRequest is converted to AnthropicRequest via
+        ``to_anthropic_request``, the native ``generate_anthropic`` path
+        handles the HTTP call (including retryable status mapping), and
+        the AnthropicResponse is converted back to ChatResponse via
+        ``to_chat_response``. The ``coderouter_provider`` tag is preserved
+        on both sides.
         """
-        raise AdapterError(
-            (
-                "AnthropicAdapter does not support /v1/chat/completions "
-                "(OpenAI-shaped) requests. Use the /v1/messages ingress, "
-                "or configure an openai_compat provider (e.g. OpenRouter) "
-                "to reach Anthropic via OpenAI-shaped requests."
-            ),
-            provider=self.name,
-            retryable=False,
-        )
+        anth_req = to_anthropic_request(request)
+        anth_resp = await self.generate_anthropic(anth_req)
+        chat_resp = to_chat_response(anth_resp)
+        # generate_anthropic stamps coderouter_provider on the Anthropic
+        # response; to_chat_response forwards it. Re-assert for safety
+        # in case a caller constructed a response without the tag.
+        if not chat_resp.coderouter_provider:
+            chat_resp.coderouter_provider = self.name
+        return chat_resp
 
     async def stream(  # type: ignore[override]
         self, request: ChatRequest
     ) -> AsyncIterator[StreamChunk]:
-        """OpenAI-shaped stream entry point — NOT supported (see generate())."""
-        # `async for` cannot materialize an async iterator from a function
-        # that only raises; we honor the AsyncIterator protocol by making
-        # this an async generator that raises before yielding.
-        raise AdapterError(
-            (
-                "AnthropicAdapter does not support streaming via "
-                "/v1/chat/completions. Use the /v1/messages ingress."
-            ),
-            provider=self.name,
-            retryable=False,
-        )
-        yield  # pragma: no cover  # forces async-generator typing
+        """OpenAI-shaped stream (v0.4-A): reverse-translate → native SSE → chunks.
+
+        Mirrors ``generate()``: ChatRequest → AnthropicRequest via
+        ``to_anthropic_request``, the native ``stream_anthropic`` yields
+        AnthropicStreamEvents, and ``stream_anthropic_to_chat_chunks``
+        re-segments those into OpenAI StreamChunks on the fly.
+
+        Error semantics preserve the v0.3-B mid-stream guard:
+            - Initial upstream failure → AdapterError propagates to the
+              engine's fallback path.
+            - Mid-stream failure (after first chunk) → AdapterError is
+              re-raised by the engine as MidStreamError.
+            - Anthropic ``event: error`` → translator raises
+              AdapterError(retryable=False), same treatment as above.
+        """
+        anth_req = to_anthropic_request(request)
+        events = self.stream_anthropic(anth_req)
+        async for chunk in stream_anthropic_to_chat_chunks(
+            events, provider_name=self.name
+        ):
+            yield chunk
 
     # ------------------------------------------------------------------
     # Native Anthropic entry points (v0.3.x-1)

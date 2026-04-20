@@ -750,13 +750,20 @@ v0.1 / v0.2 は完了（リリース履歴と §7 / §8 を参照）。v0.3-A〜
 テスト合計: 87 passed (v0.2 完了時点 54 → v0.3 で +33。v0.3-E 実機疎通中に発見した `Message.content=None` クラッシュの regression test 1 件を含む)。
 ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.2 由来の既知事項）。
 
-### 中優先 (v0.3.x)
+### 中優先 (v0.3.x / v0.4)
 
 4. [x] **Anthropic native adapter (v0.3.x-1)** — `ProviderConfig.kind: "anthropic"` を追加し、`AnthropicAdapter` / `FallbackEngine.generate_anthropic` / `stream_anthropic` 経由で上流が本物の Claude のとき翻訳を通さず passthrough。
    - 翻訳コストを省き、Anthropic 固有の cache_control / thinking ブロックをそのまま活用できるようにする
    - v0.3-D downgrade 実装を ingress から engine に移設し、native provider は downgrade を完全 bypass。混在 chain（native → openai_compat のフォールバック）もサポート
    - tests +23 件 (`test_adapter_anthropic.py` 11 件 / `test_fallback_anthropic.py` 12 件) → 合計 **110 件**
    - 詳細は CHANGELOG.md `[v0.3.x-1]` セクション
+4a. [x] **ChatRequest → AnthropicRequest 逆翻訳 (v0.4-A)** — v0.3.x-1 で out of scope としていた方向（OpenAI ingress → `kind: anthropic` provider）を実装。`AnthropicAdapter.generate` / `.stream` が内部で `to_anthropic_request` → `generate_anthropic` / `stream_anthropic` → `to_chat_response` / `stream_anthropic_to_chat_chunks` を呼ぶ逆変換パスを持つ。
+   - `/v1/chat/completions` → `kind: anthropic` provider が対称的に到達可能に
+   - `role: "system"` → top-level `system` フィールド、連続する `role: "tool"` → 1 つの user turn に複数 `tool_result` block を batch、`tool_calls` ↔ `tool_use` block、`tool_choice` / tools / stop_reason / usage の双方向マップ
+   - Anthropic `event: error` → `AdapterError(retryable=False)` で既存 mid-stream guard に接続
+   - engine 側はコード変更なし（polymorphic dispatch が効く）
+   - tests +37 件 (`test_translation_reverse.py` 31 件新設 / `test_adapter_anthropic.py` +2 net / `test_fallback_anthropic.py` +4) → 合計 **147 件**
+   - 詳細は CHANGELOG.md `[v0.4-A]` セクション
 5. [ ] **Claude Code 向け profile サンプル** を README と `examples/providers.yaml` に追加。
    - Claude Code は 15-20K token の system prompt を毎ターン送るので、14B クラスでは prompt eval 100秒級。
      7B 以下中心 + 14B を最後尾に置くサンプルを例示する
