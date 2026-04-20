@@ -38,7 +38,9 @@ from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.logging import get_logger
 from coderouter.routing.capability import (
+    anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
+    provider_supports_cache_control,
     provider_supports_thinking,
     strip_thinking,
 )
@@ -284,6 +286,23 @@ class FallbackEngine:
                         "reason": "provider-does-not-support",
                     },
                 )
+            # v0.5-B: observability-only gate for cache_control. The
+            # field is silently dropped during Anthropic → OpenAI
+            # translation for openai_compat providers — no strip is
+            # needed here (to_chat_request already handles it) and no
+            # chain reorder is done (user ordering preserved). We just
+            # emit a log line so operators can see the lossiness.
+            if anthropic_request_has_cache_control(
+                request
+            ) and not provider_supports_cache_control(adapter.config):
+                logger.info(
+                    "capability-degraded",
+                    extra={
+                        "provider": adapter.name,
+                        "dropped": ["cache_control"],
+                        "reason": "translation-lossy",
+                    },
+                )
             logger.info(
                 "try-provider",
                 extra={
@@ -362,6 +381,18 @@ class FallbackEngine:
                         "provider": adapter.name,
                         "dropped": ["thinking"],
                         "reason": "provider-does-not-support",
+                    },
+                )
+            # v0.5-B: mirror of the non-streaming path — see comment there.
+            if anthropic_request_has_cache_control(
+                request
+            ) and not provider_supports_cache_control(adapter.config):
+                logger.info(
+                    "capability-degraded",
+                    extra={
+                        "provider": adapter.name,
+                        "dropped": ["cache_control"],
+                        "reason": "translation-lossy",
                     },
                 )
             logger.info(

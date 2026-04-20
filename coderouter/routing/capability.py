@@ -130,3 +130,95 @@ def strip_thinking(request: AnthropicRequest) -> AnthropicRequest:
     stripped.profile = request.profile
     stripped.anthropic_beta = request.anthropic_beta
     return stripped
+
+
+# ---------------------------------------------------------------------------
+# v0.5-B: cache_control observability
+#
+# Unlike `thinking`, cache_control doesn't produce a 400 on non-supporting
+# providers — it's silently lost during Anthropic → OpenAI translation
+# (the cache_control marker lives on content blocks and has no OpenAI
+# wire equivalent). So the gate here is observability-only: we detect
+# when cache_control is present, check whether the outgoing provider can
+# honor it, and emit a structured log when it's about to be lost. We do
+# NOT reorder the chain — the user's ordering almost certainly reflects
+# a latency / cost intent that outweighs cache-hit savings.
+#
+# Footgun to be aware of (from the v0.4 retro §What was sharp):
+#   Anthropic's prompt cache has a 1024-token minimum. System prompts
+#   shorter than that silently report 0 cached tokens even on supported
+#   providers. That's an Anthropic-side constraint, not something this
+#   gate can fix — but it's worth noting here so nobody blames CodeRouter
+#   for 0 hits on small prompts.
+# ---------------------------------------------------------------------------
+
+
+def provider_supports_cache_control(provider: ProviderConfig) -> bool:
+    """Does this provider preserve ``cache_control`` blocks end-to-end?
+
+    Resolution order:
+        1. If ``provider.capabilities.prompt_cache`` is True → True. This
+           is an explicit opt-in for any future ``openai_compat``
+           upstream that extends the wire format to preserve cache
+           markers (not known to exist today, 2026-04).
+        2. Otherwise:
+           - ``kind: anthropic``: True. Native passthrough via
+             ``/v1/messages`` keeps cache_control intact. Verified real-
+             machine against api.anthropic.com on 2026-04-20 (v0.4
+             retro §3: 1321 tokens written on call 1, 1321 read on call 2).
+           - ``kind: openai_compat``: False. The OpenAI Chat Completions
+             wire has no equivalent marker, so the existing
+             ``to_chat_request`` translation drops cache_control during
+             the Anthropic → OpenAI hop. The upstream itself might have
+             prompt caching, but CodeRouter can't currently carry the
+             marker through.
+
+    This routine does not inspect the request — it's a per-provider
+    capability. Combine with ``anthropic_request_has_cache_control`` in
+    the engine to decide whether to log a degradation.
+    """
+    if provider.capabilities.prompt_cache:
+        return True
+    return provider.kind == "anthropic"
+
+
+def _block_has_cache_control(block: object) -> bool:
+    """True if ``block`` is a dict that carries a ``cache_control`` key."""
+    return isinstance(block, dict) and "cache_control" in block
+
+
+def anthropic_request_has_cache_control(request: AnthropicRequest) -> bool:
+    """True iff the request carries any ``cache_control`` markers.
+
+    Checks all three locations Anthropic allows:
+        - ``system`` as a list of blocks (each block may have
+          ``cache_control``; the shorthand ``str`` form cannot).
+        - ``tools[*]`` as Anthropic tools — ``cache_control`` arrives via
+          Pydantic's ``extra="allow"`` on ``AnthropicTool``.
+        - ``messages[*].content`` when it's a list of blocks (the
+          shorthand ``str`` form, again, cannot carry the marker).
+
+    A single cache_control marker anywhere in the request returns True.
+    """
+    # system blocks
+    system = request.system
+    if isinstance(system, list):
+        for block in system:
+            if _block_has_cache_control(block):
+                return True
+
+    # tool definitions
+    for tool in request.tools or []:
+        extra = tool.model_extra or {}
+        if "cache_control" in extra:
+            return True
+
+    # message content blocks
+    for msg in request.messages:
+        content = msg.content
+        if isinstance(content, list):
+            for block in content:
+                if _block_has_cache_control(block):
+                    return True
+
+    return False

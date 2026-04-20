@@ -6,6 +6,91 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.5-B] — 2026-04-20
+
+### cache_control observability
+
+v0.5-A (thinking) に続く capability gate の 2 ピース目。thinking が「未対応
+model に投げると 400」というハードエラーだったのに対して、cache_control は
+もっと性質が違う — Anthropic → OpenAI translation の段階で **silent に落ちる**
+(content block 上のマーカーに OpenAI wire 側の等価物がない)。エラーにならず、
+上流の Anthropic prompt cache の課金最適化が単に無効化されるだけ。
+
+v0.5-B はこの非対称性を踏まえて **observability-only** (no chain reorder /
+no strip) で着地させる:
+
+- cache_control 付きリクエストが openai_compat provider に渡る際、構造化ログ
+  `capability-degraded` (`reason: "translation-lossy"`) を出す
+- chain 順序は **変えない** — ユーザーの provider 順序は latency / cost の意
+  図を反映しており、cache-hit の節約でそれを上書きしない方針
+- strip もしない — `to_chat_request` の既存 translation が自動で marker を落
+  とすので router 側で追加処理する必要がない
+
+#### Added
+
+- **`coderouter/routing/capability.py`** — 関数 2 つ + helper 1 つ:
+  - `provider_supports_cache_control(provider)` — `kind: anthropic` は常に
+    True (native passthrough で end-to-end 保持)、`kind: openai_compat` は
+    デフォルト False (wire 等価物なし)。`capabilities.prompt_cache: true` を
+    YAML で明示すると openai_compat でも True に昇格 (escape hatch: 将来
+    OpenAI wire を拡張した upstream が出た場合用)
+  - `anthropic_request_has_cache_control(request)` — `system` (list 形式)
+    `tools[*]` (Pydantic extras 経由) `messages[*].content` (list 形式) を
+    再帰的に walk し、`cache_control` key を持つブロックが 1 つでもあれば
+    True
+  - `_block_has_cache_control(block)` — 内部 helper (dict 判定 + key 存在判定)
+
+#### Changed
+
+- **`coderouter/routing/fallback.py`** — `generate_anthropic` / `stream_anthropic`
+  の両方で:
+  - ループ内の provider ごとに `anthropic_request_has_cache_control(request)`
+    かつ `not provider_supports_cache_control(adapter.config)` なら
+    `capability-degraded` ログ (`provider` / `dropped: ["cache_control"]` /
+    `reason: "translation-lossy"`) を発火
+  - v0.5-A の thinking gate (`provider-does-not-support`) とは `reason` が
+    違うので運用側で絞り込み可能
+  - `_resolve_anthropic_chain` は **変更なし** — cache_control では reorder
+    しない。同じメソッド内で 2 種類のログが出るようになっただけ
+
+#### Tests
+
+- **+21 件** (合計 **210 件 green**, 189 → 210)
+  - `test_capability.py` +13:
+    - `provider_supports_cache_control`: anthropic デフォルト True, openai_compat
+      デフォルト False, `prompt_cache: true` で openai_compat を昇格, anthropic
+      に prompt_cache: true は redundant だが壊れない
+    - `anthropic_request_has_cache_control`: plain request / bare-string system /
+      system block with marker / system block without marker / tool-level marker /
+      message content block marker / string-form content は常に False / 2nd
+      message でも検出 / image block 上の marker (type 非依存)
+  - `test_fallback_cache_control.py` (新規) +8:
+    - openai_compat + cache_control → log 発火 (reason=translation-lossy, dropped=["cache_control"])
+    - anthropic kind + cache_control → log 発火しない
+    - plain request + openai_compat → log 発火しない
+    - **chain 順序が reorder されない** (v0.5-A との重要な差分テスト)
+    - `prompt_cache: true` escape hatch でログ抑制
+    - fallback chain で複数の openai_compat を踏む場合、1 provider ごとにログ発火
+    - streaming path の mirror (openai_compat 発火 / anthropic 発火しない)
+
+#### Notes
+
+- **Anthropic prompt cache の 1024-token 下限**: v0.4 retrospective §What was
+  sharp で既出の footgun。system prompt が 1024 token 未満だと、supported
+  provider でも Anthropic 側が `cached_tokens: 0` を返す。v0.5-B の gate は
+  この Anthropic 側の制約には関知しない (そもそもマーカーを保持することだけを
+  扱う層) — なので「小さい prompt でキャッシュヒットが 0 なのは CodeRouter の
+  バグ」という誤解を招かないよう docstring にコメント済み
+- **実機 verify**: v0.4-D retro で「1321 tokens written on call 1, 1321 read
+  on call 2」を実機で確認済み (native anthropic 経由)。v0.5-B は routing 側の
+  gate なので、translation layer の既存挙動 + 新規ログのみが差分
+- **運用上の使い方**: `reason: "translation-lossy"` で grep すると「ユーザー
+  は cache 意図を送ったが本リクエストは openai_compat に流れた」イベントが
+  全部拾える。頻度が高ければ YAML 側で anthropic-direct を上に挙げるか、
+  openai_compat 側に `prompt_cache: true` を立てる判断材料になる
+
+---
+
 ## [v0.5-A] — 2026-04-20
 
 ### thinking capability gate

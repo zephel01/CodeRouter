@@ -1,7 +1,8 @@
-"""Unit tests for the v0.5-A capability gate (coderouter/routing/capability.py).
+"""Unit tests for the v0.5-A / v0.5-B capability gate.
 
 Pure-function tests — no engine, no HTTP. The fallback-integration tests
-for the same feature live in tests/test_fallback_thinking.py.
+for v0.5-A live in tests/test_fallback_thinking.py; v0.5-B integration
+tests live in tests/test_fallback_cache_control.py.
 """
 
 from __future__ import annotations
@@ -10,7 +11,9 @@ import pytest
 
 from coderouter.config.schemas import Capabilities, ProviderConfig
 from coderouter.routing.capability import (
+    anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
+    provider_supports_cache_control,
     provider_supports_thinking,
     strip_thinking,
 )
@@ -223,3 +226,204 @@ def test_strip_thinking_wire_body_is_clean() -> None:
 
     body = stripped.model_dump(exclude_none=True)
     assert "thinking" not in body
+
+
+# ======================================================================
+# v0.5-B: cache_control
+# ======================================================================
+
+
+# ----------------------------------------------------------------------
+# provider_supports_cache_control
+# ----------------------------------------------------------------------
+
+
+def _cache_provider(
+    *,
+    kind: str = "anthropic",
+    prompt_cache: bool = False,
+) -> ProviderConfig:
+    """Build a ProviderConfig for cache_control tests. Kept separate from
+    the thinking helper because the relevant capability is `prompt_cache`
+    (the YAML-level escape hatch), not `thinking`."""
+    return ProviderConfig(
+        name="t",
+        kind=kind,  # type: ignore[arg-type]
+        base_url=(
+            "https://api.anthropic.com"
+            if kind == "anthropic"
+            else "https://openrouter.ai/api/v1"
+        ),
+        model="whatever",
+        capabilities=Capabilities(prompt_cache=prompt_cache),
+    )
+
+
+def test_cache_control_supported_on_anthropic_kind_by_default() -> None:
+    """Native Anthropic passthrough preserves cache_control end-to-end."""
+    assert provider_supports_cache_control(_cache_provider(kind="anthropic"))
+
+
+def test_cache_control_unsupported_on_openai_compat_kind_by_default() -> None:
+    """OpenAI-shape translation drops cache_control — no wire equivalent."""
+    assert not provider_supports_cache_control(
+        _cache_provider(kind="openai_compat")
+    )
+
+
+def test_cache_control_explicit_prompt_cache_flag_promotes_openai_compat() -> None:
+    """YAML escape hatch: `capabilities.prompt_cache: true` on an
+    openai_compat provider tells the router the upstream extends the
+    OpenAI wire to preserve the marker. Honor it verbatim."""
+    assert provider_supports_cache_control(
+        _cache_provider(kind="openai_compat", prompt_cache=True)
+    )
+
+
+def test_cache_control_explicit_prompt_cache_flag_redundant_on_anthropic() -> None:
+    """anthropic kind is always supported; setting prompt_cache: true
+    changes nothing but must not break."""
+    assert provider_supports_cache_control(
+        _cache_provider(kind="anthropic", prompt_cache=True)
+    )
+
+
+# ----------------------------------------------------------------------
+# anthropic_request_has_cache_control
+# ----------------------------------------------------------------------
+
+
+def _req_with(**extra: object) -> AnthropicRequest:
+    """Build a minimal AnthropicRequest with an override hook for the
+    fields we're exercising (system / tools / messages)."""
+    payload: dict[str, object] = {
+        "max_tokens": 64,
+        "messages": [{"role": "user", "content": "hi"}],
+    }
+    payload.update(extra)
+    return AnthropicRequest.model_validate(payload)
+
+
+def test_has_cache_control_false_for_plain_request() -> None:
+    assert not anthropic_request_has_cache_control(_req_with())
+
+
+def test_has_cache_control_false_for_bare_string_system() -> None:
+    """Shorthand `system: str` cannot carry cache_control markers."""
+    req = _req_with(system="you are helpful")
+    assert not anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_true_on_system_block() -> None:
+    """Typical cache_control placement: a system block flagged ephemeral."""
+    req = _req_with(
+        system=[
+            {
+                "type": "text",
+                "text": "big reusable prompt",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    )
+    assert anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_false_on_system_block_without_marker() -> None:
+    req = _req_with(
+        system=[{"type": "text", "text": "no marker here"}]
+    )
+    assert not anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_true_on_tool_definition() -> None:
+    """cache_control on a tool definition — caches the schema block."""
+    req = _req_with(
+        tools=[
+            {
+                "name": "search",
+                "description": "search the web",
+                "input_schema": {"type": "object", "properties": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ]
+    )
+    assert anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_true_on_message_content_block() -> None:
+    """cache_control on a user content block — caches big pasted context."""
+    req = _req_with(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "long pasted doc",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+    )
+    assert anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_false_when_content_is_string() -> None:
+    """String-form content cannot carry cache_control — shorthand only."""
+    req = _req_with(
+        messages=[{"role": "user", "content": "no list here"}]
+    )
+    assert not anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_detects_marker_in_second_message() -> None:
+    """A single cache_control anywhere in the request is enough; don't
+    short-circuit on the first message."""
+    req = _req_with(
+        messages=[
+            {"role": "user", "content": "first"},
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "text", "text": "plain"},
+                ],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "this one cached",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            },
+        ]
+    )
+    assert anthropic_request_has_cache_control(req)
+
+
+def test_has_cache_control_survives_mixed_block_types() -> None:
+    """Markers can live on image or tool_result blocks too — the walk
+    inspects every dict block regardless of its `type`."""
+    req = _req_with(
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "look at this"},
+                    {
+                        "type": "image",
+                        "source": {
+                            "type": "base64",
+                            "media_type": "image/png",
+                            "data": "iVBOR...",
+                        },
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                ],
+            }
+        ]
+    )
+    assert anthropic_request_has_cache_control(req)
