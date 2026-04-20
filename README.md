@@ -56,7 +56,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.5-C — `reasoning` field passive strip (2026-04-20)
+## Status: v0.6-B — profile-level `timeout_s` / `append_system_prompt` override (2026-04-20)
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -77,7 +77,9 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **Thinking capability gate (v0.5-A)** — requests carrying Anthropic's `thinking: {type: "enabled"}` block are routed to providers whose model supports it (stable-sorted to the front of the fallback chain); if none do, the block is silently stripped and `capability-degraded` is emitted to the structured log. This means pinning `provider.model = claude-sonnet-4-5-20250929` no longer 400s on adaptive-thinking side requests — the block is dropped on the way out rather than rejected by the upstream.
 - [x] **cache_control observability (v0.5-B)** — requests carrying `cache_control` markers that are about to hit an `openai_compat` provider (where the marker is lost during Anthropic → OpenAI translation) now emit `capability-degraded` with `reason: "translation-lossy"`. Unlike thinking, this is observability-only: chain order is preserved (user's latency/cost intent outweighs cache-hit savings), and the marker drop itself happens inside the translator, not in the gate. YAML escape hatch: `capabilities.prompt_cache: true` suppresses the log if a future `openai_compat` upstream extends the wire to preserve cache markers.
 - [x] **`reasoning` field passive strip (v0.5-C)** — some OpenRouter free models (confirmed on `openai/gpt-oss-120b:free`) return a non-standard `reasoning` field on each choice's `message` / `delta`. Strict OpenAI-shape clients can reject the unknown key, so the `openai_compat` adapter now removes it before the response leaves the adapter and emits `capability-degraded` (`reason: "non-standard-field"`). Streaming: one log per stream, not per chunk. YAML escape hatch: `capabilities.reasoning_passthrough: true` keeps the field intact when CodeRouter is intentionally fronting a reasoning-aware downstream.
-- [x] JSON-line structured logging, `/healthz`, tests (**225 green**)
+- [x] **`--mode` CLI / `CODEROUTER_MODE` env (v0.6-A)** — pick the active profile at server-launch time without editing the config (`coderouter serve --mode claude-code-direct`). Startup validates the name against the loaded config and fails fast with the list of valid profiles instead of deferring to the first request. Per-request overrides (header / body) still win.
+- [x] **Profile-level parameter override (v0.6-B)** — a profile can override `timeout_s` and `append_system_prompt` for every attempt in its chain (replace semantics: profile value wins entirely when set). `append_system_prompt: ""` explicitly clears the provider's directive for this profile. Threaded through a `ProviderCallOverrides` dataclass so adapters never need to know the profile concept.
+- [x] JSON-line structured logging, `/healthz`, tests (**283 green**)
 
 ### Use it with Claude Code
 
@@ -128,6 +130,22 @@ profiles:
 
 If you'd rather have the paid tier go through Anthropic's native API (so `cache_control` / `thinking` blocks survive when reached via the Anthropic ingress), swap `openrouter-claude` for `anthropic-direct` — the `claude-code-direct` profile in `examples/providers.yaml` does exactly that.
 
+#### Profile-level parameter overrides (v0.6-B)
+
+A profile can override two per-call provider parameters for every attempt in its chain — handy when the same provider list should behave differently under different profiles (e.g. a long-context `/no_think` mode vs. a short chat mode):
+
+```yaml
+profiles:
+  - name: claude-code-long
+    timeout_s: 600             # replaces ProviderConfig.timeout_s for this profile
+    append_system_prompt: ""   # empty string = explicitly clear the provider's directive
+    providers:
+      - ollama-qwen-coder-14b
+      - openrouter-free
+```
+
+Semantics: the profile value **replaces** the provider's value when set (not appended), keeping parity with how scalar fields like `timeout_s` naturally behave. `append_system_prompt: ""` explicitly clears the provider directive for this profile (distinguished from "unset", which means "fall back to the provider's default"). Unset fields leave every provider's defaults intact. `retry_max` is deferred to a later minor since adapter-level retry is still unpiloted — the fallback chain itself is currently the retry mechanism.
+
 #### What to expect
 
 - **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
@@ -137,7 +155,8 @@ If you'd rather have the paid tier go through Anthropic's native API (so `cache_
 
 Coming next (see [plan.md §18](./plan.md)):
 
-- v0.5-D — Weekly OpenRouter roster diff cron (proactive replacement for the reactive v0.4-B refresh)
+- v0.6-C — Declarative `ALLOW_PAID` gate with `chain-paid-gate-blocked` structured log
+- v0.6-D — `mode_aliases` YAML block for `X-CodeRouter-Mode: coding` → profile name mapping
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
 - v1.1 — `coderouter doctor --network`, launchers
 - v1.5 — Metrics dashboard

@@ -33,6 +33,7 @@ from coderouter.adapters.base import (
     BaseAdapter,
     ChatRequest,
     ChatResponse,
+    ProviderCallOverrides,
     StreamChunk,
 )
 from coderouter.adapters.registry import build_adapter
@@ -156,6 +157,22 @@ class FallbackEngine:
             p.name: build_adapter(p) for p in config.providers
         }
 
+    def _resolve_profile_overrides(
+        self, profile_name: str | None
+    ) -> ProviderCallOverrides:
+        """v0.6-B: build the ProviderCallOverrides for the active profile.
+
+        Invariant across every adapter call on one chain (profiles are
+        immutable per request), so callers resolve this once at the top of
+        each engine method and pass to every adapter invocation.
+        """
+        chosen = profile_name or self.config.default_profile
+        profile = self.config.profile_by_name(chosen)
+        return ProviderCallOverrides(
+            timeout_s=profile.timeout_s,
+            append_system_prompt=profile.append_system_prompt,
+        )
+
     def _resolve_chain(self, profile_name: str | None) -> list[BaseAdapter]:
         """Return the list of adapters to try, in order, for this profile."""
         chosen = profile_name or self.config.default_profile
@@ -213,6 +230,7 @@ class FallbackEngine:
 
     async def generate(self, request: ChatRequest) -> ChatResponse:
         adapters = self._resolve_chain(request.profile)
+        overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         for adapter in adapters:
             logger.info(
@@ -220,7 +238,7 @@ class FallbackEngine:
                 extra={"provider": adapter.name, "stream": False},
             )
             try:
-                response = await adapter.generate(request)
+                response = await adapter.generate(request, overrides=overrides)
                 logger.info(
                     "provider-ok",
                     extra={"provider": adapter.name, "stream": False},
@@ -251,13 +269,14 @@ class FallbackEngine:
         We only fall through if the *initial* response is an error.
         """
         adapters: list[BaseAdapter] = self._resolve_chain(request.profile)
+        overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         for adapter in adapters:
             logger.info(
                 "try-provider",
                 extra={"provider": adapter.name, "stream": True},
             )
-            stream_iter = adapter.stream(request)
+            stream_iter = adapter.stream(request, overrides=overrides)
             try:
                 first = await anext(stream_iter)
             except StopAsyncIteration:
@@ -330,6 +349,7 @@ class FallbackEngine:
     ) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
         chain = self._resolve_anthropic_chain(request)
+        overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
 
@@ -374,11 +394,15 @@ class FallbackEngine:
             )
             try:
                 if is_native:
-                    resp = await adapter.generate_anthropic(effective_request)
+                    resp = await adapter.generate_anthropic(
+                        effective_request, overrides=overrides
+                    )
                 else:
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await adapter.generate(chat_req)
+                    chat_resp = await adapter.generate(
+                        chat_req, overrides=overrides
+                    )
                     resp = to_anthropic_response(
                         chat_resp, allowed_tool_names=tool_names
                     )
@@ -425,6 +449,7 @@ class FallbackEngine:
         blocks natively, no repair needed).
         """
         chain = self._resolve_anthropic_chain(request)
+        overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
 
@@ -468,13 +493,17 @@ class FallbackEngine:
             first: AnthropicStreamEvent
             try:
                 if is_native:
-                    event_iter = adapter.stream_anthropic(effective_request)
+                    event_iter = adapter.stream_anthropic(
+                        effective_request, overrides=overrides
+                    )
                     first = await anext(event_iter)
                 elif downgrading:
                     # v0.3-D downgrade: run non-streaming, repair, replay.
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await adapter.generate(chat_req)
+                    chat_resp = await adapter.generate(
+                        chat_req, overrides=overrides
+                    )
                     anth_resp = to_anthropic_response(
                         chat_resp, allowed_tool_names=tool_names
                     )
@@ -486,7 +515,7 @@ class FallbackEngine:
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = True
                     event_iter = stream_chat_to_anthropic_events(
-                        adapter.stream(chat_req)
+                        adapter.stream(chat_req, overrides=overrides)
                     )
                     first = await anext(event_iter)
             except StopAsyncIteration:

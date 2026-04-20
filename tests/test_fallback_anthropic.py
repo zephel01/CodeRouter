@@ -34,6 +34,7 @@ from coderouter.adapters.base import (
     ChatRequest,
     ChatResponse,
     Message,
+    ProviderCallOverrides,
     StreamChunk,
 )
 from coderouter.config.schemas import (
@@ -90,8 +91,14 @@ class FakeOpenAIAdapter(BaseAdapter):
     async def healthcheck(self) -> bool:
         return self.fail_with is None
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> ChatResponse:
         self.generate_calls.append(request)
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         content = self.tool_as_text if self.tool_as_text is not None else self.text
@@ -110,8 +117,14 @@ class FakeOpenAIAdapter(BaseAdapter):
             coderouter_provider=self.name,
         )
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> AsyncIterator[StreamChunk]:
         self.stream_calls.append(request)
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         for i, piece in enumerate(self.chunks):
@@ -170,9 +183,13 @@ class FakeAnthropicAdapter(AnthropicAdapter):
         return self.fail_with is None
 
     async def generate_anthropic(
-        self, request: AnthropicRequest
+        self,
+        request: AnthropicRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
     ) -> AnthropicResponse:
         self.generate_calls.append(request)
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         return AnthropicResponse(
@@ -185,9 +202,13 @@ class FakeAnthropicAdapter(AnthropicAdapter):
         )
 
     async def stream_anthropic(
-        self, request: AnthropicRequest
+        self,
+        request: AnthropicRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
     ) -> AsyncIterator[AnthropicStreamEvent]:
         self.stream_calls.append(request)
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         events = self._events or _default_native_events(self.text, self.config.model)

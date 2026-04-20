@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from coderouter.adapters.base import (
     AdapterError,
@@ -14,9 +15,15 @@ from coderouter.adapters.base import (
     ChatRequest,
     ChatResponse,
     Message,
+    ProviderCallOverrides,
     StreamChunk,
 )
-from coderouter.config.schemas import CodeRouterConfig
+from coderouter.config.schemas import (
+    Capabilities,
+    CodeRouterConfig,
+    FallbackChain,
+    ProviderConfig,
+)
 from coderouter.routing import (
     FallbackEngine,
     MidStreamError,
@@ -50,8 +57,14 @@ class FakeAdapter(BaseAdapter):
     async def healthcheck(self) -> bool:
         return self.fail_with is None
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> ChatResponse:
         self.call_count += 1
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         return ChatResponse(
@@ -68,8 +81,14 @@ class FakeAdapter(BaseAdapter):
             coderouter_provider=self.name,
         )
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> AsyncIterator[StreamChunk]:
         self.call_count += 1
+        self.last_overrides = overrides
         if self.fail_with:
             raise self.fail_with
         for i, piece in enumerate(self.chunks):
@@ -324,3 +343,124 @@ async def test_streaming_initial_error_still_falls_back(
     assert len(chunks) == 1
     assert fakes["free-cloud"].call_count == 1
     assert fakes["paid-cloud"].call_count == 0
+
+
+# ----------------------------------------------------------------------
+# v0.6-B: profile-level timeout_s / append_system_prompt override
+# ----------------------------------------------------------------------
+
+
+def _overrides_config(
+    *,
+    profile_timeout: float | None = None,
+    profile_append: str | None = None,
+    provider_timeout: float = 30.0,
+    provider_append: str | None = None,
+) -> CodeRouterConfig:
+    """Build a minimal config with one provider and one profile, with
+    the override fields selectively populated.
+
+    Parameters default to values that simulate "no override" so individual
+    tests only set what they actually care about — keeps the scenario
+    tables readable.
+    """
+    return CodeRouterConfig(
+        allow_paid=False,
+        default_profile="prof",
+        providers=[
+            ProviderConfig(
+                name="p0",
+                base_url="http://localhost:8080/v1",
+                model="m",
+                timeout_s=provider_timeout,
+                append_system_prompt=provider_append,
+                capabilities=Capabilities(),
+            ),
+        ],
+        profiles=[
+            FallbackChain(
+                name="prof",
+                providers=["p0"],
+                timeout_s=profile_timeout,
+                append_system_prompt=profile_append,
+            ),
+        ],
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_override_timeout_reaches_adapter() -> None:
+    """Profile.timeout_s propagates to the adapter via ProviderCallOverrides."""
+    cfg = _overrides_config(profile_timeout=7.5, provider_timeout=30.0)
+    fake = FakeAdapter(cfg.provider_by_name("p0"))
+    engine = _engine_with(cfg, {"p0": fake})
+    await engine.generate(_request())
+    assert fake.last_overrides is not None
+    assert fake.last_overrides.timeout_s == 7.5
+    # Provider default stays the authoritative fallback; override wins.
+    assert fake.effective_timeout(fake.last_overrides) == 7.5
+
+
+@pytest.mark.asyncio
+async def test_profile_override_unset_defaults_to_provider() -> None:
+    """When profile.timeout_s is None, effective_timeout falls through to
+    the provider's own value. This is the baseline contract — unset
+    overrides must not silently zero the timeout.
+    """
+    cfg = _overrides_config(profile_timeout=None, provider_timeout=42.0)
+    fake = FakeAdapter(cfg.provider_by_name("p0"))
+    engine = _engine_with(cfg, {"p0": fake})
+    await engine.generate(_request())
+    assert fake.last_overrides is not None
+    assert fake.last_overrides.timeout_s is None
+    assert fake.effective_timeout(fake.last_overrides) == 42.0
+
+
+@pytest.mark.asyncio
+async def test_profile_override_append_system_prompt_replaces_provider() -> None:
+    """Profile-level append_system_prompt REPLACES the provider's value.
+
+    Contrast with: no override → provider directive is used as-is. The
+    replace semantic matches how timeout_s (a scalar limit) naturally
+    behaves and keeps debugging predictable.
+    """
+    cfg = _overrides_config(
+        profile_append="/profile-directive",
+        provider_append="/provider-directive",
+    )
+    fake = FakeAdapter(cfg.provider_by_name("p0"))
+    engine = _engine_with(cfg, {"p0": fake})
+    await engine.generate(_request())
+    assert (
+        fake.effective_append_system_prompt(fake.last_overrides)
+        == "/profile-directive"
+    )
+
+
+@pytest.mark.asyncio
+async def test_profile_override_append_empty_string_clears_provider() -> None:
+    """append_system_prompt="" on a profile = "clear the provider directive".
+
+    Distinguishes "no override" (None → use provider value) from "override
+    to none" (empty string → skip the directive entirely). This is the
+    only way a profile can opt out of a directive its provider declares.
+    """
+    cfg = _overrides_config(
+        profile_append="", provider_append="/provider-directive"
+    )
+    fake = FakeAdapter(cfg.provider_by_name("p0"))
+    engine = _engine_with(cfg, {"p0": fake})
+    await engine.generate(_request())
+    assert fake.effective_append_system_prompt(fake.last_overrides) is None
+
+
+def test_profile_override_fields_on_fallback_chain() -> None:
+    """Schema-level sanity: both fields default to None and ``extra='forbid'``
+    continues to reject misspelled keys — a regression guard for the
+    v0.6-B addition.
+    """
+    chain = FallbackChain(name="x", providers=["p"])
+    assert chain.timeout_s is None
+    assert chain.append_system_prompt is None
+    with pytest.raises(ValidationError):
+        FallbackChain(name="x", providers=["p"], timeout_sec=10)  # type: ignore[call-arg]

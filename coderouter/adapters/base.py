@@ -95,6 +95,28 @@ class AdapterError(Exception):
         return f"[{self.provider}{sc}] {super().__str__()}"
 
 
+# v0.6-B: per-call overrides resolved from the active profile. The engine
+# builds one instance per request (since a profile is invariant across its
+# chain) and threads it through every adapter call on that chain. Adapters
+# use :meth:`effective_timeout` / :meth:`effective_append_system_prompt` to
+# pick the winning value (profile override > provider default).
+#
+# Design notes:
+#   - Both fields are Optional. ``None`` means "leave the provider default
+#     alone" — so ``ProviderCallOverrides()`` is a safe no-op default and
+#     legacy call sites that pass nothing keep their old behavior.
+#   - ``append_system_prompt=""`` is a meaningful explicit value: "for
+#     this profile, clear the provider's directive". The adapter must
+#     distinguish ``None`` (no override) from ``""`` (override-to-empty).
+class ProviderCallOverrides(BaseModel):
+    """Per-call provider overrides, resolved from the active profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    timeout_s: float | None = None
+    append_system_prompt: str | None = None
+
+
 class BaseAdapter(ABC):
     """Provider-specific adapter. Subclasses implement HTTP plumbing."""
 
@@ -105,14 +127,50 @@ class BaseAdapter(ABC):
     def name(self) -> str:
         return self.config.name
 
+    # ---- v0.6-B override resolution helpers -----------------------------
+    def effective_timeout(
+        self, overrides: ProviderCallOverrides | None
+    ) -> float:
+        """Profile override wins when set; else provider default."""
+        if overrides is not None and overrides.timeout_s is not None:
+            return overrides.timeout_s
+        return self.config.timeout_s
+
+    def effective_append_system_prompt(
+        self, overrides: ProviderCallOverrides | None
+    ) -> str | None:
+        """Profile override replaces provider directive when set.
+
+        ``None`` means no override → fall through to provider. ``""``
+        (explicit empty) means "clear the provider directive for this
+        profile" → return None so the caller skips injection entirely.
+        """
+        if overrides is not None and overrides.append_system_prompt is not None:
+            return overrides.append_system_prompt or None
+        return self.config.append_system_prompt
+
     @abstractmethod
     async def healthcheck(self) -> bool:
         """Lightweight check that the upstream is reachable. Return True if healthy."""
 
     @abstractmethod
-    async def generate(self, request: ChatRequest) -> ChatResponse:
-        """Non-streaming completion. Raise AdapterError on failure."""
+    async def generate(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> ChatResponse:
+        """Non-streaming completion. Raise AdapterError on failure.
+
+        ``overrides`` carries profile-level timeouts / directives (v0.6-B).
+        Legacy callers that pass nothing keep the pre-v0.6-B behavior.
+        """
 
     @abstractmethod
-    def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    def stream(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> AsyncIterator[StreamChunk]:
         """Streaming completion. Yield StreamChunks. Raise AdapterError on failure."""

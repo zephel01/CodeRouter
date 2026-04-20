@@ -6,6 +6,51 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.6-B] — 2026-04-20 (profile-level `timeout_s` / `append_system_prompt` override)
+
+**Theme: profile を「providers の並び + 制御パラメータ」に昇格。** v0.6-A で profile 選択そのものは CLI/env で差し替えられるようになったが、profile ごとに「こっちは local の低レイテンシー想定だから timeout は短く」「あっちの /no_think 付与は fast-profile だけ」といった**制御パラメータ差分は provider-level にしか存在しなかった**。v0.6-B で `FallbackChain` に optional `timeout_s` / `append_system_prompt` を足し、engine が profile 解決時に一度だけ `ProviderCallOverrides` を組み立てて chain 全体に配る。
+
+- Tests: 275 → **283** (+8、fallback engine 5 / openai_compat adapter 3)
+- 優先順位: profile 値 (設定あれば) → provider 値 → 既定値 — **置き換え** (append ではなく replace) セマンティクス。混乱を避けるため `timeout_s` と同じ挙動に揃えた
+- `retry_max` は adapter 層に既存の retry 機構が無いため scope 外 (§9.3 #4 の partial)
+
+### Added
+
+- **`coderouter/config/schemas.py`**
+  - `FallbackChain.timeout_s: float | None` (`ge=1.0, le=600.0`) — `ProviderConfig.timeout_s` と同じ範囲制約
+  - `FallbackChain.append_system_prompt: str | None` — profile 側で "" を明示すれば provider 側の directive を「この profile に限り無効化」できる特別セマンティクス
+- **`coderouter/adapters/base.py`**
+  - `ProviderCallOverrides` pydantic モデル (`extra="forbid"`, 全 field optional)。engine が profile 単位で 1 回組み立て、同 chain の全 adapter 呼び出しに配る
+  - `BaseAdapter.effective_timeout(overrides)` / `effective_append_system_prompt(overrides)` — override > provider default を決定する共通 helper
+  - `generate` / `stream` 抽象に `overrides: ProviderCallOverrides | None = None` kwarg を追加 (keyword-only、default None で backward-compat)
+- **`coderouter/adapters/openai_compat.py`** — `_prepare_messages` / `_payload` / `generate` / `stream` が `overrides` を受け取り、`httpx.AsyncClient(timeout=...)` と system message 注入の双方に反映
+- **`coderouter/adapters/anthropic_native.py`** — `generate_anthropic` / `stream_anthropic` / (reverse) `generate` / `stream` が `overrides` を受け取り、native passthrough 経路の httpx timeout に反映 (`append_system_prompt` は anthropic_native では元々非対応なので timeout のみ)
+- **`coderouter/routing/fallback.py`**
+  - `_resolve_profile_overrides(profile_name)` helper — profile から `ProviderCallOverrides` を 1 回だけ組み立て
+  - `generate` / `stream` / `generate_anthropic` / `stream_anthropic` の 4 entry point すべてで解決 → adapter 呼び出しに `overrides=` を渡す
+- **`tests/test_fallback.py`** (+5) — timeout override が adapter に届く / unset 時は provider 値に落ちる / append_system_prompt の置き換え / `""` で clear する / FallbackChain schema sanity
+- **`tests/test_openai_compat.py`** (+3) — `ProviderCallOverrides(append_system_prompt="/x")` が outbound に出る / `""` で system 注入がスキップされる / `ProviderCallOverrides()` は `None` と観測的に等価 (回帰ガード)
+
+### Changed
+
+- **`tests/test_fallback.py` / `tests/test_fallback_anthropic.py`** — fake adapter 群の `generate` / `stream` / `generate_anthropic` / `stream_anthropic` 署名に `overrides` kwarg を追加。engine が常に `overrides=` を渡すようになったため、kwarg を受け取れない fake は `TypeError` で落ちる
+
+### Design notes
+
+- **置き換え vs 追加.** `append_system_prompt` は「文字列なので追加が自然」「いや provider と profile で二重に刺さると混乱する」の両論あったが、`timeout_s` がスカラー制約で「置き換え」しかありえない以上、同じ field family に属する `append_system_prompt` も置き換えに揃えた方が意味論がシンプル。profile 側で両方刺したいユースケースが出てきたら v0.6+ で `append_mode: "replace" | "concat"` を別フィールドとして足せる
+- **"" で clear する非対称性.** pydantic の field で `None` と `""` は区別できるので、profile が「この profile だけ provider directive を無効化したい」をちゃんと表現できるように、`effective_append_system_prompt` 内で `overrides.append_system_prompt == ""` → `None` を返す特別扱いを入れた。`None` = "override 無し" と意味が被らないよう、helper のコメントで明示
+- **override resolution の位置.** engine が「chain ごとに 1 回 override を組み立てて全 adapter 呼び出しに配る」方式を採った。adapter 側で per-call lookup すると (a) config 依存が adapter まで広がる、(b) profile 名を adapter に渡すことになる、の両方を避けられる。profile は immutable per-request なので 1 回解決で十分
+- **abstract signature 破壊.** `BaseAdapter.generate` に kwarg を追加したため、既存の fake adapter (tests) は署名を合わせる必要あり。ただし (i) default が `None`、(ii) keyword-only、の 2 条件を満たすので **本体 adapter を実装するサードパーティ (まだ存在しないが) は影響ゼロ**。tests でしか気付かない破壊
+- **retry_max の scope 外.** §9.3 #4 は本来 `retry_max` も含んでいたが、adapter 層に現時点で「1 provider 内での retry」概念が無い (retry 相当は fallback chain そのもの)。この mechanism を先に入れると「provider 内 retry → それでも駄目なら fallback」の挙動分岐が発生し、midstream guard との相互作用が非自明になる。v0.6-D 以降で設計込みで再検討
+
+### Follow-ons
+
+- **v0.6-C**: `ALLOW_PAID` 宣言的 gate の強化 — startup log に paid provider 列挙 + `chain-paid-gate-blocked` structured log (§9.3 残 #3)
+- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
+- **後日**: `retry_max` (profile + provider の階層) を含む adapter-level retry 機構。midstream guard との整合性が設計のキモ
+
+---
+
 ## [v0.6-A] — 2026-04-20 (`--mode` CLI + CODEROUTER_MODE env + startup validation)
 
 **Theme: サーバー起動時点の profile 選択を 1 級市民に昇格。** v0.5 までは「YAML の `default_profile` を書き換える」か「クライアントごとに header を毎回投げる」の二択だった。v0.6-A で `--mode <profile>` CLI オプション + `CODEROUTER_MODE` 環境変数を追加し、サーバー単位 / プロセス単位の軽い override を可能に。併せて `default_profile` が profiles リストに存在しない場合は起動時に fast-fail するように (従来は最初のリクエスト時に 500)。

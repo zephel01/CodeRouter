@@ -41,6 +41,7 @@ from coderouter.adapters.base import (
     BaseAdapter,
     ChatRequest,
     ChatResponse,
+    ProviderCallOverrides,
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
@@ -166,7 +167,12 @@ class AnthropicAdapter(BaseAdapter):
         except httpx.HTTPError:
             return False
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> ChatResponse:
         """OpenAI-shaped generate (v0.4-A): reverse-translate → native call → back.
 
         ChatRequest is converted to AnthropicRequest via
@@ -177,7 +183,7 @@ class AnthropicAdapter(BaseAdapter):
         on both sides.
         """
         anth_req = to_anthropic_request(request)
-        anth_resp = await self.generate_anthropic(anth_req)
+        anth_resp = await self.generate_anthropic(anth_req, overrides=overrides)
         chat_resp = to_chat_response(anth_resp)
         # generate_anthropic stamps coderouter_provider on the Anthropic
         # response; to_chat_response forwards it. Re-assert for safety
@@ -187,7 +193,10 @@ class AnthropicAdapter(BaseAdapter):
         return chat_resp
 
     async def stream(  # type: ignore[override]
-        self, request: ChatRequest
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """OpenAI-shaped stream (v0.4-A): reverse-translate → native SSE → chunks.
 
@@ -205,7 +214,7 @@ class AnthropicAdapter(BaseAdapter):
               AdapterError(retryable=False), same treatment as above.
         """
         anth_req = to_anthropic_request(request)
-        events = self.stream_anthropic(anth_req)
+        events = self.stream_anthropic(anth_req, overrides=overrides)
         async for chunk in stream_anthropic_to_chat_chunks(
             events, provider_name=self.name
         ):
@@ -216,14 +225,18 @@ class AnthropicAdapter(BaseAdapter):
     # ------------------------------------------------------------------
 
     async def generate_anthropic(
-        self, request: AnthropicRequest
+        self,
+        request: AnthropicRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
     ) -> AnthropicResponse:
         """Non-streaming passthrough: AnthropicRequest → AnthropicResponse."""
         url = self._url()
         payload = self._payload(request, stream=False)
+        timeout = self.effective_timeout(overrides)
 
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(
                     url, json=payload, headers=self._headers(request)
                 )
@@ -260,7 +273,10 @@ class AnthropicAdapter(BaseAdapter):
         return AnthropicResponse.model_validate(data)
 
     async def stream_anthropic(
-        self, request: AnthropicRequest
+        self,
+        request: AnthropicRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
     ) -> AsyncIterator[AnthropicStreamEvent]:
         """Streaming passthrough: Anthropic SSE → AnthropicStreamEvent iterator.
 
@@ -274,9 +290,10 @@ class AnthropicAdapter(BaseAdapter):
         """
         url = self._url()
         payload = self._payload(request, stream=True)
+        timeout = self.effective_timeout(overrides)
 
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
                     "POST", url, json=payload, headers=self._headers(request)
                 ) as resp:

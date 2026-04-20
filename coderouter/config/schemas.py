@@ -101,7 +101,17 @@ class ProviderConfig(BaseModel):
 
 
 class FallbackChain(BaseModel):
-    """An ordered list of provider names to try in sequence."""
+    """An ordered list of provider names to try in sequence.
+
+    v0.6-B: optional profile-level overrides for ``timeout_s`` and
+    ``append_system_prompt``. When set, these REPLACE the provider's own
+    values for calls routed through this profile — "replace" rather than
+    "append" semantics keeps debugging predictable and matches how
+    ``timeout_s`` (a scalar limit) naturally behaves. Unset fields leave
+    the provider's own defaults in effect. The ``retry_max`` field is
+    deferred to a later minor until a retry mechanism exists at the
+    adapter layer (§9.3 #4 partial).
+    """
 
     model_config = ConfigDict(extra="forbid")
 
@@ -110,6 +120,26 @@ class FallbackChain(BaseModel):
         ...,
         min_length=1,
         description="Provider names in fallback order. First success wins.",
+    )
+    timeout_s: float | None = Field(
+        default=None,
+        ge=1.0,
+        le=600.0,
+        description=(
+            "v0.6-B: profile-level HTTP timeout override (seconds). When "
+            "set, replaces ``ProviderConfig.timeout_s`` for every call "
+            "routed through this profile. Unset = provider default."
+        ),
+    )
+    append_system_prompt: str | None = Field(
+        default=None,
+        description=(
+            "v0.6-B: profile-level override for the provider's "
+            "``append_system_prompt`` directive. When set, REPLACES the "
+            "provider's directive for this profile (not appended). Pass "
+            "an empty string to explicitly clear the provider directive "
+            "for this profile."
+        ),
     )
 
 

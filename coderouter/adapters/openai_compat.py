@@ -25,6 +25,7 @@ from coderouter.adapters.base import (
     BaseAdapter,
     ChatRequest,
     ChatResponse,
+    ProviderCallOverrides,
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
@@ -90,10 +91,20 @@ class OpenAICompatAdapter(BaseAdapter):
             headers["Authorization"] = f"Bearer {api_key}"
         return headers
 
-    def _prepare_messages(self, request: ChatRequest) -> list[dict[str, Any]]:
-        """Serialize messages and inject append_system_prompt if configured."""
+    def _prepare_messages(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> list[dict[str, Any]]:
+        """Serialize messages and inject append_system_prompt if configured.
+
+        v0.6-B: profile-level ``append_system_prompt`` (carried in
+        ``overrides``) REPLACES the provider's own directive. An explicit
+        empty string in the profile clears the provider directive.
+        """
         messages = [m.model_dump(exclude_none=True) for m in request.messages]
-        directive = self.config.append_system_prompt
+        directive = self.effective_append_system_prompt(overrides)
         if not directive:
             return messages
 
@@ -112,7 +123,13 @@ class OpenAICompatAdapter(BaseAdapter):
 
         return [{"role": "system", "content": directive}, *messages]
 
-    def _payload(self, request: ChatRequest, *, stream: bool) -> dict[str, Any]:
+    def _payload(
+        self,
+        request: ChatRequest,
+        *,
+        stream: bool,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> dict[str, Any]:
         # CodeRouter routing is decided by `profile`, NOT by `request.model`.
         # The OpenAI API requires a `model` field in the body, but here it's
         # always set from the provider config — clients that pass arbitrary
@@ -125,7 +142,7 @@ class OpenAICompatAdapter(BaseAdapter):
         body.update(
             {
                 "model": self.config.model,
-                "messages": self._prepare_messages(request),
+                "messages": self._prepare_messages(request, overrides=overrides),
                 "stream": stream,
             }
         )
@@ -159,11 +176,17 @@ class OpenAICompatAdapter(BaseAdapter):
         except httpx.HTTPError:
             return False
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> ChatResponse:
         url = self._url()
-        payload = self._payload(request, stream=False)
+        payload = self._payload(request, stream=False, overrides=overrides)
+        timeout = self.effective_timeout(overrides)
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 resp = await client.post(url, json=payload, headers=self._headers())
         except httpx.TimeoutException as exc:
             raise AdapterError(
@@ -206,9 +229,15 @@ class OpenAICompatAdapter(BaseAdapter):
         data.setdefault("object", "chat.completion")
         return ChatResponse(coderouter_provider=self.name, **data)
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream(
+        self,
+        request: ChatRequest,
+        *,
+        overrides: ProviderCallOverrides | None = None,
+    ) -> AsyncIterator[StreamChunk]:
         url = self._url()
-        payload = self._payload(request, stream=True)
+        payload = self._payload(request, stream=True, overrides=overrides)
+        timeout = self.effective_timeout(overrides)
         # v0.5-C: one-shot dedupe flag for the `reasoning` strip log. We
         # log once per stream request on the first chunk that carried the
         # field, not per chunk — otherwise a long reasoning track would
@@ -216,7 +245,7 @@ class OpenAICompatAdapter(BaseAdapter):
         strip_reasoning = not self.config.capabilities.reasoning_passthrough
         reasoning_logged = False
         try:
-            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+            async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
                     "POST", url, json=payload, headers=self._headers()
                 ) as resp:

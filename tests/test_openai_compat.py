@@ -8,7 +8,7 @@ import httpx
 import pytest
 from pytest_httpx import HTTPXMock
 
-from coderouter.adapters.base import ChatRequest, Message
+from coderouter.adapters.base import ChatRequest, Message, ProviderCallOverrides
 from coderouter.adapters.openai_compat import OpenAICompatAdapter
 from coderouter.config.schemas import Capabilities, ProviderConfig
 
@@ -355,3 +355,157 @@ async def test_streaming_respects_extra_body_stream_options_override(
     _ = [c async for c in adapter.stream(req)]
 
     assert captured_body["stream_options"] == {"include_usage": False}
+
+
+# ----------------------------------------------------------------------
+# v0.6-B: profile-level overrides consumed by the adapter
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_overrides_append_system_prompt_replaces_provider(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """ProviderCallOverrides.append_system_prompt wins over the provider's.
+
+    Profile-level directive was set to "/profile-mode" and the provider
+    had its own "/no_think" — the profile value must be the one injected
+    into the outbound message list, not the provider's.
+    """
+    captured: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "x", "object": "chat.completion", "created": 0,
+                "model": "qwen3.5:4b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    httpx_mock.add_callback(
+        _capture, url="http://localhost:11434/v1/chat/completions", method="POST"
+    )
+
+    provider = ProviderConfig(
+        name="qwen3",
+        base_url="http://localhost:11434/v1",
+        model="qwen3.5:4b",
+        append_system_prompt="/no_think",
+    )
+    req = ChatRequest(messages=[Message(role="user", content="hi")])
+
+    await OpenAICompatAdapter(provider).generate(
+        req,
+        overrides=ProviderCallOverrides(append_system_prompt="/profile-mode"),
+    )
+
+    messages = captured["messages"]
+    assert isinstance(messages, list)
+    assert messages[0] == {"role": "system", "content": "/profile-mode"}
+
+
+@pytest.mark.asyncio
+async def test_overrides_append_empty_string_skips_injection(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Profile passing append_system_prompt="" clears the provider directive.
+
+    The provider declares "/no_think" but the profile wants to run
+    without any appended directive for this route. The outbound message
+    list must NOT contain a system message carrying either string.
+    """
+    captured: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "x", "object": "chat.completion", "created": 0,
+                "model": "qwen3.5:4b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    httpx_mock.add_callback(
+        _capture, url="http://localhost:11434/v1/chat/completions", method="POST"
+    )
+
+    provider = ProviderConfig(
+        name="qwen3",
+        base_url="http://localhost:11434/v1",
+        model="qwen3.5:4b",
+        append_system_prompt="/no_think",
+    )
+    req = ChatRequest(messages=[Message(role="user", content="hi")])
+    await OpenAICompatAdapter(provider).generate(
+        req, overrides=ProviderCallOverrides(append_system_prompt="")
+    )
+
+    messages = captured["messages"]
+    # Just the original user message — no system message injected.
+    assert messages == [{"role": "user", "content": "hi"}]
+
+
+@pytest.mark.asyncio
+async def test_overrides_none_preserves_provider_append_system_prompt(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Baseline: overrides.append_system_prompt=None leaves provider's intact.
+
+    Ensures the override plumbing does not accidentally short-circuit the
+    pre-v0.6-B behavior when no profile override is set — overrides=None
+    and overrides=ProviderCallOverrides() must be observationally
+    identical.
+    """
+    captured: dict[str, object] = {}
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "x", "object": "chat.completion", "created": 0,
+                "model": "qwen3.5:4b",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+            },
+        )
+
+    httpx_mock.add_callback(
+        _capture, url="http://localhost:11434/v1/chat/completions", method="POST"
+    )
+
+    provider = ProviderConfig(
+        name="qwen3",
+        base_url="http://localhost:11434/v1",
+        model="qwen3.5:4b",
+        append_system_prompt="/no_think",
+    )
+    req = ChatRequest(messages=[Message(role="user", content="hi")])
+    await OpenAICompatAdapter(provider).generate(
+        req, overrides=ProviderCallOverrides()
+    )
+
+    messages = captured["messages"]
+    assert messages[0] == {"role": "system", "content": "/no_think"}
