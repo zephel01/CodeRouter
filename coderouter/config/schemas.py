@@ -34,6 +34,14 @@ class Capabilities(BaseModel):
     # model-name heuristic (see coderouter/routing/capability.py). Distinct
     # from `reasoning_control` below, which is the v1.0+ abstract interface.
     thinking: bool = False
+    # v0.5-C: opt out of the openai_compat adapter's passive `reasoning`
+    # field strip. By default (False), the adapter removes non-standard
+    # `message.reasoning` / `delta.reasoning` fields emitted by some
+    # OpenRouter free-tier models (gpt-oss-120b:free confirmed 2026-04)
+    # because strict OpenAI clients reject the unknown key. Set True when
+    # you explicitly want the raw reasoning text to flow to the client
+    # (e.g. CodeRouter is fronting a reasoning-aware downstream).
+    reasoning_passthrough: bool = False
     # v1.0+ fields, declared early so providers.yaml can future-proof
     reasoning_control: Literal["none", "openai", "anthropic", "provider_specific"] = "none"
     mcp: Literal["none", "anthropic", "provider_specific"] = "none"

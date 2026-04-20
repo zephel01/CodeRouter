@@ -28,6 +28,9 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
+from coderouter.logging import get_logger
+
+logger = get_logger(__name__)
 
 # httpx status codes that mean "fall through to next provider"
 # - 404: upstream doesn't have the requested model — next provider has a
@@ -37,6 +40,41 @@ from coderouter.config.loader import resolve_api_key
 # - 429: rate limit
 # - 5xx: upstream errors
 _RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
+
+
+def _strip_reasoning_field(
+    choices: list[dict[str, Any]] | None, *, delta_key: bool
+) -> bool:
+    """Remove non-standard ``reasoning`` keys from a choices list, in place.
+
+    v0.5-C: Some OpenRouter free models (confirmed on
+    ``openai/gpt-oss-120b:free`` 2026-04-20) return a ``reasoning`` field
+    alongside ``content`` on each choice. The field is not in the OpenAI
+    Chat Completions spec and strict clients can reject the unknown key.
+    We strip it at the adapter boundary so downstream layers never see it.
+
+    Args:
+        choices: The ``choices`` list from the response body or stream chunk.
+            When None (or empty) the function is a no-op.
+        delta_key: ``True`` for stream chunks (look in ``choice["delta"]``),
+            ``False`` for non-streaming responses (look in ``choice["message"]``).
+
+    Returns:
+        True iff at least one ``reasoning`` key was removed. Callers use
+        this to decide whether to emit a one-shot log line.
+    """
+    if not choices:
+        return False
+    stripped = False
+    inner_key = "delta" if delta_key else "message"
+    for choice in choices:
+        if not isinstance(choice, dict):
+            continue
+        inner = choice.get(inner_key)
+        if isinstance(inner, dict) and "reasoning" in inner:
+            inner.pop("reasoning", None)
+            stripped = True
+    return stripped
 
 
 class OpenAICompatAdapter(BaseAdapter):
@@ -153,6 +191,19 @@ class OpenAICompatAdapter(BaseAdapter):
                 retryable=False,
             ) from exc
 
+        # v0.5-C: passive strip of non-standard `reasoning` field on choices.
+        # No-op when the provider opted into passthrough.
+        if not self.config.capabilities.reasoning_passthrough:
+            if _strip_reasoning_field(data.get("choices"), delta_key=False):
+                logger.info(
+                    "capability-degraded",
+                    extra={
+                        "provider": self.name,
+                        "dropped": ["reasoning"],
+                        "reason": "non-standard-field",
+                    },
+                )
+
         # Tag the response with which provider answered
         data.setdefault("object", "chat.completion")
         return ChatResponse(coderouter_provider=self.name, **data)
@@ -160,6 +211,12 @@ class OpenAICompatAdapter(BaseAdapter):
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
         url = self._url()
         payload = self._payload(request, stream=True)
+        # v0.5-C: one-shot dedupe flag for the `reasoning` strip log. We
+        # log once per stream request on the first chunk that carried the
+        # field, not per chunk — otherwise a long reasoning track would
+        # produce dozens of duplicate log lines.
+        strip_reasoning = not self.config.capabilities.reasoning_passthrough
+        reasoning_logged = False
         try:
             async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
                 async with client.stream(
@@ -188,6 +245,20 @@ class OpenAICompatAdapter(BaseAdapter):
                             payload_obj = json.loads(data_str)
                         except json.JSONDecodeError:
                             continue  # skip malformed chunks rather than abort
+                        if strip_reasoning:
+                            stripped = _strip_reasoning_field(
+                                payload_obj.get("choices"), delta_key=True
+                            )
+                            if stripped and not reasoning_logged:
+                                logger.info(
+                                    "capability-degraded",
+                                    extra={
+                                        "provider": self.name,
+                                        "dropped": ["reasoning"],
+                                        "reason": "non-standard-field",
+                                    },
+                                )
+                                reasoning_logged = True
                         yield StreamChunk(**payload_obj)
         except httpx.TimeoutException as exc:
             raise AdapterError(

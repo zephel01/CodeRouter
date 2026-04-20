@@ -6,6 +6,78 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.5-C] — 2026-04-20
+
+### OpenRouter `reasoning` field passive strip
+
+v0.4-B の棚卸で実機検出した非標準フィールドの適正処理。OpenRouter の一部
+free-tier モデル (実機確認: `openai/gpt-oss-120b:free` 2026-04-20) が OpenAI
+Chat Completions spec 非準拠の `reasoning` フィールドを response choice の
+`message` / `delta` に同梱してくる。
+
+Spec 外の key なので strict downstream (openai SDK の一部 typed class, 厳格な
+validator) が TypeError を出す可能性があり、v0.4 retro §Follow-ons で「passive
+strip + log を将来入れる」と括って保留していた。v0.5-C で adapter 層の出口に
+1 枚噛ませて解決する。
+
+#### Added
+
+- **`coderouter/config/schemas.py`**
+  - `Capabilities.reasoning_passthrough: bool = False` — opt-out flag。
+    `true` なら strip もログも skip (CodeRouter を reasoning-aware な
+    downstream に中継する時の escape hatch)
+- **`coderouter/adapters/openai_compat.py`**
+  - `_strip_reasoning_field(choices, *, delta_key)` — 純粋関数。
+    `choices[*].message.reasoning` (non-stream) / `choices[*].delta.reasoning`
+    (stream) を in-place で除去。戻り値は「1 件でも除去したか」の bool
+    (one-shot ログ判定用)。None / 空 list / 非 dict choice は defensive
+    にスキップ
+
+#### Changed
+
+- **`coderouter/adapters/openai_compat.py`**
+  - `generate()`: response JSON decode 直後、`ChatResponse` 構築前に
+    `_strip_reasoning_field(..., delta_key=False)` を適用。strip が発生
+    したら構造化ログ `capability-degraded` (`provider` / `dropped:
+    ["reasoning"]` / `reason: "non-standard-field"`)
+  - `stream()`: 各 chunk を yield する直前に同じ strip を適用。log は
+    stream 中 **1 回だけ** (local `reasoning_logged` flag) で chunk ごとの
+    連投を防ぐ。長い reasoning track でログが溢れない
+  - v0.5-A (`provider-does-not-support`) / v0.5-B (`translation-lossy`) と
+    同じ `capability-degraded` メッセージ名 + `reason` 識別で grep しやすい
+
+#### Tests
+
+- **+15 件** (合計 **225 件 green**, 210 → 225)
+  - `test_reasoning_strip.py` (新規):
+    - unit: `_strip_reasoning_field` の message / delta 剥離, no-op 挙動
+      (field 欠落 / None / empty list / 非 dict choice / wrong delta_key),
+      multi-choice
+    - non-streaming: strip + `capability-degraded` ログ発火 / reasoning
+      欠落時は無発火 / `reasoning_passthrough: true` で保持 + 無発火 /
+      content 非破壊
+    - streaming: 全 delta から strip + ログは 1 回のみ / 欠落時は無発火 /
+      passthrough で保持 + 無発火 / `delta.content` 非破壊
+
+#### Notes
+
+- **既存挙動への影響ゼロ**: `reasoning` を元々出さない provider (llama.cpp /
+  Ollama / OpenRouter の従来モデル / Anthropic 経由) は strip 判定が偽で
+  終わるため、payload も log も変わらない
+- **native anthropic adapter** は対象外。Anthropic wire の response には
+  `reasoning` に相当するフィールドが存在しないため、gate は OpenAI-shape の
+  adapter だけで完結する
+- **実機 verify**: v0.4-B の棚卸で `openai/gpt-oss-120b:free` が返す生
+  response を確認済み (retro §3.2 参照)。v0.5-C はその再現を httpx_mock で
+  テストに落としているので、今後 OpenRouter 側が同じ挙動を続けても継続的に
+  担保される
+- **運用上の使い方**: `reason: "non-standard-field"` で grep すると「どの
+  provider が非標準キーを送ってきたか」が構造化ログから一括で取れる。新
+  モデルが追加されて reasoning 以外の key が出始めたら同じ関数を拡張する
+  想定 (今のところは reasoning だけなのでシンプルに)
+
+---
+
 ## [v0.5-B] — 2026-04-20
 
 ### cache_control observability
