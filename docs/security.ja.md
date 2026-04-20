@@ -101,7 +101,7 @@ CodeRouter は既定で `127.0.0.1` にバインドします (`coderouter serve 
 uv sync --frozen --extra dev
 uv run ruff check .
 uv run pytest -v
-uv run --with pip-audit pip-audit --strict
+uv run --with pip-audit pip-audit --strict --skip-editable
 grep -RnE "^\s*(import|from)\s+(anthropic|openai|litellm|langchain)" coderouter/ && echo FAIL || echo OK
 ```
 

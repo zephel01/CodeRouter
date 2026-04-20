@@ -118,7 +118,9 @@ jobs:
       - name: pip-audit
         # Audits the installed environment. Because the install step
         # used `uv sync --frozen`, this is exactly the uv.lock pin set.
-        run: uv run --with pip-audit pip-audit --strict
+        # `--skip-editable` excludes the project itself (installed
+        # editable by `uv sync`), which is not published on PyPI.
+        run: uv run --with pip-audit pip-audit --strict --skip-editable
 
       - name: OSV-Scanner (lockfile mode)
         uses: google/osv-scanner-action/osv-scanner-action@v1.9.1

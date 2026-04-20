@@ -7,7 +7,8 @@
 
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href=""><img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="status"></a>
+  <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>

@@ -158,7 +158,7 @@ project, the explicit choice is to let them be local concerns.
 uv sync --frozen --extra dev
 uv run ruff check .
 uv run pytest -v
-uv run --with pip-audit pip-audit --strict
+uv run --with pip-audit pip-audit --strict --skip-editable
 grep -RnE "^\s*(import|from)\s+(anthropic|openai|litellm|langchain)" coderouter/ && echo FAIL || echo OK
 ```
 
