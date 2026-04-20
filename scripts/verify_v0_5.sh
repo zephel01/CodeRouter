@@ -1,15 +1,19 @@
 #!/usr/bin/env bash
 # scripts/verify_v0_5.sh — v0.5 real-machine re-verify runner.
 #
-# Fires 3 HTTP requests against a running CodeRouter, each of which should
+# Fires 4 HTTP requests against a running CodeRouter, each of which should
 # trigger a `capability-degraded` log line with a distinct `reason`:
 #
-#   A) /v1/messages  + `thinking` block     → reason: provider-does-not-support
-#                                               (v0.5-A, request-side strip + log)
-#   B) /v1/messages  + `cache_control`      → reason: translation-lossy
-#                                               (v0.5-B, observability-only)
-#   C) /v1/chat/completions (gpt-oss:free)  → reason: non-standard-field
-#                                               (v0.5-C, response-side strip)
+#   A) /v1/messages  + `thinking` block      → reason: provider-does-not-support
+#                                                (v0.5-A, request-side strip + log)
+#   B) /v1/messages  + `cache_control`       → reason: translation-lossy
+#                                                (v0.5-B, observability-only)
+#   C) /v1/chat/completions (gpt-oss:free)   → reason: non-standard-field
+#                                                (v0.5-C, response-side strip; non-streaming)
+#   D) /v1/chat/completions (streaming)      → reason: non-standard-field EXACTLY ONCE
+#                                                (v0.5-C "log once per stream" contract;
+#                                                 added v0.5.1 to close the live gap that
+#                                                 unit tests alone covered)
 #
 # Prereqs:
 #   1. `OPENROUTER_API_KEY` set in the server's env (gpt-oss:free is used).
@@ -181,6 +185,126 @@ lookup_scenario() {
 }
 
 # ---------------------------------------------------------------------------
+# Streaming scenario runner (v0.5.1 — for the D-* class).
+#
+# Three extra assertions on top of run_scenario:
+#   1. HTTP 2xx (inherited).
+#   2. The `capability-degraded` line for this reason fires EXACTLY ONCE
+#      over the stream, not once per chunk. This is v0.5-C's dedup flag
+#      (`reasoning_logged`) — pin it live.
+#   3. No SSE chunk's `choices[*].delta` contains the stripped field
+#      (`reasoning` for the D-reasoning-stream scenario).
+#
+# The response body is SSE text (not JSON) so we save it to `response.sse`
+# rather than `response.json`. The curl call uses `-N` (no buffer) so any
+# chunking nuance is surfaced verbatim.
+# ---------------------------------------------------------------------------
+run_scenario_streaming() {
+  local name="$1"            # e.g. D-reasoning-stream
+  local endpoint="$2"
+  local body="$3"
+  local expect_reason="$4"
+  local stripped_field="$5"  # field name that must not appear in any delta
+  local dir="$OUT_DIR/$name"
+
+  mkdir -p "$dir"
+  echo "$body" > "$dir/request.json"
+
+  local log_pos_before
+  log_pos_before=$(mark_log_pos)
+
+  local http_status
+  http_status=$(curl -sS -N -o "$dir/response.sse" -w "%{http_code}" \
+    -X POST "${BASE_URL}${endpoint}" \
+    -H "Content-Type: application/json" \
+    -H "x-coderouter-profile: $PROFILE" \
+    --data-binary @"$dir/request.json" 2>"$dir/curl-stderr.txt" || echo "000")
+
+  sleep 0.5  # allow log handler flush
+
+  new_log_lines "$log_pos_before" > "$dir/server-log-slice.jsonl"
+
+  local cap_lines
+  cap_lines=$(filter_capability_lines < "$dir/server-log-slice.jsonl")
+  echo "$cap_lines" > "$dir/capability-degraded.jsonl"
+
+  # Count matches of expected reason — must be exactly 1 (dedup contract).
+  local reason_count
+  if [ -n "$cap_lines" ]; then
+    reason_count=$(echo "$cap_lines" | grep -c "\"reason\":[[:space:]]*\"$expect_reason\"" || true)
+  else
+    reason_count=0
+  fi
+
+  # Parse the SSE body: confirm no chunk's delta carries the stripped field.
+  local delta_clean=true
+  if ! python3 -c "
+import json, sys
+path, field = sys.argv[1], sys.argv[2]
+try:
+    lines = open(path).read().splitlines()
+except FileNotFoundError:
+    sys.exit(3)
+for line in lines:
+    line = line.strip()
+    if not line.startswith('data:'):
+        continue
+    payload = line[len('data:'):].strip()
+    if not payload or payload == '[DONE]':
+        continue
+    try:
+        obj = json.loads(payload)
+    except Exception:
+        continue
+    for ch in (obj.get('choices') or []):
+        delta = ch.get('delta') or {}
+        if field in delta:
+            print(f'FAIL: delta[{field!r}] present in a chunk: {payload[:120]}')
+            sys.exit(1)
+sys.exit(0)
+" "$dir/response.sse" "$stripped_field" >> "$dir/sse-assert.log" 2>&1; then
+    delta_clean=false
+  fi
+
+  # Overall pass
+  local pass=true
+  [[ "$http_status" =~ ^2 ]] || pass=false
+  [ "$reason_count" = "1" ] || pass=false
+  $delta_clean || pass=false
+
+  local result
+  if $pass; then result=PASS; else result=FAIL; overall_pass=false; fi
+
+  SCENARIO_NAMES+=("$name")
+  SCENARIO_RESULTS+=("$result")
+  SCENARIO_STATUSES+=("$http_status")
+  SCENARIO_CAP_LINES+=("$cap_lines")
+  SCENARIO_EXPECTED+=("$expect_reason (exactly 1, stream)")
+
+  # Pretty print
+  echo "=============================================="
+  echo " SCENARIO: $name (streaming)"
+  echo "   endpoint:      $endpoint"
+  echo "   profile:       $PROFILE"
+  echo "   expect reason: $expect_reason exactly once over stream"
+  echo "   HTTP status:   $http_status"
+  echo "   reason count:  $reason_count  (expect 1)"
+  echo "   delta[$stripped_field] absent: $delta_clean"
+  echo "   result:        $result"
+  echo "----------------------------------------------"
+  echo "capability-degraded lines observed:"
+  if [ -n "$cap_lines" ]; then
+    echo "$cap_lines" | sed 's/^/   /'
+  else
+    echo "   (none)"
+  fi
+  echo "----------------------------------------------"
+  echo "Artifacts under $dir :"
+  echo "   request / response.sse / server-log-slice / capability-degraded / sse-assert.log"
+  echo ""
+}
+
+# ---------------------------------------------------------------------------
 # Scenario bodies (generated via python for robust JSON)
 # ---------------------------------------------------------------------------
 
@@ -218,6 +342,21 @@ print(json.dumps({
 }))
 ')
 
+D_BODY=$(python3 -c '
+import json
+# Streaming variant of C — exercises v0.5-C "log once per stream" dedup
+# contract in addition to the strip itself. Same model / prompt shape so
+# the only axis that differs vs C is `stream: true`.
+print(json.dumps({
+    "model": "openai/gpt-oss-120b:free",
+    "max_tokens": 128,
+    "stream": True,
+    "messages": [
+        {"role": "user", "content": "Think briefly, then answer: What is 3 * 4?"}
+    ],
+}))
+')
+
 # ---------------------------------------------------------------------------
 # Run scenarios
 # ---------------------------------------------------------------------------
@@ -225,6 +364,8 @@ print(json.dumps({
 run_scenario "A-thinking"       "/v1/messages"         "$A_BODY" "provider-does-not-support"
 run_scenario "B-cache-control"  "/v1/messages"         "$B_BODY" "translation-lossy"
 run_scenario "C-reasoning-strip" "/v1/chat/completions" "$C_BODY" "non-standard-field"
+run_scenario_streaming "D-reasoning-stream" "/v1/chat/completions" "$D_BODY" \
+  "non-standard-field" "reasoning"
 
 # ---------------------------------------------------------------------------
 # Additional assertion for scenario C: response MUST NOT carry `reasoning`
@@ -284,8 +425,9 @@ REPORT="$OUT_DIR/report.md"
   echo "| A-thinking | v0.5-A | \`/v1/messages\` + \`thinking\` | \`provider-does-not-support\` | $(lookup_scenario status A-thinking) | $(lookup_scenario result A-thinking) |"
   echo "| B-cache-control | v0.5-B | \`/v1/messages\` + \`cache_control\` | \`translation-lossy\` | $(lookup_scenario status B-cache-control) | $(lookup_scenario result B-cache-control) |"
   echo "| C-reasoning-strip | v0.5-C | \`/v1/chat/completions\` | \`non-standard-field\` | $(lookup_scenario status C-reasoning-strip) | $(lookup_scenario result C-reasoning-strip) |"
+  echo "| D-reasoning-stream | v0.5-C (stream) | \`/v1/chat/completions\` + \`stream:true\` | \`non-standard-field\` exactly once | $(lookup_scenario status D-reasoning-stream) | $(lookup_scenario result D-reasoning-stream) |"
   echo ""
-  for name in A-thinking B-cache-control C-reasoning-strip; do
+  for name in A-thinking B-cache-control C-reasoning-strip D-reasoning-stream; do
     echo "### ${name} — $(lookup_scenario result "$name")"
     echo ""
     echo "HTTP \`$(lookup_scenario status "$name")\`. Observed \`capability-degraded\` lines:"

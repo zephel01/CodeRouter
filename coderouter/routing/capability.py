@@ -33,7 +33,27 @@ import re
 from typing import Final
 
 from coderouter.config.schemas import ProviderConfig
+from coderouter.logging import (
+    CapabilityDegradedPayload,
+    CapabilityDegradedReason,
+    log_capability_degraded,
+)
 from coderouter.translation.anthropic import AnthropicRequest
+
+# Re-export the v0.5.1 log-shape contract so consumers that already think
+# of it as a capability concept can import it from here. The canonical
+# home is ``coderouter.logging`` — see that module's docstring for why
+# (short version: avoids a routing ↔ adapter import cycle).
+__all__ = [
+    "CapabilityDegradedPayload",
+    "CapabilityDegradedReason",
+    "anthropic_request_has_cache_control",
+    "anthropic_request_requires_thinking",
+    "log_capability_degraded",
+    "provider_supports_cache_control",
+    "provider_supports_thinking",
+    "strip_thinking",
+]
 
 # ---------------------------------------------------------------------------
 # Heuristic: model families known to accept Anthropic's `thinking` body field.

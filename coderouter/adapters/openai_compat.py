@@ -28,7 +28,7 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
-from coderouter.logging import get_logger
+from coderouter.logging import get_logger, log_capability_degraded
 
 logger = get_logger(__name__)
 
@@ -195,13 +195,11 @@ class OpenAICompatAdapter(BaseAdapter):
         # No-op when the provider opted into passthrough.
         if not self.config.capabilities.reasoning_passthrough:
             if _strip_reasoning_field(data.get("choices"), delta_key=False):
-                logger.info(
-                    "capability-degraded",
-                    extra={
-                        "provider": self.name,
-                        "dropped": ["reasoning"],
-                        "reason": "non-standard-field",
-                    },
+                log_capability_degraded(
+                    logger,
+                    provider=self.name,
+                    dropped=["reasoning"],
+                    reason="non-standard-field",
                 )
 
         # Tag the response with which provider answered
@@ -250,13 +248,11 @@ class OpenAICompatAdapter(BaseAdapter):
                                 payload_obj.get("choices"), delta_key=True
                             )
                             if stripped and not reasoning_logged:
-                                logger.info(
-                                    "capability-degraded",
-                                    extra={
-                                        "provider": self.name,
-                                        "dropped": ["reasoning"],
-                                        "reason": "non-standard-field",
-                                    },
+                                log_capability_degraded(
+                                    logger,
+                                    provider=self.name,
+                                    dropped=["reasoning"],
+                                    reason="non-standard-field",
                                 )
                                 reasoning_logged = True
                         yield StreamChunk(**payload_obj)

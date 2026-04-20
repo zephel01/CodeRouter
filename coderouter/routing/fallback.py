@@ -25,6 +25,7 @@ Dual entry points (v0.3.x-1):
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from typing import Final
 
 from coderouter.adapters.anthropic_native import AnthropicAdapter
 from coderouter.adapters.base import (
@@ -40,6 +41,7 @@ from coderouter.logging import get_logger
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
+    log_capability_degraded,
     provider_supports_cache_control,
     provider_supports_thinking,
     strip_thinking,
@@ -80,6 +82,70 @@ class MidStreamError(Exception):
         super().__init__(
             f"provider {provider!r} failed mid-stream: {original}"
         )
+
+
+# ---------------------------------------------------------------------------
+# v0.5.1 A-3: "probable misconfig" warn
+#
+# Motivation (from v0.5-verify.md §Follow-ons, 2026-04-20 re-verify):
+#   The first verify run hit OpenRouter with a mis-read env var and got
+#   401 back. The single-provider chain short-circuited as it should, but
+#   the surface error was just "all providers failed" — operators had to
+#   grep the ``provider-failed`` line to spot the common 401 in the
+#   `error` field. A one-line warn at the aggregate level turns that
+#   grep-and-diagnose into a directly-readable hint.
+#
+# Scope:
+#   - Fires only when EVERY attempt in the chain returned the SAME
+#     non-retryable auth status (401 or 403). A mixed chain (one 401 +
+#     one 429, etc.) is ambiguous and stays quiet; so does any chain
+#     where at least one error was retryable (transient / rate-limit).
+#   - Auth-only by design. 400 "model not found" is also non-retryable
+#     but reflects a config-vs-upstream-reality mismatch that a generic
+#     "probable misconfig" hint would mis-diagnose. Widening later is
+#     cheap if we see the need.
+#   - Fires for single-provider chains too (the verify scenario). "Every
+#     attempt" is trivially all attempts when there is one.
+# ---------------------------------------------------------------------------
+
+_AUTH_STATUS_CODES: Final[frozenset[int]] = frozenset({401, 403})
+
+
+def _warn_if_uniform_auth_failure(
+    errors: list[AdapterError], *, profile: str
+) -> None:
+    """Emit a ``chain-uniform-auth-failure`` warn when the whole chain 401/403'd.
+
+    Called from each of the four ``raise NoProvidersAvailableError`` sites
+    right before the raise. No-op when:
+        - ``errors`` is empty (nothing was attempted — e.g. every provider
+          was filtered out by paid-blocking).
+        - The first error's status is not in ``_AUTH_STATUS_CODES``.
+        - Any error has a different status_code, or is retryable.
+
+    The log is intentionally separate from the raised exception (which
+    stays unchanged for API stability) — it sits alongside the
+    ``provider-failed`` lines and gives operators a single-line diagnosis
+    without changing the ingress response shape.
+    """
+    if not errors:
+        return
+    status = errors[0].status_code
+    if status not in _AUTH_STATUS_CODES:
+        return
+    for exc in errors:
+        if exc.status_code != status or exc.retryable:
+            return
+    logger.warning(
+        "chain-uniform-auth-failure",
+        extra={
+            "profile": profile,
+            "status": status,
+            "count": len(errors),
+            "providers": [exc.provider for exc in errors],
+            "hint": "probable-misconfig",
+        },
+    )
 
 
 class FallbackEngine:
@@ -173,10 +239,9 @@ class FallbackEngine:
                 errors.append(exc)
                 if not exc.retryable:
                     break
-        raise NoProvidersAvailableError(
-            profile=request.profile or self.config.default_profile,
-            errors=errors,
-        )
+        profile = request.profile or self.config.default_profile
+        _warn_if_uniform_auth_failure(errors, profile=profile)
+        raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
         """Stream from the first provider that successfully starts streaming.
@@ -243,10 +308,9 @@ class FallbackEngine:
                 raise MidStreamError(adapter.name, exc) from exc
             return
 
-        raise NoProvidersAvailableError(
-            profile=request.profile or self.config.default_profile,
-            errors=errors,
-        )
+        profile = request.profile or self.config.default_profile
+        _warn_if_uniform_auth_failure(errors, profile=profile)
+        raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     # ==================================================================
     # Anthropic-shaped entry points (v0.3.x-1)
@@ -278,13 +342,11 @@ class FallbackEngine:
                 # the downgrade after the fact. Today only `thinking` is
                 # gated; the list is surfaced in the log for forward-compat.
                 effective_request = strip_thinking(request)
-                logger.info(
-                    "capability-degraded",
-                    extra={
-                        "provider": adapter.name,
-                        "dropped": ["thinking"],
-                        "reason": "provider-does-not-support",
-                    },
+                log_capability_degraded(
+                    logger,
+                    provider=adapter.name,
+                    dropped=["thinking"],
+                    reason="provider-does-not-support",
                 )
             # v0.5-B: observability-only gate for cache_control. The
             # field is silently dropped during Anthropic → OpenAI
@@ -295,13 +357,11 @@ class FallbackEngine:
             if anthropic_request_has_cache_control(
                 request
             ) and not provider_supports_cache_control(adapter.config):
-                logger.info(
-                    "capability-degraded",
-                    extra={
-                        "provider": adapter.name,
-                        "dropped": ["cache_control"],
-                        "reason": "translation-lossy",
-                    },
+                log_capability_degraded(
+                    logger,
+                    provider=adapter.name,
+                    dropped=["cache_control"],
+                    reason="translation-lossy",
                 )
             logger.info(
                 "try-provider",
@@ -347,10 +407,9 @@ class FallbackEngine:
             )
             return resp
 
-        raise NoProvidersAvailableError(
-            profile=request.profile or self.config.default_profile,
-            errors=errors,
-        )
+        profile = request.profile or self.config.default_profile
+        _warn_if_uniform_auth_failure(errors, profile=profile)
+        raise NoProvidersAvailableError(profile=profile, errors=errors)
 
     async def stream_anthropic(
         self, request: AnthropicRequest
@@ -375,25 +434,21 @@ class FallbackEngine:
             effective_request = request
             if will_degrade:
                 effective_request = strip_thinking(request)
-                logger.info(
-                    "capability-degraded",
-                    extra={
-                        "provider": adapter.name,
-                        "dropped": ["thinking"],
-                        "reason": "provider-does-not-support",
-                    },
+                log_capability_degraded(
+                    logger,
+                    provider=adapter.name,
+                    dropped=["thinking"],
+                    reason="provider-does-not-support",
                 )
             # v0.5-B: mirror of the non-streaming path — see comment there.
             if anthropic_request_has_cache_control(
                 request
             ) and not provider_supports_cache_control(adapter.config):
-                logger.info(
-                    "capability-degraded",
-                    extra={
-                        "provider": adapter.name,
-                        "dropped": ["cache_control"],
-                        "reason": "translation-lossy",
-                    },
+                log_capability_degraded(
+                    logger,
+                    provider=adapter.name,
+                    dropped=["cache_control"],
+                    reason="translation-lossy",
                 )
             logger.info(
                 "try-provider",
@@ -484,7 +539,6 @@ class FallbackEngine:
                 raise MidStreamError(adapter.name, exc) from exc
             return
 
-        raise NoProvidersAvailableError(
-            profile=request.profile or self.config.default_profile,
-            errors=errors,
-        )
+        profile = request.profile or self.config.default_profile
+        _warn_if_uniform_auth_failure(errors, profile=profile)
+        raise NoProvidersAvailableError(profile=profile, errors=errors)

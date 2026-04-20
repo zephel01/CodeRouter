@@ -6,6 +6,47 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.5.1] — 2026-04-20 (closeout pack)
+
+**Theme: v0.5 retrospective Follow-ons を 3 本束ねて締める。** v0.5-verify の real-machine run から出てきた 3 件の小 Follow-on (payload 型付け / streaming verify / 401 uniform 警告) を closeout pack として一括投入。コア挙動の変更はゼロ (ログ shape の型付け + 観測ツール + 診断ログの追加のみ)、`NoProvidersAvailableError` などの public surface は非破壊。
+
+- Tests: 225 → **243** (+18)
+- Per-item narrative below: `[v0.5.1-A1]` / `[v0.5.1-A2]` / `[v0.5.1-A3]`
+
+### Added
+
+- **`coderouter/logging.py`** (A-1)
+  - `CapabilityDegradedReason = Literal["provider-does-not-support", "translation-lossy", "non-standard-field"]` — v0.5 gate trio の 3 reason を型として凍結
+  - `CapabilityDegradedPayload(TypedDict)` — `provider` / `dropped` / `reason` の構造契約
+  - `log_capability_degraded(logger, *, provider, dropped, reason)` — 全 gate が通る single chokepoint。キーワード限定引数で TypedDict contract を static-type で enforce
+- **`coderouter/routing/fallback.py`** (A-3)
+  - `_AUTH_STATUS_CODES: Final[frozenset[int]] = frozenset({401, 403})`
+  - `_warn_if_uniform_auth_failure(errors, *, profile)` — chain の全 attempt が同 auth status + 全て non-retryable の時だけ `chain-uniform-auth-failure` warn を吐く。`profile` / `status` / `count` / `providers` / `hint: "probable-misconfig"` を extra に持つ
+- **`scripts/verify_v0_5.sh`** (A-2)
+  - `run_scenario_streaming()` — `curl -N` + SSE 解析で streaming scenario を実行、HTTP 2xx / `capability-degraded` 1 発ちょうど / 全 chunk で `delta.<field>` 不在 の 3 assertion を自動化
+  - `D-reasoning-stream` シナリオ追加 — v0.5-C の "log once per stream" dedup 契約の real-machine 確認
+- **`tests/test_capability_degraded_payload.py`** — Literal 列挙 / TypedDict required_keys / helper emit shape / 3 reason parametrized smoke / logger 名保持 / 払い出し独立性 (+9 tests)
+- **`tests/test_fallback_misconfig_warn.py`** — 1-provider 401 発火 / 403 同扱い / 400 非発火 / retryable 非発火 / mixed status 非発火 / 空 chain 非発火 / streaming path 発火 (+9 tests)
+
+### Changed
+
+- **`coderouter/adapters/openai_compat.py`** (A-1) — `log_capability_degraded` を `coderouter.logging` から直接 import。`coderouter.routing.capability` 経由にすると `routing/__init__.py` が `FallbackEngine` → `adapters/registry` → `openai_compat` を再帰的に呼ぶ import cycle が発生するため、leaf の `logging.py` に helper を置いて回避。`generate()` / `stream()` の reasoning strip ログは unified helper 経由に
+- **`coderouter/routing/capability.py`** (A-1) — `CapabilityDegradedReason` / `CapabilityDegradedPayload` / `log_capability_degraded` を `coderouter.logging` から re-export。semantic ownership (capability gate のログ) はこのモジュールが持ちつつ、実体の置き場所は cycle 安全な leaf に委譲
+- **`coderouter/routing/fallback.py`** (A-3) — 4 raise site (generate / stream / generate_anthropic / stream_anthropic) の直前で `_warn_if_uniform_auth_failure(errors, profile=profile)` を呼ぶ。例外 shape は非破壊
+
+### Design notes
+
+- **logging.py を選んだ理由 (A-1)**. `CapabilityDegraded*` の semantic な置き場は `routing/capability.py` だが、実体をそちらに置くと `adapters/openai_compat.py` が import した瞬間 `routing/__init__.py` が eager に走り `FallbackEngine` → `adapters/registry` → `openai_compat` という cycle を踏む (Python の package init の仕様)。`logging.py` は dependency 無しの leaf なので、そこに型 + helper を置いて capability.py から re-export する形で「ソースは leaf / 概念上の所有は routing」を両立。両モジュールの docstring に why を明示
+- **401/403 限定スコープ (A-3)**. 400 "model not found" のような非 retryable error も chain 全滅しうるが、これは env-var 問題ではなく provider-model mismatch。`probable-misconfig` という同じ hint で括ると操作者に誤誘導になるので auth scope に絞った。非 retryable 全般への拡張は future decision
+- **`chain-uniform-auth-failure` は warn であって raise ではない (A-3)**. `NoProvidersAvailableError` の例外 shape を維持しないと既存 ingress / tests が壊れるので、追加情報は **ログレーンに並走** させるのみ。1 行の grep で拾える位置 (既存 `provider-failed` トレイルの直後) に出る
+
+### Follow-ons unchanged
+
+- v0.5-D: OpenRouter roster 週次 cron diff (retro §Follow-ons) — v0.5.1 では未着手、次候補
+- 当初 v0.5 スコープの本丸 (`profiles.yaml` / `--mode` CLI / 宣言的 ALLOW_PAID / timeout-retry) — v0.6-A に送り継続
+
+---
+
 ## [v0.5.0] — 2026-04-20 (umbrella tag for v0.5-A / v0.5-B / v0.5-C)
 
 **Theme: Capability gate trio.** v0.5-A (thinking, request-side strip + chain reorder), v0.5-B (cache_control, observability-only), v0.5-C (OpenRouter `reasoning` field, response-side strip) の 3 サブリリースを一本の tag にまとめる意味合い。gate の共通設計 (unified `capability-degraded` ログ名 / varying `reason` / YAML escape hatch first / SDK 非依存) が 3 ピース通じて確立した。
