@@ -6,6 +6,109 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.3.x-1] — 2026-04-20
+
+### Anthropic Native Adapter (passthrough)
+
+Claude 本家 / OpenRouter の Anthropic 互換エンドポイントに対し、翻訳コスト
+ゼロで素通しする native adapter。`ProviderConfig.kind: "anthropic"` で有効化し、
+`/v1/messages` → `AnthropicAdapter` → upstream Anthropic Messages API の経路で
+cache_control / thinking / structured tool_use などの Anthropic 固有フィールドを
+そのまま活用できるようにする。openai_compat provider と混在した fallback chain
+もサポート（native 先頭 → openai_compat 後続、あるいはその逆）。
+
+#### Added
+
+- **`coderouter/adapters/anthropic_native.py`** — `AnthropicAdapter(BaseAdapter)`
+  - 認証: `x-api-key` ヘッダ（Authorization: Bearer ではない）、`api_key_env` から取得
+  - `anthropic-version: 2023-06-01` をデフォルト付与。`extra_body.anthropic_version` で上書き可
+  - `base_url` は `/v1` 終端有無の両方を正規化して `{base}/v1/messages` を叩く
+  - `generate_anthropic(AnthropicRequest) → AnthropicResponse` — httpx 直叩きの passthrough
+  - `stream_anthropic(AnthropicRequest) → AsyncIterator[AnthropicStreamEvent]`
+    - SSE を `event:` / `data:` ペアで buffer、空行境界で block 確定
+    - heartbeat コメント行と malformed block は silently skip
+  - OpenAI-shape の `generate` / `stream` は `retryable=False` の `AdapterError` を raise
+    （逆翻訳 `ChatRequest → AnthropicRequest` は設計決定 F で out of scope）
+  - retryable status code: `{404, 408, 425, 429, 500, 502, 503, 504}`
+  - クライアント送信の `model` は strip、provider config の `model` が常に優先
+- **`coderouter/routing/fallback.py`** — Anthropic 用 dispatch 追加 (~110 lines)
+  - `generate_anthropic(AnthropicRequest) → AnthropicResponse`:
+    adapter ごとに `isinstance(adapter, AnthropicAdapter)` で native / openai_compat を切替。
+    native は passthrough、openai_compat は `to_chat_request` → `adapter.generate`
+    → `to_anthropic_response(allowed_tool_names=...)` の経路（v0.3-A repair が発火）
+  - `stream_anthropic(AnthropicRequest) → AsyncIterator[AnthropicStreamEvent]`:
+    native は `adapter.stream_anthropic` を直 passthrough、openai_compat + tools は
+    v0.3-D downgrade（内部非 stream → repair → `synthesize_anthropic_stream_from_response`）、
+    openai_compat no-tools は `stream_chat_to_anthropic_events` 経由の真 streaming
+  - mid-stream ガードは既存 `stream()` と同一セマンティクスを維持
+    （first event 送出後の `AdapterError` → `MidStreamError`、fallback 禁止）
+
+#### Changed
+
+- **`coderouter/config/schemas.py`** — `ProviderConfig.kind` の `Literal` に `"anthropic"` を追加
+  （`openai_compat` と並列）。既存設定は default のまま `openai_compat` が継続
+- **`coderouter/adapters/registry.py`** — `build_adapter` が `kind="anthropic"` で
+  `AnthropicAdapter` をインスタンス化するよう分岐
+- **`coderouter/ingress/anthropic_routes.py`** — v0.3-D downgrade ロジックを engine に移設した
+  副作用で大幅に簡素化。`messages()` ハンドラは `engine.generate_anthropic` /
+  `engine.stream_anthropic` を呼ぶだけになり、ingress は HTTP 境界 + SSE wire format の
+  責務のみ保持。`_anthropic_sse_iterator` は engine から流れる event を wrap しつつ
+  `NoProvidersAvailableError → overloaded_error` / `MidStreamError → api_error` に変換
+- **`examples/providers.yaml`** — `anthropic-direct` サンプル provider を追記
+  (`kind: anthropic`, `paid: true`, `ANTHROPIC_API_KEY` 参照)
+
+#### Tests
+
+v0.3 完了時点 87 件 → **110 件 (+23 件)**:
+
+- `tests/test_adapter_anthropic.py` **11 件（新設）**
+  - URL 正規化 (`/v1` 終端有無両対応)
+  - `x-api-key` / `anthropic-version` ヘッダ（default / override 両方）
+  - OpenAI-shape `generate` / `stream` は retryable=False で reject
+  - `generate_anthropic`: payload shape（client の model は無視、provider config が勝つ）、
+    429 / 400 / 500 の status マッピング
+  - `stream_anthropic`: SSE パースで `event:`/`data:` ペアを AnthropicStreamEvent に、
+    `stream: true` が body に入る、初期 4xx は AdapterError、heartbeat / malformed block skip
+- `tests/test_fallback_anthropic.py` **12 件（新設）**
+  - native passthrough / openai_compat 経由の round-trip
+  - tool-call repair が openai_compat 経由の generate_anthropic でも発火
+  - 混在 chain（native → openai_compat / openai_compat → native）の fallback 双方向
+  - 全 provider 失敗 → `NoProvidersAvailableError`、non-retryable は即中断
+  - stream: native 真 streaming、openai_compat no-tools 真 streaming、
+    openai_compat + tools は downgrade（`generate_calls` のみ埋まり `stream_calls == []`）、
+    **native + tools は downgrade せず** native の structured tool_use を passthrough
+  - mid-stream 失敗 → `MidStreamError`、初期失敗は従来どおり fallback
+- `tests/test_ingress_anthropic.py` — engine への責務移譲に合わせ stub engines を
+  `AnthropicRequest` / `AnthropicResponse` / `AnthropicStreamEvent` を直接やり取りする
+  形にリライト。downgrade 関連の ingress 側テストは engine 側 (`test_fallback_anthropic.py`)
+  に移譲
+
+テスト合計: **110 passed**。lint: v0.3.x-1 で導入した issue は 0
+（新規 `anthropic_native.py` の SIM117 は既存 `openai_compat.py` と同じパターンで意図的に踏襲）。
+
+#### Design Decisions
+
+- **A-1**: Anthropic-shape entry points を engine に追加（adapter 側だけで完結させず、
+  既存の fallback / mid-stream guard / profile resolution をそのまま再利用する）
+- **B**: 混在 chain（native + openai_compat が 1 profile に共存）を第一級サポート
+- **C**: SSE は parse ベース（line-based → block-based）で受ける。mid-stream guard を
+  event 単位で効かせるため
+- **D**: 認証は `api_key_env` + `x-api-key` 固定、`anthropic-version` ヘッダ追加
+- **E**: 5 依存原則を維持（`anthropic` SDK は使わず httpx 直叩き）
+- **F**: 逆翻訳（`ChatRequest → AnthropicRequest`）は out of scope。OpenAI クライアントから
+  Anthropic-native provider を叩く経路は今後のスコープ（`generate` / `stream` は
+  retryable=False で即 reject）
+
+#### Known Limitations
+
+- client が `/v1/messages` に送る `model` は無視され、provider config の `model` が勝つ
+  （OpenAI-compat adapter と同じ挙動）。profile 経由でしかモデルを切替できないが、
+  これは CodeRouter のルーティング設計として意図的
+- `ChatRequest` → `AnthropicRequest` の逆方向翻訳は未実装（設計決定 F）。
+  OpenAI クライアントから Anthropic-native provider を叩きたい場合は v0.4+ の課題
+
+---
+
 ## [v0.3.0] — 2026-04-20
 
 ### v0.3: 実運用向け品質改善

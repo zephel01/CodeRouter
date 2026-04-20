@@ -3,8 +3,12 @@
 Design notes (see plan.md §2 / §5.4):
 - Capability flags let providers declare what they support.
 - `paid: true` providers are blocked unless ALLOW_PAID=true (memo.txt §2.3).
-- Adapter `kind` is intentionally narrow in v0.1: only "openai_compat".
-  v0.2+ will add "anthropic" (separate adapter — memo.txt §2.4).
+- Adapter `kind` in v0.3.x:
+    - "openai_compat": llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq ...
+    - "anthropic":     native Anthropic Messages API passthrough (api.anthropic.com,
+                       or any server speaking the Anthropic wire format). When the
+                       Anthropic ingress routes to this provider, no translation is
+                       performed — request and response flow through verbatim.
 """
 
 from __future__ import annotations
@@ -42,9 +46,13 @@ class ProviderConfig(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     name: str = Field(..., description="Unique identifier used in profiles.yaml")
-    kind: Literal["openai_compat"] = Field(
+    kind: Literal["openai_compat", "anthropic"] = Field(
         default="openai_compat",
-        description="Adapter type. v0.1 supports only openai_compat.",
+        description=(
+            "Adapter type. 'openai_compat' covers llama.cpp / Ollama / "
+            "OpenRouter / LM Studio / Together / Groq. 'anthropic' is the "
+            "native Anthropic Messages API passthrough (v0.3.x)."
+        ),
     )
     base_url: HttpUrl
     model: str = Field(..., description="Upstream model id sent in the request body")

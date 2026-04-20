@@ -1,0 +1,321 @@
+"""Native Anthropic Messages API adapter (v0.3.x-1).
+
+A passthrough adapter that speaks the Anthropic wire format directly, used
+when the Anthropic ingress routes to a `kind: "anthropic"` provider (most
+commonly api.anthropic.com itself, but also any server that speaks the
+Anthropic Messages protocol — e.g. AWS Bedrock's Anthropic shim).
+
+Design decisions (v0.3.x):
+    - No SDK dependency (plan.md §5.4): all calls are plain httpx.
+    - ChatRequest → AnthropicRequest reverse translation is out of scope.
+      `generate()` and `stream()` — the OpenAI-ingress entry points — raise
+      a non-retryable AdapterError, so mixing a `kind: anthropic` provider
+      into a profile consumed by /v1/chat/completions fails fast with a
+      clear message instead of silently skipping.
+    - Streaming is parse-based (event/data → AnthropicStreamEvent) rather
+      than pure byte passthrough. This preserves the v0.3-B mid-stream
+      guard: upstream errors that surface after the first chunk still
+      raise AdapterError, which the engine converts to MidStreamError.
+
+Auth:
+    Anthropic uses `x-api-key`, NOT `Authorization: Bearer`. `api_key_env`
+    in ProviderConfig names the env var holding the key (typically
+    ANTHROPIC_API_KEY).
+
+    `anthropic-version` header defaults to "2023-06-01" and can be
+    overridden via `provider.extra_body["anthropic_version"]` in
+    providers.yaml for users on a pinned minor version.
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from typing import Any
+
+import httpx
+
+from coderouter.adapters.base import (
+    AdapterError,
+    BaseAdapter,
+    ChatRequest,
+    ChatResponse,
+    StreamChunk,
+)
+from coderouter.config.loader import resolve_api_key
+from coderouter.translation.anthropic import (
+    AnthropicRequest,
+    AnthropicResponse,
+    AnthropicStreamEvent,
+)
+
+# Mirror openai_compat._RETRYABLE_STATUSES — same reasoning applies.
+# 404: upstream may not have the requested model → next provider.
+# 408 / 504: timeouts. 425: too early. 429: rate limit. 5xx: upstream errors.
+_RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
+
+_DEFAULT_ANTHROPIC_VERSION = "2023-06-01"
+
+
+class AnthropicAdapter(BaseAdapter):
+    """Native Anthropic Messages API adapter (passthrough).
+
+    The new methods ``generate_anthropic`` / ``stream_anthropic`` speak the
+    Anthropic wire format end-to-end. The OpenAI-shaped ``generate`` /
+    ``stream`` inherited contract raises a non-retryable error — if you
+    want to reach Anthropic via /v1/chat/completions, configure an
+    OpenRouter (or similar) `openai_compat` provider instead.
+    """
+
+    # ------------------------------------------------------------------
+    # HTTP plumbing
+    # ------------------------------------------------------------------
+
+    def _url(self) -> str:
+        base = str(self.config.base_url).rstrip("/")
+        # Users may point base_url at either `https://api.anthropic.com`
+        # or `https://api.anthropic.com/v1`. We normalize to the former so
+        # we can always append /v1/messages.
+        if base.endswith("/v1"):
+            base = base[: -len("/v1")]
+        return f"{base}/v1/messages"
+
+    def _headers(self) -> dict[str, str]:
+        headers: dict[str, str] = {
+            "Content-Type": "application/json",
+            "User-Agent": "CodeRouter/0.1",
+            "anthropic-version": str(
+                self.config.extra_body.get(
+                    "anthropic_version", _DEFAULT_ANTHROPIC_VERSION
+                )
+            ),
+        }
+        api_key = resolve_api_key(self.config.api_key_env)
+        if api_key:
+            headers["x-api-key"] = api_key
+        return headers
+
+    def _payload(
+        self, req: AnthropicRequest, *, stream: bool
+    ) -> dict[str, Any]:
+        """Serialize the AnthropicRequest to an outbound JSON body.
+
+        The provider's configured `model` ALWAYS wins — the client-sent
+        `model` field is treated as a routing placeholder (same policy as
+        the OpenAI-compat adapter; see plan.md routing rules).
+        """
+        # Start from extra_body so client fields can override vendor defaults.
+        # `anthropic_version` is a header, not body — strip it here.
+        body: dict[str, Any] = {
+            k: v for k, v in self.config.extra_body.items() if k != "anthropic_version"
+        }
+
+        dumped = req.model_dump(exclude_none=True)
+        # `profile` is CodeRouter-only; `model` comes from provider config.
+        dumped.pop("profile", None)
+        dumped.pop("model", None)
+
+        body.update(dumped)
+        body["model"] = self.config.model
+        body["stream"] = stream
+        return body
+
+    # ------------------------------------------------------------------
+    # BaseAdapter contract
+    # ------------------------------------------------------------------
+
+    async def healthcheck(self) -> bool:
+        """Cheapest meaningful probe: POST /v1/messages with 1 token cap.
+
+        Anthropic doesn't expose a public /models list, and a GET to / or
+        /v1/messages returns 405. A minimal POST is the least-bad signal
+        that auth works and the endpoint is reachable.
+        """
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(
+                    self._url(),
+                    headers=self._headers(),
+                    json={
+                        "model": self.config.model,
+                        "max_tokens": 1,
+                        "messages": [{"role": "user", "content": "ping"}],
+                    },
+                )
+                # 200 is clearly healthy. 4xx auth errors indicate the
+                # endpoint is reachable even if the key is bad — still a
+                # "the server answered" signal for healthcheck purposes.
+                # 5xx is upstream trouble.
+                return resp.status_code < 500
+        except httpx.HTTPError:
+            return False
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        """OpenAI-shaped entry point — NOT supported on native Anthropic.
+
+        Reverse translation (ChatRequest → AnthropicRequest) is out of
+        scope for v0.3.x. Users who want to reach Anthropic via
+        /v1/chat/completions should configure an `openai_compat` provider
+        pointing at OpenRouter (which exposes anthropic/* models on an
+        OpenAI-shaped endpoint).
+        """
+        raise AdapterError(
+            (
+                "AnthropicAdapter does not support /v1/chat/completions "
+                "(OpenAI-shaped) requests. Use the /v1/messages ingress, "
+                "or configure an openai_compat provider (e.g. OpenRouter) "
+                "to reach Anthropic via OpenAI-shaped requests."
+            ),
+            provider=self.name,
+            retryable=False,
+        )
+
+    async def stream(  # type: ignore[override]
+        self, request: ChatRequest
+    ) -> AsyncIterator[StreamChunk]:
+        """OpenAI-shaped stream entry point — NOT supported (see generate())."""
+        # `async for` cannot materialize an async iterator from a function
+        # that only raises; we honor the AsyncIterator protocol by making
+        # this an async generator that raises before yielding.
+        raise AdapterError(
+            (
+                "AnthropicAdapter does not support streaming via "
+                "/v1/chat/completions. Use the /v1/messages ingress."
+            ),
+            provider=self.name,
+            retryable=False,
+        )
+        yield  # pragma: no cover  # forces async-generator typing
+
+    # ------------------------------------------------------------------
+    # Native Anthropic entry points (v0.3.x-1)
+    # ------------------------------------------------------------------
+
+    async def generate_anthropic(
+        self, request: AnthropicRequest
+    ) -> AnthropicResponse:
+        """Non-streaming passthrough: AnthropicRequest → AnthropicResponse."""
+        url = self._url()
+        payload = self._payload(request, stream=False)
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+                resp = await client.post(url, json=payload, headers=self._headers())
+        except httpx.TimeoutException as exc:
+            raise AdapterError(
+                f"timeout contacting {url}", provider=self.name, retryable=True
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AdapterError(
+                f"transport error: {exc}", provider=self.name, retryable=True
+            ) from exc
+
+        if resp.status_code >= 400:
+            raise AdapterError(
+                f"{resp.status_code} from upstream: {resp.text[:200]}",
+                provider=self.name,
+                status_code=resp.status_code,
+                retryable=resp.status_code in _RETRYABLE_STATUSES,
+            )
+
+        try:
+            data = resp.json()
+        except json.JSONDecodeError as exc:
+            raise AdapterError(
+                f"invalid JSON from upstream: {exc}",
+                provider=self.name,
+                retryable=False,
+            ) from exc
+
+        # Tag with provider metadata and return. Unknown Anthropic fields
+        # (future additions like thinking blocks) pass through via
+        # extra="allow" on AnthropicResponse.
+        data["coderouter_provider"] = self.name
+        return AnthropicResponse.model_validate(data)
+
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        """Streaming passthrough: Anthropic SSE → AnthropicStreamEvent iterator.
+
+        Parses the upstream SSE stream (event/data pairs) and yields each
+        event as a typed AnthropicStreamEvent. The ingress re-serializes
+        these back to the wire, so events are round-tripped through the
+        same structure the non-native path produces.
+
+        Upstream errors after the first event raise AdapterError; the
+        FallbackEngine converts those to MidStreamError (v0.3-B).
+        """
+        url = self._url()
+        payload = self._payload(request, stream=True)
+
+        try:
+            async with httpx.AsyncClient(timeout=self.config.timeout_s) as client:
+                async with client.stream(
+                    "POST", url, json=payload, headers=self._headers()
+                ) as resp:
+                    if resp.status_code >= 400:
+                        body = await resp.aread()
+                        raise AdapterError(
+                            f"{resp.status_code} from upstream: {body[:200]!r}",
+                            provider=self.name,
+                            status_code=resp.status_code,
+                            retryable=resp.status_code in _RETRYABLE_STATUSES,
+                        )
+
+                    # Anthropic SSE block shape:
+                    #   event: <event-type>
+                    #   data: <json>
+                    #   <blank line>
+                    # We buffer per-line and emit on blank-line boundary.
+                    current_event: str | None = None
+                    data_lines: list[str] = []
+
+                    async for line in resp.aiter_lines():
+                        if line == "":
+                            # End of block — flush if well-formed.
+                            if current_event is not None and data_lines:
+                                data_str = "\n".join(data_lines)
+                                try:
+                                    data_obj = json.loads(data_str)
+                                except json.JSONDecodeError:
+                                    # Skip malformed blocks rather than
+                                    # abort the whole stream.
+                                    current_event = None
+                                    data_lines = []
+                                    continue
+                                yield AnthropicStreamEvent(
+                                    type=current_event, data=data_obj
+                                )
+                            current_event = None
+                            data_lines = []
+                            continue
+
+                        if line.startswith(":"):
+                            # SSE comment / heartbeat
+                            continue
+                        if line.startswith("event:"):
+                            current_event = line[len("event:"):].strip()
+                        elif line.startswith("data:"):
+                            data_lines.append(line[len("data:"):].lstrip())
+                        # Silently ignore other field names (id:, retry:) —
+                        # Anthropic doesn't use them today.
+
+                    # Trailing block without terminating blank line.
+                    if current_event is not None and data_lines:
+                        data_str = "\n".join(data_lines)
+                        try:
+                            data_obj = json.loads(data_str)
+                            yield AnthropicStreamEvent(
+                                type=current_event, data=data_obj
+                            )
+                        except json.JSONDecodeError:
+                            pass
+        except httpx.TimeoutException as exc:
+            raise AdapterError(
+                f"timeout streaming from {url}", provider=self.name, retryable=True
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AdapterError(
+                f"transport error: {exc}", provider=self.name, retryable=True
+            ) from exc

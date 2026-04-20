@@ -151,6 +151,34 @@ providers:
       streaming: true
       tools: true
 
+  # Claude direct via Anthropic's native Messages API (v0.3.x-1).
+  # Unlike the OpenRouter entry above, this uses `kind: anthropic` — the
+  # router passes the request body straight through `/v1/messages` to
+  # api.anthropic.com with no OpenAI-shape translation in between. This
+  # preserves Anthropic-native features (cache_control, thinking blocks,
+  # structured tool_use SSE events) that would otherwise be lossy through
+  # the ChatRequest round-trip.
+  #
+  # Use this when the ingress is `/v1/messages` (e.g. Claude Code with
+  # `ANTHROPIC_BASE_URL=http://localhost:8088`). OpenAI-shape ingress
+  # (`/v1/chat/completions`) cannot reach a kind:anthropic provider — the
+  # reverse translation is intentionally out of scope (see CHANGELOG
+  # v0.3.x-1 design decision F).
+  - name: anthropic-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-5-20250929
+    api_key_env: ANTHROPIC_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+    # Optional: override the default anthropic-version header (2023-06-01)
+    # extra_body:
+    #   anthropic_version: "2023-06-01"
+
 profiles:
   # Generic chain — safe default for curl / OpenAI SDK / non-Claude-Code use.
   - name: default

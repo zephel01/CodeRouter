@@ -3,7 +3,13 @@
 These exercise the HTTP boundary: request validation, profile selection
 (body > header > default), non-streaming response shape, SSE streaming
 wire format, and error → 502 / 400 / 422 mappings. The engine is stubbed
-so no network calls happen.
+with the `generate_anthropic` / `stream_anthropic` API so no network calls
+happen and no translation runs in the ingress layer — the ingress just
+marshals HTTP to/from the engine's Anthropic-shaped methods.
+
+Engine-internal concerns (translation round-trip, tool-call repair,
+v0.3-D downgrade, mid-stream guard dispatch) are tested separately in
+tests/test_fallback_anthropic.py.
 """
 
 from __future__ import annotations
@@ -13,13 +19,19 @@ from collections.abc import AsyncIterator
 import pytest
 from fastapi.testclient import TestClient
 
-from coderouter.adapters.base import AdapterError, ChatRequest, ChatResponse, StreamChunk
+from coderouter.adapters.base import AdapterError
 from coderouter.config.schemas import CodeRouterConfig, FallbackChain, ProviderConfig
 from coderouter.ingress.app import create_app
 from coderouter.routing import MidStreamError, NoProvidersAvailableError
+from coderouter.translation import (
+    AnthropicRequest,
+    AnthropicResponse,
+    AnthropicStreamEvent,
+    AnthropicUsage,
+)
 
 # ----------------------------------------------------------------------
-# Fixtures: config + recording / scripted engines
+# Fixtures: config + scripted engines (Anthropic-shaped API)
 # ----------------------------------------------------------------------
 
 
@@ -48,66 +60,87 @@ def two_profile_config() -> CodeRouterConfig:
 
 
 class _RecordingEngine:
-    """Drop-in replacement for FallbackEngine that records the profile seen
-    and returns a canned ChatResponse. Streaming returns a scripted sequence
-    of StreamChunks that drive the Anthropic translator through a normal
-    text-only message lifecycle.
+    """Drop-in replacement for FallbackEngine.
+
+    Records the profile seen and returns a canned AnthropicResponse /
+    stream. The scripted stream matches the shape the translator (or a
+    native adapter) would produce: message_start → content_block_start
+    → content_block_delta+ → content_block_stop → message_delta →
+    message_stop.
     """
 
     def __init__(self) -> None:
         self.seen_profiles: list[str | None] = []
-        self.seen_requests: list[ChatRequest] = []
+        self.seen_requests: list[AnthropicRequest] = []
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate_anthropic(
+        self, request: AnthropicRequest
+    ) -> AnthropicResponse:
         self.seen_profiles.append(request.profile)
         self.seen_requests.append(request)
-        return ChatResponse(
-            id="chatcmpl-test",
-            object="chat.completion",
-            created=0,
+        return AnthropicResponse(
+            id="msg_test",
             model="qwen-coder",
-            choices=[
-                {
-                    "index": 0,
-                    "message": {"role": "assistant", "content": "hello world"},
-                    "finish_reason": "stop",
-                }
-            ],
-            usage={"prompt_tokens": 4, "completion_tokens": 2, "total_tokens": 6},
+            content=[{"type": "text", "text": "hello world"}],
+            stop_reason="end_turn",
+            usage=AnthropicUsage(input_tokens=4, output_tokens=2),
             coderouter_provider="local",
         )
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
         self.seen_profiles.append(request.profile)
         self.seen_requests.append(request)
 
-        # First chunk: role only (no content yet) — translator should still
-        # open a text block when the first delta with content arrives.
-        yield StreamChunk(
-            id="chatcmpl-stream",
-            object="chat.completion.chunk",
-            created=0,
-            model="qwen-coder",
-            choices=[{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        yield AnthropicStreamEvent(
+            type="message_start",
+            data={
+                "type": "message_start",
+                "message": {
+                    "id": "msg_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "qwen-coder",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            },
         )
-        # A few content fragments.
+        yield AnthropicStreamEvent(
+            type="content_block_start",
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        )
         for piece in ("hel", "lo ", "world"):
-            yield StreamChunk(
-                id="chatcmpl-stream",
-                object="chat.completion.chunk",
-                created=0,
-                model="qwen-coder",
-                choices=[
-                    {"index": 0, "delta": {"content": piece}, "finish_reason": None}
-                ],
+            yield AnthropicStreamEvent(
+                type="content_block_delta",
+                data={
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "text_delta", "text": piece},
+                },
             )
-        # Terminal chunk — finish_reason=stop.
-        yield StreamChunk(
-            id="chatcmpl-stream",
-            object="chat.completion.chunk",
-            created=0,
-            model="qwen-coder",
-            choices=[{"index": 0, "delta": {}, "finish_reason": "stop"}],
+        yield AnthropicStreamEvent(
+            type="content_block_stop",
+            data={"type": "content_block_stop", "index": 0},
+        )
+        yield AnthropicStreamEvent(
+            type="message_delta",
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 2},
+            },
+        )
+        yield AnthropicStreamEvent(
+            type="message_stop",
+            data={"type": "message_stop"},
         )
 
 
@@ -117,99 +150,73 @@ class _FailingEngine:
     def __init__(self, profile: str = "default") -> None:
         self.profile = profile
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
+    async def generate_anthropic(
+        self, request: AnthropicRequest
+    ) -> AnthropicResponse:
         raise NoProvidersAvailableError(self.profile, [])
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
         raise NoProvidersAvailableError(self.profile, [])
-        yield  # pragma: no cover  # generator protocol
-
-
-class _ToolAsTextEngine:
-    """Engine whose non-streaming response emits the tool call as prose
-    inside the assistant text — the qwen2.5-coder:14b failure mode that
-    v0.3-A / v0.3-D tool-call repair exists to fix.
-
-    stream() is intentionally unimplemented: v0.3-D must route through
-    generate() even when the client asked for stream=true (the ingress
-    downgrades tool-bearing requests). If stream() were called, it means
-    the downgrade logic failed — so we blow up loudly.
-    """
-
-    def __init__(self) -> None:
-        self.generate_calls = 0
-        self.stream_calls = 0
-
-    async def generate(self, request: ChatRequest) -> ChatResponse:
-        self.generate_calls += 1
-        return ChatResponse(
-            id="chatcmpl-toolastext",
-            object="chat.completion",
-            created=0,
-            model="qwen-coder",
-            choices=[
-                {
-                    "index": 0,
-                    "message": {
-                        "role": "assistant",
-                        # No structured tool_calls — the model wrote JSON prose.
-                        "content": (
-                            "Let me look it up.\n"
-                            '{"name": "get_weather", "arguments": '
-                            '{"location": "Tokyo"}}'
-                        ),
-                    },
-                    "finish_reason": "stop",
-                }
-            ],
-            usage={"prompt_tokens": 9, "completion_tokens": 7, "total_tokens": 16},
-            coderouter_provider="local",
-        )
-
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
-        self.stream_calls += 1
-        raise AssertionError(
-            "stream() must NOT be called when tools are present — "
-            "v0.3-D requires the request to be downgraded to non-streaming."
-        )
         yield  # pragma: no cover  # generator protocol
 
 
 class _MidStreamFailingEngine:
-    """Engine that starts a stream successfully, then fails partway through.
+    """Engine whose stream starts normally then fails partway through.
 
-    Exercises the v0.3-B guard: once the first chunk has gone out, the
-    engine MUST surface a MidStreamError (no silent provider swap).
+    Exercises the v0.3-B guard at the ingress boundary: once the first
+    event has shipped, the engine's MidStreamError must surface as a
+    single `event: error` with type `api_error` inside the SSE stream.
     """
 
     def __init__(self, provider: str = "local") -> None:
         self.provider = provider
         self.stream_calls = 0
 
-    async def generate(self, request: ChatRequest) -> ChatResponse:
-        raise AssertionError("generate() should not be called in stream tests")
+    async def generate_anthropic(
+        self, request: AnthropicRequest
+    ) -> AnthropicResponse:
+        raise AssertionError("generate_anthropic should not be called in stream tests")
 
-    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
         self.stream_calls += 1
-        # Role chunk (so the translator opens a text block before we fail).
-        yield StreamChunk(
-            id="chatcmpl-midstream",
-            object="chat.completion.chunk",
-            created=0,
-            model="qwen-coder",
-            choices=[{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}],
+        # Emit a couple of events so the client has seen partial content.
+        yield AnthropicStreamEvent(
+            type="message_start",
+            data={
+                "type": "message_start",
+                "message": {
+                    "id": "msg_mid",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": "qwen-coder",
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 0, "output_tokens": 0},
+                },
+            },
         )
-        # One content fragment so the client visibly receives bytes.
-        yield StreamChunk(
-            id="chatcmpl-midstream",
-            object="chat.completion.chunk",
-            created=0,
-            model="qwen-coder",
-            choices=[
-                {"index": 0, "delta": {"content": "partial"}, "finish_reason": None}
-            ],
+        yield AnthropicStreamEvent(
+            type="content_block_start",
+            data={
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
         )
-        # Now simulate the adapter blowing up mid-stream.
+        yield AnthropicStreamEvent(
+            type="content_block_delta",
+            data={
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "partial"},
+            },
+        )
+        # Now simulate mid-stream failure surfaced by the engine.
         raise MidStreamError(
             self.provider,
             AdapterError(
@@ -245,21 +252,6 @@ def client_and_failing_engine(
     )
     app = create_app()
     engine = _FailingEngine()
-    app.state.engine = engine
-    app.state.config = two_profile_config
-    return TestClient(app), engine
-
-
-@pytest.fixture
-def client_and_tool_as_text_engine(
-    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
-) -> tuple[TestClient, _ToolAsTextEngine]:
-    monkeypatch.setattr(
-        "coderouter.ingress.app.load_config",
-        lambda path=None: two_profile_config,
-    )
-    app = create_app()
-    engine = _ToolAsTextEngine()
     app.state.engine = engine
     app.state.config = two_profile_config
     return TestClient(app), engine
@@ -310,7 +302,7 @@ def test_basic_non_streaming_returns_anthropic_shape(
     assert body["id"]  # non-empty
     assert body["content"] == [{"type": "text", "text": "hello world"}]
     assert body["stop_reason"] == "end_turn"
-    # Usage propagated (OpenAI prompt_tokens → Anthropic input_tokens)
+    # Usage propagated
     assert body["usage"]["input_tokens"] == 4
     assert body["usage"]["output_tokens"] == 2
     # CodeRouter metadata
@@ -459,9 +451,8 @@ def test_streaming_emits_anthropic_event_sequence(
     events = _parse_sse(raw)
     event_types = [t for t, _ in events]
 
-    # Must start with message_start.
+    # Must start with message_start and end with message_stop.
     assert event_types[0] == "message_start"
-    # Must end with message_stop.
     assert event_types[-1] == "message_stop"
     # Must open and close a text content block exactly once.
     assert event_types.count("content_block_start") == 1
@@ -487,14 +478,13 @@ def test_streaming_emits_anthropic_event_sequence(
 def test_streaming_error_emits_error_event(
     client_and_failing_engine: tuple[TestClient, _FailingEngine],
 ) -> None:
-    """When the engine raises NoProvidersAvailableError mid-stream setup, the
-    SSE channel should emit a single `error` event (not a 5xx HTTP status).
+    """When the engine raises NoProvidersAvailableError before any event
+    ships, the SSE channel should emit a single `error` event (not a 5xx
+    HTTP status, since headers have already flushed).
     """
     client, _ = client_and_failing_engine
     body = {**_MINIMAL_BODY, "stream": True}
     with client.stream("POST", "/v1/messages", json=body) as resp:
-        # Streaming response: status is 200 by the time headers flush;
-        # the failure surfaces inside the SSE stream.
         assert resp.status_code == 200
         raw = b"".join(resp.iter_bytes()).decode("utf-8")
 
@@ -510,18 +500,18 @@ def test_streaming_error_emits_error_event(
 
 
 # ----------------------------------------------------------------------
-# v0.3-B: Mid-stream guard surfacing over SSE
+# v0.3-B: Mid-stream guard surfacing over SSE (at the ingress boundary)
 # ----------------------------------------------------------------------
 
 
 def test_streaming_midstream_failure_emits_api_error_event(
     client_and_midstream_engine: tuple[TestClient, _MidStreamFailingEngine],
 ) -> None:
-    """After some chunks have streamed, an engine-level MidStreamError must
-    be surfaced as an Anthropic `event: error` with type `api_error`
-    (distinct from `overloaded_error`, which means no provider could start
-    at all). The stream must include the partial content that already
-    shipped, and must NOT include message_stop (the stream is truncated).
+    """After events have streamed, an engine-level MidStreamError must be
+    surfaced as an Anthropic `event: error` with type `api_error`
+    (distinct from `overloaded_error`, which means no provider could
+    start at all). The emitted prefix is preserved, and the stream is
+    truncated (no message_stop after the error).
     """
     client, engine = client_and_midstream_engine
     body = {**_MINIMAL_BODY, "stream": True}
@@ -532,14 +522,10 @@ def test_streaming_midstream_failure_emits_api_error_event(
     events = _parse_sse(raw)
     event_types = [t for t, _ in events]
 
-    # The stream opened normally.
     assert event_types[0] == "message_start"
-    # At least one text delta made it to the client before the failure.
     assert "content_block_delta" in event_types
-    # And the stream terminates with an explicit error event.
     assert event_types[-1] == "error"
-    # Crucially: the stream is NOT a clean close — no message_stop after
-    # we've declared an error.
+    # Crucially: truncated — no message_stop after declaring an error.
     assert "message_stop" not in event_types
 
     import json as _json
@@ -550,133 +536,3 @@ def test_streaming_midstream_failure_emits_api_error_event(
     assert err_payload["error"]["type"] == "api_error"
     # The engine was only consulted once — the ingress does not retry.
     assert engine.stream_calls == 1
-
-
-# ----------------------------------------------------------------------
-# v0.3-D: Streaming tool-call repair (downgrade-to-non-stream strategy)
-# ----------------------------------------------------------------------
-
-
-_TOOL_BODY = {
-    "model": "claude-3-5-sonnet",
-    "max_tokens": 64,
-    "messages": [{"role": "user", "content": "what's the weather in Tokyo?"}],
-    "stream": True,
-    "tools": [
-        {
-            "name": "get_weather",
-            "description": "Get current weather",
-            "input_schema": {
-                "type": "object",
-                "properties": {"location": {"type": "string"}},
-            },
-        }
-    ],
-}
-
-
-def test_streaming_with_tools_downgrades_and_repairs(
-    client_and_tool_as_text_engine: tuple[TestClient, _ToolAsTextEngine],
-) -> None:
-    """v0.3-D: when the client streams AND declares tools, the ingress must
-    resolve the request non-streaming so tool-call repair can run over the
-    full assistant text. The emitted SSE must include a structural
-    tool_use block — not the raw JSON-as-text that the upstream returned.
-    """
-    client, engine = client_and_tool_as_text_engine
-    with client.stream("POST", "/v1/messages", json=_TOOL_BODY) as resp:
-        assert resp.status_code == 200
-        assert resp.headers["content-type"].startswith("text/event-stream")
-        raw = b"".join(resp.iter_bytes()).decode("utf-8")
-
-    events = _parse_sse(raw)
-    event_types = [t for t, _ in events]
-
-    # Downgraded path → full sequence ending with message_stop.
-    assert event_types[0] == "message_start"
-    assert event_types[-1] == "message_stop"
-    assert "content_block_start" in event_types
-    # Downgrade means generate() was called; stream() must not have run
-    # (the _ToolAsTextEngine would raise AssertionError if it had).
-    assert engine.generate_calls == 1
-    assert engine.stream_calls == 0
-
-    # Repair must have surfaced a tool_use block.
-    import json as _json
-
-    tool_starts = [
-        _json.loads(d)
-        for t, d in events
-        if t == "content_block_start"
-        and _json.loads(d)["content_block"]["type"] == "tool_use"
-    ]
-    assert len(tool_starts) == 1
-    assert tool_starts[0]["content_block"]["name"] == "get_weather"
-
-    # The input JSON rides on input_json_delta.
-    tool_idx = tool_starts[0]["index"]
-    input_deltas = [
-        _json.loads(d)
-        for t, d in events
-        if t == "content_block_delta"
-        and _json.loads(d).get("index") == tool_idx
-    ]
-    assert len(input_deltas) == 1
-    assert input_deltas[0]["delta"]["type"] == "input_json_delta"
-    assert _json.loads(input_deltas[0]["delta"]["partial_json"]) == {
-        "location": "Tokyo"
-    }
-
-    # Final stop_reason must reflect tool_use, not end_turn.
-    md = next(d for t, d in events if t == "message_delta")
-    md_payload = _json.loads(md)
-    assert md_payload["delta"]["stop_reason"] == "tool_use"
-
-
-def test_streaming_without_tools_stays_on_stream_path(
-    client_and_engine: tuple[TestClient, _RecordingEngine],
-) -> None:
-    """Sanity check: requests WITHOUT tools must still use real streaming
-    (engine.stream), not the downgrade path. Otherwise every streaming
-    turn would pay the full-response latency penalty.
-    """
-    client, engine = client_and_engine
-    body = {**_MINIMAL_BODY, "stream": True}  # no "tools" key
-    with client.stream("POST", "/v1/messages", json=body) as resp:
-        assert resp.status_code == 200
-        _ = b"".join(resp.iter_bytes())
-
-    # _RecordingEngine tracks both paths via seen_profiles; stream() is the
-    # one that got called because there are no tools.
-    # (seen_profiles has a single None entry for the stream call.)
-    assert engine.seen_profiles == [None]
-
-
-def test_streaming_with_tools_502_surfaces_error_event(
-    two_profile_config: CodeRouterConfig,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Even in the downgraded path, engine failure must surface as an SSE
-    error event (not an HTTP 5xx) because the response headers have
-    already shipped by the time we start resolving.
-    """
-    monkeypatch.setattr(
-        "coderouter.ingress.app.load_config",
-        lambda path=None: two_profile_config,
-    )
-    app = create_app()
-    app.state.engine = _FailingEngine()
-    app.state.config = two_profile_config
-    client = TestClient(app)
-
-    with client.stream("POST", "/v1/messages", json=_TOOL_BODY) as resp:
-        assert resp.status_code == 200
-        raw = b"".join(resp.iter_bytes()).decode("utf-8")
-
-    events = _parse_sse(raw)
-    assert any(t == "error" for t, _ in events), raw
-    import json as _json
-
-    err = next(d for t, d in events if t == "error")
-    err_payload = _json.loads(err)
-    assert err_payload["error"]["type"] == "overloaded_error"

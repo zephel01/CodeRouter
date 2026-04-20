@@ -1,9 +1,13 @@
 """Anthropic-compatible route: POST /v1/messages.
 
-Accepts Anthropic Messages API requests, translates to the internal
-ChatRequest/ChatResponse format, routes through FallbackEngine, and
-translates back. SSE streaming events follow the Anthropic wire protocol
-(message_start / content_block_* / message_delta / message_stop).
+Accepts Anthropic Messages API requests and routes them through the
+engine's Anthropic-shaped entry points (`generate_anthropic` /
+`stream_anthropic`). For `kind: "anthropic"` providers the engine does
+direct passthrough; for `kind: "openai_compat"` providers it handles
+translation, tool-call repair, and the v0.3-D tool-turn downgrade.
+
+SSE streaming events follow the Anthropic wire protocol
+(`message_start` / `content_block_*` / `message_delta` / `message_stop`).
 
 Profile selection mirrors the OpenAI route (see openai_routes.py):
     Body field `profile` > `X-CodeRouter-Profile` header > config default.
@@ -28,10 +32,6 @@ from coderouter.routing import (
 from coderouter.translation import (
     AnthropicRequest,
     AnthropicStreamEvent,
-    stream_chat_to_anthropic_events,
-    synthesize_anthropic_stream_from_response,
-    to_anthropic_response,
-    to_chat_request,
 )
 
 router = APIRouter()
@@ -42,7 +42,7 @@ _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 
 
 @router.post("/messages")
-async def messages(  # noqa: ANN201
+async def messages(
     payload: dict,
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
@@ -82,61 +82,36 @@ async def messages(  # noqa: ANN201
                 ),
             ) from exc
 
-    chat_req = to_chat_request(anth_req)
-
-    # v0.3 tool-call repair: pass the request's declared tool names so the
-    # converter can extract tool calls the model wrote as plain text.
-    tool_names = (
-        [t.name for t in anth_req.tools] if anth_req.tools else None
-    )
-
     if anth_req.stream:
-        chat_req.stream = True
-        # v0.3-D: when tools are declared, models like qwen2.5-coder:14b
-        # sometimes emit the tool call as prose (balanced-brace JSON inside
-        # text_deltas). We cannot repair that mid-stream — the partial JSON
-        # hasn't been closed yet when each chunk arrives. So we downgrade
-        # the request to non-streaming internally, run repair on the full
-        # response, then replay it as a compliant SSE event sequence. The
-        # client still sees streaming; it just arrives in one burst.
-        if anth_req.tools:
-            return StreamingResponse(
-                _anthropic_downgraded_tool_iterator(
-                    engine, chat_req, tool_names
-                ),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
         return StreamingResponse(
-            _anthropic_sse_iterator(engine, chat_req),
+            _anthropic_sse_iterator(engine, anth_req),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    chat_req.stream = False
     try:
-        chat_resp = await engine.generate(chat_req)
+        anth_resp = await engine.generate_anthropic(anth_req)
     except NoProvidersAvailableError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    anth_resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
     return anth_resp.model_dump(exclude_none=True)
 
 
 async def _anthropic_sse_iterator(
-    engine: FallbackEngine, chat_req
+    engine: FallbackEngine, anth_req: AnthropicRequest
 ):
-    """Wrap the engine's stream into Anthropic SSE wire format.
+    """Serialize engine.stream_anthropic() onto the Anthropic SSE wire.
 
-    Each emitted line is `event: <type>\\ndata: <json>\\n\\n` per the
+    Each emitted block is `event: <type>\\ndata: <json>\\n\\n` per the
     Anthropic spec (distinct from OpenAI's `data:`-only format).
+    Errors map to in-stream `event: error` events — we never switch an
+    in-flight HTTP response to a 5xx once headers have shipped.
     """
     try:
-        events = stream_chat_to_anthropic_events(engine.stream(chat_req))
-        async for ev in events:
+        async for ev in engine.stream_anthropic(anth_req):
             yield _format_anthropic_sse(ev)
     except NoProvidersAvailableError as exc:
-        # No provider produced even the first chunk — surface as overloaded.
+        # No provider produced even the first event — surface as overloaded.
         err_event = AnthropicStreamEvent(
             type="error",
             data={
@@ -149,11 +124,10 @@ async def _anthropic_sse_iterator(
         )
         yield _format_anthropic_sse(err_event)
     except MidStreamError as exc:
-        # A provider failed AFTER emitting at least one chunk. We cannot
-        # fall back (client already received partial content), so the only
-        # honest thing to do is close the stream with an explicit error
-        # event. Use `api_error` so clients distinguish this from
-        # "no provider could start" (overloaded_error).
+        # v0.3-B: a provider failed AFTER emitting at least one event. We
+        # cannot fall back (client already received partial content), so
+        # close the stream with an explicit error event. `api_error`
+        # distinguishes this from "no provider could start" (overloaded).
         logger.warning(
             "sse-midstream-error",
             extra={"provider": exc.provider, "original": str(exc.original)},
@@ -169,41 +143,6 @@ async def _anthropic_sse_iterator(
             },
         )
         yield _format_anthropic_sse(err_event)
-
-
-async def _anthropic_downgraded_tool_iterator(
-    engine: FallbackEngine,
-    chat_req,
-    tool_names: list[str] | None,
-):
-    """v0.3-D: tool-turn downgrade path.
-
-    Resolve the request as non-streaming (so we see the full assistant
-    output), run tool-call repair, and replay the final response as a
-    spec-compliant Anthropic SSE event sequence. Errors are surfaced as
-    `event: error` in the stream (matching the other streaming paths —
-    we never switch an in-flight HTTP response to a 5xx).
-    """
-    chat_req.stream = False
-    try:
-        chat_resp = await engine.generate(chat_req)
-    except NoProvidersAvailableError as exc:
-        err_event = AnthropicStreamEvent(
-            type="error",
-            data={
-                "type": "error",
-                "error": {
-                    "type": "overloaded_error",
-                    "message": str(exc),
-                },
-            },
-        )
-        yield _format_anthropic_sse(err_event)
-        return
-
-    anth_resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
-    async for ev in synthesize_anthropic_stream_from_response(anth_resp):
-        yield _format_anthropic_sse(ev)
 
 
 def _format_anthropic_sse(ev: AnthropicStreamEvent) -> str:

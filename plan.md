@@ -752,8 +752,11 @@ ruff: v0.3 で導入した lint issue は 0（残る 11 件はすべて v0.1/v0.
 
 ### 中優先 (v0.3.x)
 
-4. [ ] **Anthropic native adapter** — `kind: "anthropic"` を追加し、上流が本物の Claude のとき翻訳を通さず passthrough。
+4. [x] **Anthropic native adapter (v0.3.x-1)** — `ProviderConfig.kind: "anthropic"` を追加し、`AnthropicAdapter` / `FallbackEngine.generate_anthropic` / `stream_anthropic` 経由で上流が本物の Claude のとき翻訳を通さず passthrough。
    - 翻訳コストを省き、Anthropic 固有の cache_control / thinking ブロックをそのまま活用できるようにする
+   - v0.3-D downgrade 実装を ingress から engine に移設し、native provider は downgrade を完全 bypass。混在 chain（native → openai_compat のフォールバック）もサポート
+   - tests +23 件 (`test_adapter_anthropic.py` 11 件 / `test_fallback_anthropic.py` 12 件) → 合計 **110 件**
+   - 詳細は CHANGELOG.md `[v0.3.x-1]` セクション
 5. [ ] **Claude Code 向け profile サンプル** を README と `examples/providers.yaml` に追加。
    - Claude Code は 15-20K token の system prompt を毎ターン送るので、14B クラスでは prompt eval 100秒級。
      7B 以下中心 + 14B を最後尾に置くサンプルを例示する
