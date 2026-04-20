@@ -72,3 +72,7 @@ tmp/
 # docs/inside/ is a private scratch area for memos, design drafts,
 # and anything not meant for public distribution.
 docs/inside/
+
+# docs/articles/ holds Zenn / Note article drafts that are
+# published externally (not on GitHub). Keep them out of the repo.
+docs/articles/

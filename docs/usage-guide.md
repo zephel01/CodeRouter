@@ -63,13 +63,34 @@ Rule of thumb for VRAM: a `Q4_K_M` GGUF needs roughly `params × 0.55 GB` of VRA
 
 ### Models worth knowing beyond qwen2.5-coder
 
-CodeRouter treats any OpenAI-compat endpoint the same way, so model choice is orthogonal to router choice. A few commonly-paired options:
+CodeRouter treats any OpenAI-compat endpoint the same way, so model choice is orthogonal to router choice. A few commonly-paired options, grouped by family. CodeRouter doesn't care which vendor shipped the weights — as long as Ollama (or any OpenAI-compat server) can load the tag, the router can route to it.
 
-- **`qwen3-coder:7b` / `:14b`** — qwen3 family. Similar scale to 2.5-coder with a different reasoning style. Tends to leak `<think>` tags more — enable `output_filters: [strip_thinking]` and/or `append_system_prompt: "/no_think"`. Shipped as a reference profile in `examples/providers.yaml` under `ollama-hf-example` (commented out).
-- **`deepseek-coder-v2:16b`** — MoE architecture, very fast for its size on macOS unified memory. Tool-use is hit-or-miss; set `capabilities.tools: false` if `coderouter doctor` says so.
+Dense coder families (the 2.5-coder profile below extends directly):
+
+- **`qwen3-coder:7b` / `:14b`** — qwen3 dense coder family. Similar scale to 2.5-coder with a different reasoning style. Tends to leak `<think>` tags more — enable `output_filters: [strip_thinking]` and/or `append_system_prompt: "/no_think"`. Shipped as a reference profile in `examples/providers.yaml` under `ollama-hf-example` (commented out).
+- **`deepseek-coder-v2:16b`** — DeepSeek-v2 MoE architecture (2.4B active, 16B total). Very fast for its size on macOS unified memory. Tool-use is hit-or-miss; set `capabilities.tools: false` if `coderouter doctor` says so.
+
+MoE coders (big-parameter-count, small-active — easier on memory bandwidth than their headline size suggests):
+
+- **`qwen3-coder:30b-a3b`** — 30 B total / ~3 B active MoE. Tool-capable, streams noticeably faster than dense 30B on Apple Silicon because only the ~3 B active path runs per token; VRAM still has to hold the whole graph (~18 GB Q4). Enable both `strip_thinking` and `strip_stop_markers`, and verify tool-call reliability with `coderouter doctor`.
+- **`qwen3:32b`** (dense, general-purpose) — big general model; use `append_system_prompt: "/no_think"` to silence the chain-of-thought channel before it reaches Claude Code's UI. Lower tool-call hit rate than 2.5-coder:32b; probe to confirm.
+- **`qwen3:30b-a3b`** (general MoE sibling to the coder) — same MoE footprint as qwen3-coder:30b-a3b but general-domain. Useful in a "fast" profile when you need long-context reasoning without coder bias.
+
+Reasoning-tuned distills (emit `<think>` blocks on by default — always pair with `strip_thinking` + `strip_stop_markers`):
+
+- **`deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b`** — R1-distilled Qwen bases. Strong on plan-then-act reasoning, weak on structured tool JSON; leave `capabilities.tools: false` and use them as a quality-fallback for text answers rather than the tool-call tier.
+
+General-purpose (not coder-tuned, so typically `capabilities.tools: false` unless the family is instruction-trained for tool use):
+
+- **`gemma3:4b` / `:12b` / `:27b`** — Google's Gemma 3 family. Multilingual (Japanese included), but no tool-use training — treat as `capabilities.tools: false`. `gemma3:12b` Q4 fits comfortably in 12 GB VRAM and is a reasonable "fast chat" tier. There is no `/no_think` directive — Gemma 3 doesn't emit `<think>` blocks by default, so `output_filters` can stay empty unless you see leakage.
+- **`gemma4:e2b` / `:e4b` / `:latest` / `:26b` / `:31b`** — Google's Gemma 4 family, published on Ollama as <https://ollama.com/library/gemma4>. A noticeably different lineup from Gemma 3: the `e2b` / `e4b` tags are *effective-parameter* builds tuned for edge / laptop deployment (128 K context at ~7–10 GB pull size), `:26b` is a Mixture-of-Experts with ~4 B active / 26 B total and a **256 K** context window, and `:31b` is the dense flagship. Gemma 4 is multimodal (text + image) and ships with **configurable thinking modes** — unlike Gemma 3, it *can* emit `<think>` blocks when reasoning is enabled, so **start with `output_filters: [strip_thinking]`** on all gemma4 tags and enable `strip_stop_markers` too if you see marker leakage. Tool-use on the family is lineage-dependent — Gemma 3 had none, Gemma 4 has some instruct tuning, so **always verify with `coderouter doctor`** before flipping `capabilities.tools: true`. The `:26b` MoE is the sweet spot on Apple Silicon (24–32 GB unified memory) because only the ~4 B active path runs per token while the 256 K window gives you Claude-Code-friendly headroom.
+- **`llama3.3:70b`** — the 70 B instruct dense from Meta. Tool-capable when quantized cleanly; needs ≥ 48 GB VRAM or Mac 64 GB+ unified. For most users this sits in a "paid-tier replacement if I have the hardware" bucket.
 - **`llama3.2:3b` / `phi4:14b`** — general-purpose, not coder-tuned. Useful as a "fast" profile for short chat replies outside of code sessions.
+- **`gpt-oss:20b`** / **`gpt-oss:120b`** (OpenAI OSS family) — release tags vary by vendor mirror; the 20 B is the hardware sweet spot on a 24 GB GPU. Emits a non-standard `reasoning` field on each choice's `message` / `delta` that the v0.5-C `openai_compat` adapter already strips; probe once with `coderouter doctor` to confirm the strip fires and `reasoning-leak` returns `OK`.
 
-Use `coderouter doctor --check-model <provider>` after adding any new model — its four probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming, six total) will tell you which `capabilities.*` flags and `extra_body.options.*` values the model actually wants.
+Use `coderouter doctor --check-model <provider>` after adding any new model — its six probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) will tell you which `capabilities.*` flags and `extra_body.options.*` values the model actually wants. The doctor's verdicts are the source of truth; the table in §3 is the known-good starting point it checks you against.
+
+MoE footprint reminder: "N total / M active" means the router streams like an M-parameter model in latency terms but needs N-parameter weights resident in VRAM. Qwen3 30B-A3B loads like a 30 B but runs like a 3 B — an unusually good deal on Apple Silicon where memory bandwidth is the bottleneck, but only if you actually have the ~18 GB Q4 weights-fit budget.
 
 ---
 
@@ -77,17 +98,44 @@ Use `coderouter doctor --check-model <provider>` after adding any new model — 
 
 The values below are known-good starting points. `coderouter doctor --check-model` will tell you when a model wants something different for your specific Ollama build.
 
+Rows are grouped by family so you can find the row that matches the tag you pulled. Columns left of `output_filters` go into `extra_body.options` in your `providers.yaml`; `output_filters` and `capabilities.tools` are top-level on the provider. `—` means "no filter needed by default; confirm with `coderouter doctor`".
+
 | Model | `num_ctx` | `num_predict` | `temperature` | `output_filters` | `capabilities.tools` |
 |---|---:|---:|---:|---|:---:|
+| **qwen2.5-coder (dense, coder-tuned)** | | | | | |
 | `qwen2.5-coder:1.5b` | 8192 | 2048 | 0.2 | `[strip_thinking]` | false (too small to reliably tool-call) |
 | `qwen2.5-coder:7b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
 | `qwen2.5-coder:14b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
 | `qwen2.5-coder:32b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
+| **qwen3 family (coder + general, dense + MoE)** | | | | | |
 | `qwen3-coder:7b` / `:14b` | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (verify w/ doctor) |
+| `qwen3-coder:30b-a3b` (MoE, ~3 B active) | 65536 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (verify w/ doctor) |
+| `qwen3:30b-a3b` (general MoE) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | verify w/ doctor |
+| `qwen3:32b` (dense, general) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | verify w/ doctor (often false) |
+| **DeepSeek (coder MoE + R1 distills)** | | | | | |
 | `deepseek-coder-v2:16b` | 16384 | 4096 | 0.2 | `[strip_thinking]` | verify w/ doctor (often false) |
+| `deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b` | 16384 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | false (R1 distills rarely tool-call cleanly) |
+| **Gemma 3 (Google, general multilingual)** | | | | | |
+| `gemma3:4b` | 8192 | 2048 | 0.3 | — | false |
+| `gemma3:12b` | 16384 | 4096 | 0.3 | — | false |
+| `gemma3:27b` | 32768 | 4096 | 0.3 | — | false |
+| **Gemma 4 (Google, multimodal + configurable thinking; 2026)** | | | | | |
+| `gemma4:e2b` (edge, ~2 B effective) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
+| `gemma4:e4b` (edge, ~4 B effective) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
+| `gemma4:latest` (~9.6 GB pull, 128 K ctx) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
+| `gemma4:26b` (MoE: ~4 B active / 26 B total, 256 K ctx) | 65536 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | verify w/ doctor |
+| `gemma4:31b` (dense flagship) | 32768 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | verify w/ doctor |
+| **Llama (Meta, general instruct)** | | | | | |
 | `llama3.2:3b` | 8192 | 2048 | 0.3 | — | false |
+| `llama3.3:70b` | 32768 | 4096 | 0.2 | — | true (verify w/ doctor; needs ≥ 48 GB VRAM or 64 GB+ unified) |
+| **gpt-oss (OpenAI open-weights)** | | | | | |
+| `gpt-oss:20b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true (verify w/ doctor) |
+| `gpt-oss:120b` | 65536 | 4096 | 0.2 | `[strip_thinking]` | true (verify w/ doctor; needs ≥ 80 GB VRAM) |
+| **Other** | | | | | |
 | `phi4:14b` | 16384 | 4096 | 0.2 | — | false |
 | HF-GGUF `hf.co/<user>/<repo>:<quant>` | 8192 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | false by default (probe to confirm) |
+
+The table is deliberately opinionated for the Claude-Code-through-CodeRouter path: `num_ctx` defaults err on the high side (Claude Code's per-turn system prompt is 15–20 K tokens, so 2048 is always wrong and 8192 is borderline), `temperature` sits at 0.2 for tool-call reliability, and `output_filters` is pre-seeded for families that leak `<think>` or stop-marker tokens. If a family you want isn't listed, **pick the closest row** (qwen3 ≈ qwen3-coder, gemma3 ≈ general dense without tool-use), then run `coderouter doctor --check-model <provider>` — the probe verdicts are the authoritative signal; this table is just a first draft so the doctor has something to compare against.
 
 Why `temperature: 0.2`? Claude Code issues tool calls via structured JSON. Higher temperature (the Ollama default is 0.7) produces more creative phrasing and more malformed JSON. CodeRouter's v0.3-A tool-call repair handles common breakage, but prevention is cheaper than repair. This is one of the findings the [claude-code-local](https://github.com/nicedreamzapp/claude-code-local) project surfaced during its own tool-call reliability work — CodeRouter adopts the same default independently.
 

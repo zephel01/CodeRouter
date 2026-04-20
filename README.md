@@ -6,32 +6,46 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-pre--alpha-orange" alt="status"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
 </p>
 
-## What is this?
+<p align="center">
+  <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./docs/usage-guide.md">Usage guide</a> · <a href="./docs/security.md">Security</a>
+</p>
 
-A small, dependency-minimal LLM router. One endpoint to point your tools at — internally it tries your local model first, falls back to free cloud (OpenRouter free), and only touches paid APIs if you explicitly opt in (`ALLOW_PAID=true`).
+## What gets easier with CodeRouter
+
+CodeRouter is a small router that sits between your coding agent (Claude Code / gemini-cli / codex / plain OpenAI SDK) and the LLMs behind it. Point your tool at one endpoint and CodeRouter picks the provider — starting with your local Ollama / llama.cpp, falling back to free cloud (OpenRouter free), and only touching paid APIs when you explicitly opt in.
+
+Concretely, it takes care of things most beginners hit the hard way:
+
+- **Keep running Claude Code even with no API key and no Anthropic subscription.** Your local model (or OpenRouter's free tier) answers. Paid providers only get called if you set `ALLOW_PAID=true`.
+- **Don't lose the reply mid-stream.** When one provider dies mid-answer you get one clean error — not a Frankenstein reply spliced from two models.
+- **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
+- **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
+- **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
+- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 453 tests passing.
 
 ```
-Client (Claude Code / OpenAI SDK / curl)
+Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
         │
         ▼
-  CodeRouter  ──►  ① local model (free, top priority)
-                   ② free cloud (OpenRouter qwen3-coder:free, gpt-oss-120b:free, ...)
-                   ③ paid cloud (Claude / GPT-4 — only if ALLOW_PAID=true)
+  CodeRouter  ──►  ① local model (Ollama / llama.cpp — free, top priority)
+                   ② free cloud (OpenRouter qwen3-coder:free, gpt-oss-120b:free, …)
+                   ③ paid cloud (Claude / GPT — only if ALLOW_PAID=true)
 ```
 
-## Why?
+## Why not just use X directly?
 
-- **LiteLLM is great but heavy.** 100+ transitive dependencies = supply-chain risk. CodeRouter has 5.
-- **OpenRouter alone isn't enough.** Free tier is unstable; paid only is unfriendly to new users.
-- **`ollama` / `llama.cpp` directly is fast, but Claude Code can't talk to them** without translation. CodeRouter speaks both OpenAI and Anthropic wire formats, including tool-call repair for local models that emit malformed tool JSON.
+- **Ollama / llama.cpp / LM Studio directly.** Fast and free, but Claude Code (and most agents targeting `/v1/messages`) speak Anthropic wire format — these servers only speak OpenAI chat. You either hit "unsupported endpoint" or tool-use silently breaks because the model emits tool JSON as plain text. CodeRouter translates both directions and repairs the JSON before your agent sees it.
+- **LiteLLM.** Excellent project, but heavy — 100+ transitive dependencies — and doesn't natively expose `/v1/messages` for Claude Code.
+- **OpenRouter alone.** Free tier is rate-limited and occasionally down; paid-only is unfriendly to newcomers and to CI pipelines.
 
-See [`plan.md`](./plan.md) for the full design and roadmap.
+Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friendly articles on *why the same local model sometimes works and sometimes doesn't* are published separately on Zenn / Note.
 
 ## Quickstart (3 commands)
 
@@ -60,38 +74,40 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v1.0-C — Streaming-path probe (2026-04-20)
+New to CodeRouter? The [usage guide](./docs/usage-guide.md) walks through hardware-tier model picks, tuning defaults, per-OS launch flow, and OpenRouter free pairing. (日本語版: [利用ガイド](./docs/usage-guide.ja.md))
 
-Most recent work: **v1.0-C** adds a 6th probe — the streaming-path integrity check — to `coderouter doctor --check-model`. Where v1.0-B caught **input-side** silent truncation (prompt drops from a low `num_ctx`), v1.0-C catches its **output-side** sibling: the upstream closing the SSE stream early with `finish_reason: length` and heavily-truncated content. The usual culprit is Ollama's `options.num_predict` set too low (older builds default to 128; some Ollama-compat forks default to 256). Claude Code users experience this as "the assistant's response cut off mid-word". The probe issues a small deterministic streaming request ("count from 1 to 30"), consumes the SSE stream, and branches on `finish_reason` + observed content length; truncated output emits a copy-paste `extra_body.options.num_predict: 4096` patch. Also catches a secondary symptom: `2xx` response with zero streaming chunks (upstream silently ignored `stream: true` or uses non-standard framing), reported as NEEDS_TUNING with an advisory rather than a patch because the remediation is server-side. Same Ollama-shape gating as v1.0-B (`:11434` port OR declared `options.num_ctx`) so cloud openai_compat providers SKIP without HTTP. Prior: **v1.0-B** added the direct `num_ctx` probe for input-side truncation via canary echo-back; **v1.0-A** added the declarative `output_filters: [strip_thinking, strip_stop_markers]` chain on both adapters across streaming + non-streaming. Tests: 382 → **453** (+71: 49 from v1.0-A filter chain + 10 from v1.0-B num_ctx probe + 12 from v1.0-C streaming probe). Runtime deps: 5 → 5. Prior: v0.7.0 umbrella (Beginner UX, made legible) — retrospective at [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md). Per-release detail: [CHANGELOG.md](./CHANGELOG.md) `[v1.0-C]` / `[v1.0-B]` / `[v1.0-A]` / `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`.
+## OS support
 
-What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
+CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, ollama, claude-code)`.
 
-- [x] OpenAI-compatible `POST /v1/chat/completions` ingress
-- [x] **Anthropic-compatible `POST /v1/messages`** ingress — Claude Code works via `ANTHROPIC_BASE_URL`
-- [x] SSE streaming on both endpoints (Anthropic event sequence `message_start → content_block_* → message_delta → message_stop`)
-- [x] Bidirectional Anthropic ⇄ OpenAI wire-format translation (`text` / `tool_use` / `tool_result` / `image` content blocks)
-- [x] OpenAI-compat adapter (covers llama.cpp / Ollama / OpenRouter / LM Studio / Together / Groq)
-- [x] **Native Anthropic adapter** (`kind: "anthropic"`) — from the Anthropic ingress the request passes straight through to `api.anthropic.com` with no OpenAI-shape round-trip, preserving `cache_control` / `thinking` blocks
-- [x] **Symmetric routing (v0.4-A)** — `/v1/chat/completions` can also reach `kind: "anthropic"` providers; the adapter reverse-translates `ChatRequest → AnthropicRequest` (system lifted, `tool_result` blocks batched into one user turn, `tool_calls ↔ tool_use`, stream `event: error → retryable=False`)
-- [x] **`anthropic-beta` header passthrough (v0.4-D)** — beta-gated body fields Claude Code relies on (`context_management`, newer `cache_control` / `thinking` variants) reach `api.anthropic.com` without the validator 400 because the client's `anthropic-beta` header is now forwarded verbatim
-- [x] Sequential fallback engine with `ALLOW_PAID=false` enforcement; mixed chains (`kind: anthropic` → `kind: openai_compat`) supported via polymorphic dispatch
-- [x] Profile selection: body `profile` > `X-CodeRouter-Profile` header > `X-CodeRouter-Mode` header (via `mode_aliases`) > config default
-- [x] **Tool-call repair** — models that emit `{"name":..., "arguments":...}` as plain text (qwen2.5-coder:14b often does this) are lifted back to valid `tool_use` blocks via a balanced-brace scanner + allowlist matching (non-streaming and streaming-via-downgrade)
-- [x] **Mid-stream fallback guard** — `MidStreamError` prevents silent fall-through after first byte; clients see an explicit `event: error` / `type: api_error` instead of spliced partial responses from two different providers
-- [x] **Usage aggregation** — `message_delta.usage.output_tokens` uses upstream `completion_tokens` when available, falls back to `(emitted_chars + 3) // 4`. Adapter auto-adds `stream_options.include_usage: true`, overridable per provider.
-- [x] **Structured upstream-error logging (v0.4-D)** — `provider-failed` log lines now include the upstream response body (truncated to 500 chars). 4xx diagnosis is no longer guesswork.
-- [x] **Thinking capability gate (v0.5-A)** — requests carrying Anthropic's `thinking: {type: "enabled"}` block are routed to providers whose model supports it (stable-sorted to the front of the fallback chain); if none do, the block is silently stripped and `capability-degraded` is emitted to the structured log. This means pinning `provider.model = claude-sonnet-4-5-20250929` no longer 400s on adaptive-thinking side requests — the block is dropped on the way out rather than rejected by the upstream.
-- [x] **cache_control observability (v0.5-B)** — requests carrying `cache_control` markers that are about to hit an `openai_compat` provider (where the marker is lost during Anthropic → OpenAI translation) now emit `capability-degraded` with `reason: "translation-lossy"`. Unlike thinking, this is observability-only: chain order is preserved (user's latency/cost intent outweighs cache-hit savings), and the marker drop itself happens inside the translator, not in the gate. YAML escape hatch: `capabilities.prompt_cache: true` suppresses the log if a future `openai_compat` upstream extends the wire to preserve cache markers.
-- [x] **`reasoning` field passive strip (v0.5-C)** — some OpenRouter free models (confirmed on `openai/gpt-oss-120b:free`) return a non-standard `reasoning` field on each choice's `message` / `delta`. Strict OpenAI-shape clients can reject the unknown key, so the `openai_compat` adapter now removes it before the response leaves the adapter and emits `capability-degraded` (`reason: "non-standard-field"`). Streaming: one log per stream, not per chunk. YAML escape hatch: `capabilities.reasoning_passthrough: true` keeps the field intact when CodeRouter is intentionally fronting a reasoning-aware downstream.
-- [x] **`--mode` CLI / `CODEROUTER_MODE` env (v0.6-A)** — pick the active profile at server-launch time without editing the config (`coderouter serve --mode claude-code-direct`). Startup validates the name against the loaded config and fails fast with the list of valid profiles instead of deferring to the first request. Per-request overrides (header / body) still win.
-- [x] **Profile-level parameter override (v0.6-B)** — a profile can override `timeout_s` and `append_system_prompt` for every attempt in its chain (replace semantics: profile value wins entirely when set). `append_system_prompt: ""` explicitly clears the provider's directive for this profile. Threaded through a `ProviderCallOverrides` dataclass so adapters never need to know the profile concept.
-- [x] **Declarative `ALLOW_PAID` gate (v0.6-C)** — when the paid gate filters the entire chain to empty, a single aggregate `chain-paid-gate-blocked` warn fires (with `profile` / `blocked_providers` / `hint` fields) so the root cause is grep-visible in one line, instead of getting buried under `NoProvidersAvailableError`. Per-provider `skip-paid-provider` INFO is preserved for traceability; mixed chains where a free provider survives stay silent (the normal `provider-failed` trail narrates them).
-- [x] **`mode_aliases` + `X-CodeRouter-Mode` header (v0.6-D)** — clients send an intent name (`coding` / `long` / `fast`) via header; a YAML `mode_aliases:` block resolves it to the concrete profile. Lets the chain be rewired without touching client code. Precedence: body `profile` > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > default (explicit implementation always wins over intent). Broken alias targets fast-fail at startup; unknown modes → 400 with the list of declared aliases; a `mode-alias-resolved` INFO log records every resolution.
-- [x] **Declarative `model-capabilities.yaml` registry (v0.7-A)** — the "which Anthropic model families accept the `thinking` body field" heuristic (and future `tools` / `reasoning_passthrough` / `max_context_tokens` defaults) lives in `coderouter/data/model-capabilities.yaml` instead of being baked into Python. Users can extend or override at `~/.coderouter/model-capabilities.yaml`. Schema: `rules: [{match: <fnmatch glob>, kind: anthropic|openai_compat|any, capabilities: {...}}]` with first-match-per-flag semantics. Precedence: `providers.yaml` `capabilities.*` (explicit per-provider) > user YAML > bundled YAML > unset. Adding a new Anthropic family when it ships is a one-line YAML edit; no code change required.
-- [x] **`coderouter doctor --check-model <provider>` (v0.7-B)** — live probes one provider from `providers.yaml` (auth + basic chat / tool_calls / thinking / reasoning-leak), compares with the v0.7-A registry, and prints a per-capability verdict table plus copy-paste YAML patches on mismatch. Uses direct `httpx` (not the adapter) so the reasoning-leak probe sees the raw upstream body before the v0.5-C strip, and the thinking probe sends Anthropic's native shape. Auth-probe failure short-circuits the remaining probes (`SKIP`) to save tokens. Exit codes: `0` match / `2` needs-tuning / `1` unrecoverable (auth / unreachable / unknown provider).
-- [x] **Declarative output-cleaning filter chain (v1.0-A)** — `output_filters: [strip_thinking, strip_stop_markers]` on any provider scrubs `<think>...</think>` blocks and the six default stop markers (`<|turn|>` / `<|end|>` / `<|python_tag|>` / `<|im_end|>` / `<|eot_id|>` / `<|channel>thought`) from model output. Stateful streaming: partial tags split across SSE chunks (`<thi` / `nk>`) are held back and re-examined with the next chunk; EOF flushes any safe tail via a synthetic chunk on OpenAI-compat or a synthetic `content_block_delta` on Anthropic. Per-text-block chain on Anthropic so `<think>` leakage in one content block cannot bleed into the next. One log per stream (`output-filter-applied` with `provider` / `filters` / `streaming`). Unknown filter names fail fast at config load, not on the first request. The v0.7-B doctor reasoning-leak probe now observes content-embedded markers and emits the exact `output_filters: [...]` patch needed — the first application of "transformation always rides with a probe".
-- [x] **Doctor `num_ctx` probe (v1.0-B)** — direct detection of Ollama silent prompt truncation (plan.md §9.4 symptom #1). The probe embeds a canary token at the front of a ~5K-token prompt and asks the model to echo it back; a missing canary implies the front of the prompt was dropped. Fires only for Ollama-shape providers (port 11434, or an `extra_body.options.num_ctx` declaration) — other `kind: openai_compat` upstreams SKIP. Four verdict branches: canary echoed & declared adequate → OK; canary echoed with nothing declared → informational OK; canary missing with nothing declared → NEEDS_TUNING with patch adding `extra_body.options.num_ctx: 32768`; canary missing with a declaration present → NEEDS_TUNING bumping to 32768 and, when the declaration already exceeds the threshold, a note that the model's intrinsic context limit may be the real ceiling. Runs between auth and tool_calls in the pipeline so truncation verdicts dominate the report (the previous heuristic misattributed the symptom to `capabilities.tools`).
-- [x] JSON-line structured logging, `/healthz`, tests (**441 green**)
+| OS | Server | Local inference | Notes |
+|---|---|---|---|
+| macOS — Apple Silicon (M1–M5) | ✅ | ✅ Metal (native) | **Primary dev target** |
+| macOS — Intel | ✅ | ⚠️ CPU only | Cloud fallback only is practical |
+| Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ CUDA or CPU | Fully supported |
+| Linux — ARM64 (Pi 5 / Graviton) | ✅ | ⚠️ CPU on Pi | Usable as a route-to-cloud proxy |
+| Windows — WSL2 (Ubuntu) | ✅ | ✅ | **Recommended Windows path** |
+| Windows — native | ⚠️ partial | ✅ CUDA | `scripts/verify_*.sh` need bash (Git Bash/WSL2) |
+
+Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs/usage-guide.md#1-os-compatibility).
+
+## Status — v1.0 stable (2026-04)
+
+**453 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+
+What CodeRouter can do for you today:
+
+- **Bridge any client to any provider.** Accept requests from any OpenAI-compatible client **and** from Claude Code (via `/v1/messages`). Route them — streaming or non-streaming — to a local Ollama, OpenRouter free, Anthropic, or any mix of those in a single fallback chain.
+- **Fall back safely without leaking partial responses.** If the first provider fails before the first byte, the next one tries. If it fails *after* the first byte, the client sees one clean `event: error` — not a spliced Frankenstein reply.
+- **Pay only when you opt in.** `ALLOW_PAID=false` (the default) keeps paid providers out of every chain, and emits one clear log line when it does block.
+- **Repair what small local models break.** Qwen/DeepSeek-style models that emit `{"name":..., "arguments":...}` as plain text get lifted back into valid `tool_use` blocks before Claude Code sees them.
+- **Tell you what's wrong.** `coderouter doctor --check-model <provider>` runs six probes — auth, context-window truncation, streaming cutoff, tool-call capability, reasoning-field leaks, Anthropic `thinking` support — and prints copy-paste YAML patches when your declarations don't match reality.
+- **Scrub reasoning leakage.** `output_filters: [strip_thinking, strip_stop_markers]` on any provider removes `<think>…</think>` blocks and six stop-marker variants from the response stream, stably across SSE chunk boundaries.
+- **Preserve Anthropic-native features when the chain reaches Anthropic.** `cache_control`, `thinking`, and `anthropic-beta` header-gated body fields pass through verbatim on `kind: anthropic` providers; lossy translation down to OpenAI shape is logged, not silent.
+
+**Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
+
+**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.1 — `coderouter doctor --network` for CI, plus launcher scripts. v1.5 — metrics dashboard.
 
 ### Use it with Claude Code
 
