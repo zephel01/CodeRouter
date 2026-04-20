@@ -29,7 +29,12 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
-from coderouter.logging import get_logger, log_capability_degraded
+from coderouter.logging import (
+    get_logger,
+    log_capability_degraded,
+    log_output_filter_applied,
+)
+from coderouter.output_filters import OutputFilterChain
 
 logger = get_logger(__name__)
 
@@ -225,6 +230,28 @@ class OpenAICompatAdapter(BaseAdapter):
                     reason="non-standard-field",
                 )
 
+        # v1.0-A: apply output_filters chain to each choice's message.content
+        # (the non-standard `reasoning` field was already removed above, so
+        # we only see the client-visible content). A fresh chain per call
+        # keeps state-holding filters (strip_thinking) scoped to this request.
+        if self.config.output_filters:
+            chain = OutputFilterChain(self.config.output_filters)
+            for choice in data.get("choices") or []:
+                if not isinstance(choice, dict):
+                    continue
+                msg = choice.get("message")
+                if isinstance(msg, dict):
+                    content = msg.get("content")
+                    if isinstance(content, str) and content:
+                        msg["content"] = chain.feed(content, eof=True)
+            if chain.any_applied:
+                log_output_filter_applied(
+                    logger,
+                    provider=self.name,
+                    filters=chain.applied_filters(),
+                    streaming=False,
+                )
+
         # Tag the response with which provider answered
         data.setdefault("object", "chat.completion")
         return ChatResponse(coderouter_provider=self.name, **data)
@@ -244,6 +271,20 @@ class OpenAICompatAdapter(BaseAdapter):
         # produce dozens of duplicate log lines.
         strip_reasoning = not self.config.capabilities.reasoning_passthrough
         reasoning_logged = False
+
+        # v1.0-A: stateful output_filters chain for the duration of this
+        # stream. Handles `<think>...</think>` / stop markers that split
+        # across SSE chunk boundaries. One chain instance per request;
+        # `output_filter_logged` dedupes the one-shot info log.
+        filter_chain: OutputFilterChain | None = (
+            OutputFilterChain(self.config.output_filters)
+            if self.config.output_filters
+            else None
+        )
+        output_filter_logged = False
+        # Captured for the closing flush chunk (if any): reuse the last
+        # seen chunk's id/model so the flush emission looks native.
+        last_chunk_template: dict[str, Any] | None = None
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
                 async with client.stream(
@@ -267,7 +308,7 @@ class OpenAICompatAdapter(BaseAdapter):
                             continue
                         data_str = line[len("data:"):].strip()
                         if data_str == "[DONE]":
-                            return
+                            break
                         try:
                             payload_obj = json.loads(data_str)
                         except json.JSONDecodeError:
@@ -284,7 +325,47 @@ class OpenAICompatAdapter(BaseAdapter):
                                     reason="non-standard-field",
                                 )
                                 reasoning_logged = True
+                        if filter_chain is not None:
+                            for choice in payload_obj.get("choices") or []:
+                                if not isinstance(choice, dict):
+                                    continue
+                                delta = choice.get("delta")
+                                if not isinstance(delta, dict):
+                                    continue
+                                content = delta.get("content")
+                                if isinstance(content, str) and content:
+                                    delta["content"] = filter_chain.feed(content)
+                            last_chunk_template = payload_obj
                         yield StreamChunk(**payload_obj)
+
+            # v1.0-A: flush the chain at end-of-stream. If filters held
+            # back a partial-tag suffix that turned out NOT to be a tag,
+            # emit one synthetic content-only chunk so the client sees
+            # every safe byte. An unmatched `<think>` at EOF is silently
+            # dropped (the filter treats the partial block as thinking).
+            if filter_chain is not None:
+                tail = filter_chain.feed("", eof=True)
+                if tail and last_chunk_template is not None:
+                    flush_chunk: dict[str, Any] = {
+                        "id": last_chunk_template.get("id", ""),
+                        "object": last_chunk_template.get(
+                            "object", "chat.completion.chunk"
+                        ),
+                        "created": last_chunk_template.get("created", 0),
+                        "model": last_chunk_template.get("model", self.config.model),
+                        "choices": [
+                            {"index": 0, "delta": {"content": tail}}
+                        ],
+                    }
+                    yield StreamChunk(**flush_chunk)
+                if filter_chain.any_applied and not output_filter_logged:
+                    log_output_filter_applied(
+                        logger,
+                        provider=self.name,
+                        filters=filter_chain.applied_filters(),
+                        streaming=True,
+                    )
+                    output_filter_logged = True
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout streaming from {url}", provider=self.name, retryable=True

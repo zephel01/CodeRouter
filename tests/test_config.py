@@ -219,3 +219,60 @@ def test_missing_config_path_is_helpful(
     msg = str(info.value)
     assert "providers.yaml" in msg
     assert "examples/providers.yaml" in msg
+
+
+# ======================================================================
+# v1.0-A: output_filters validation at config-load time
+# ======================================================================
+
+
+def test_output_filters_empty_by_default() -> None:
+    """Providers without an ``output_filters:`` block default to an empty list.
+
+    Guards backward compatibility with v0.7.x configs — existing files must
+    continue to load unchanged.
+    """
+    from coderouter.config.schemas import ProviderConfig
+
+    p = ProviderConfig(
+        name="local",
+        base_url="http://localhost:11434/v1",
+        model="qwen2.5-coder:14b",
+    )
+    assert p.output_filters == []
+
+
+def test_output_filters_accepts_known_names() -> None:
+    from coderouter.config.schemas import ProviderConfig
+
+    p = ProviderConfig(
+        name="local",
+        base_url="http://localhost:11434/v1",
+        model="qwen2.5-coder:14b",
+        output_filters=["strip_thinking", "strip_stop_markers"],
+    )
+    assert p.output_filters == ["strip_thinking", "strip_stop_markers"]
+
+
+def test_output_filters_unknown_name_fails_at_load() -> None:
+    """Fast-fail: typo'd ``strp_thinking`` must raise at construction time.
+
+    Same shape as ``_check_default_profile_exists`` / ``_check_mode_alias_
+    targets_exist`` — bad declarations surface at startup, not at first
+    request.
+    """
+    from pydantic import ValidationError
+
+    from coderouter.config.schemas import ProviderConfig
+
+    with pytest.raises(ValidationError) as info:
+        ProviderConfig(
+            name="local",
+            base_url="http://localhost:11434/v1",
+            model="qwen2.5-coder:14b",
+            output_filters=["strp_thinking"],
+        )
+    msg = str(info.value)
+    assert "strp_thinking" in msg
+    # Error lists known filters so the fix is a copy-paste.
+    assert "strip_thinking" in msg

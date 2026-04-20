@@ -6,6 +6,218 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.0.0] — 2026-04-20 (Umbrella tag — The observation loop, closed)
+
+**Theme: v1.0-A / v1.0-B / v1.0-C を束ねる umbrella tag。** v0.7 retrospective で "transformation には probe が伴う" 原則を予告した、その具体化を 1 つの minor に束ねた。v1.0-A で宣言的 `output_filters` filter chain (transformation) + doctor reasoning-leak probe 拡張 (probe) を同一 release で同梱、v1.0-B で v0.7-B の symptom #1 (input-side `num_ctx` truncation) を間接検出から直接検出へ置換 — canary `ZEBRA-MOON-847` + ~5K token padding + echo-back → 5-verdict branch + `extra_body.options.num_ctx: 32768` patch、v1.0-C で同じ手法を output-side に鏡像化 — `"Count from 1 to 30"` deterministic prompt を streaming で投げ `finish_reason="length"` + 短 content から output truncation を直接検出 + `options.num_predict: 4096` patch。Ollama の 2 つの truncation knob (入力側 `num_ctx` / 出力側 `num_predict`) 両方が直接観測可能になった。併せて v1.0-verify として 3-scenario 実機 runner (`scripts/verify_v1_0.sh`) + `verify-ollama-bare` / `verify-ollama-tuned` provider pair を整備 — v0.5-verify の bare/tuned delta assertion pattern を 2 度目の instance として再利用、実機 run (Ollama 0.20.5 + qwen2.5-coder:7b、2026-04-20 23:23 JST) で **3/3 PASS**。副次成果として Ollama 0.20.5 が `/v1/chat/completions` の request-time `options.num_ctx` / `options.num_predict` を silent override する build であることが判明 — bare 側で症状を induce できなかったため B+C scenario に **ADVISORY branch** を追加 (bare は advisory、tuned 側の `[OK]` flip と patch-default-value 反映が hard evidence)、`coderouter/doctor.py` の num_ctx probe canary-echoed 分岐を 3-branch に split (`declared is None` と `declared < threshold but still echoed` を診断的に分離)。narrative layer は [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)、per-sub-release の機能詳細は下の `[v1.0-A]` / `[v1.0-B]` / `[v1.0-C]`、live-verify の evidence doc は [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。
+
+- Tests: 382 → **453** (+71, +18.6%)、v1.0-A +49 / v1.0-B +10 / v1.0-C +12 / v1.0-verify ±0
+- Runtime deps: 5 → 5 (output_filters は pure-Python scanner、num_ctx probe は padding + string match、streaming probe は `httpx.AsyncClient().stream()` + 文字列 SSE parse — 10+ sub-release 連続で SDK 依存ゼロを維持)
+- Design through-lines:
+  - **Transformation + probe in same release** (v1.0-A) — v0.7-B retrospective の宣言が v1.0 で習慣化。v1.0-A output filter chain と reasoning-leak probe 拡張が同一 release に同梱された
+  - **Symptom-orthogonality heuristic for probe ordering** (v1.0-B / v1.0-C) — `num_ctx` は先行 probe の判定に干渉するため **chain 先頭寄り** (auth の直後)、`streaming` は直交軸なので **末尾**。"interferes-goes-first, orthogonal-goes-last" を明文化
+  - **Stateful boundary scrubber with partial-suffix hold-back** (v1.0-A) — `_max_suffix_overlap` で chunk 境界の partial tag を保留、streaming / non-streaming で単一 code path を共有。将来の filter 追加時の shape を確立
+  - **Ollama-shape signals as abstraction** (v1.0-B / v1.0-C 共用) — `_is_ollama_like(provider)` の 2-signal 判定 (`:11434` port OR `extra_body.options.num_ctx` declared) を v1.0-B で定義 → v1.0-C が verbatim 再利用、3rd Ollama-specific probe が来ても同じ helper に接続できる
+  - **Bare/tuned delta assertion as live-verify convention** (v1.0-verify) — v0.5-verify の pattern が generalize することを 2nd instance で確認、v1.1-verify 以降の標準形に
+
+### v1.0 umbrella-level follow-ons
+
+v1.0 各 sub-release の follow-on は該当 section を参照。umbrella level で横串にかかるものは以下:
+
+- **`num_ctx` + `num_predict` joint probe** — 同一 Ollama upstream の 2 knob を 1 verdict + 1 merged patch (`extra_body.options: {num_ctx: 32768, num_predict: 4096}`) で emit、`format_report()` 側で both-present を検出して patch を融合する post-processing 案。v1.1 scope
+- **`_has_output_length_knob` / `_has_context_length_knob` generalization** — 2nd non-Ollama upstream with tunable context/output cap (vLLM `--max-model-len` / Together streaming quirks) が現れた時、`_is_ollama_like` を rename + multi-signal に拡張。現状 YAGNI
+- **`FallbackChain.output_filters: list[str] | None`** — v0.6-B の shape (`timeout_s` / `append_system_prompt`) に合わせた chain-level override。staging/prod 分岐で filter を切りたい use case。v1.0-D or v1.1-A scope
+- **Doctor probe-grouping refactor** — 6-probe chain (`auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming`) を group 化 (`[auth] → [truncation: num_ctx, streaming] → [toolcall: tool_calls, thinking, reasoning-leak]`) + `--only truncation` / `--only toolcall` flag。v1.1 scope
+- **Anthropic-native variant of v1.0-verify scenario A** — `/v1/messages` → `kind: anthropic` provider with `output_filters` declared。per-text-block chain isolation を live-verify で初証跡。v1.0-verify-B or v1.1-adjacent
+- **Ollama 0.20.5 `options.*` passthrough investigation** — v1.0-verify の実機 run で `/v1/chat/completions` 経由の request-time `options.num_ctx` / `options.num_predict` を silent override する挙動を検出 (bare 側で症状 induce 失敗 → ADVISORY branch で回避)。v1.1 で (a) どの Ollama build から override が入ったか upstream CHANGELOG 確認、(b) `/api/generate` ネイティブエンドポイントでは honor されるか、(c) env var `OLLAMA_CONTEXT_LENGTH` 等の強制経路が使えるか、を調査。結果次第で doctor probe の induce 方式を変更 (request-body → env-var 注入) or probe 先を `/api/generate` に切替の判断。現状 advisory-bare / hard-tuned asymmetry で運用
+- **`recover_garbled_tool_json` / tool-call 変換層 / Code Mode / prompt cache / 14-case 回帰 / チューニング既定値** — §10.1 original scope のうち v1.0.0 で deliver されたのは output-cleaning のみ。残り 5 は v1.1+ に明示 re-scope 推奨 (plan.md §10 の DoD 表更新含む)
+- **`scripts/release-close.py`** — 4 retro 連続で follow-on に入って未実装。~9 doc touchpoint × 3 sub-release = ~27 手動 edit を自動化
+- **Test-count auto-updater** — 3 retro 連続、`pytest --collect-only -q | wc -l` → chart 行自動生成。`release-close.py` と同時実装が最小コスト
+
+---
+
+## [v1.0-C] — 2026-04-20 (Doctor streaming-path probe — direct Ollama output-side truncation detection)
+
+**Theme: v1.0-B の鏡像 — input-side truncation を直接観測できるようになった次は、output-side truncation を同じ粒度で観測する。** v1.0-B は prompt が `num_ctx` 不足で頭から切られて空応答になる症状を canary echo-back で直接検出した。ただし操作者が Claude Code で実際に遭遇するもう一つの silent-fail は **output 側** — 応答が途中で `finish_reason: length` で打ち切られる。典型的には Ollama の `options.num_predict` が default 128 (古い build) や 256 (一部 fork) のまま放置されているケース。v0.7-B の 4-probe + v1.0-B の `num_ctx` probe では、`max_tokens` を明示してない request で上流がどこまで出力するかの宣言層知識が無かったため、この症状は "なんか応答が途中で切れる" という操作者体感でしか拾えなかった。v1.0-C の streaming probe は SSE stream を最後まで consume して `finish_reason` + 実測 content 長さ を見て NEEDS_TUNING verdict と `options.num_predict: 4096` patch を emit する。v0.7 retrospective「silent-fail には直接 probe が必要」の symptom-coverage を 5 → 6 に拡張。v1.0-B (input-side) + v1.0-C (output-side) で Ollama 2-knob truncation の両面が直接検出可能になった。
+
+- Tests: 441 → **453** (+12)
+  - `tests/test_doctor.py` +12 (2 patch-emitter tests: `_patch_providers_yaml_num_predict` shape + YAML round-trip / 10 probe behavior tests: non-11434 port SKIP / non-Ollama kind SKIP chain / successful stream → OK / `finish_reason=length` + short content → NEEDS_TUNING + num_predict patch / zero-chunk JSON-instead-of-SSE → NEEDS_TUNING advisory no patch / no `[DONE]` terminator → OK with note / `extra_body.options.num_ctx` signal on non-11434 port fires streaming probe / outbound body carries `stream: true` + merged extra_body / HTTP 500 during streaming → SKIP / auth 401 short-circuits streaming probe)
+- Runtime deps: 5 → 5 (`httpx.AsyncClient().stream("POST", ...)` は既に依存、SSE parsing は pure string slicing、依存追加なし)
+- Non-breaking: v1.0-B で fixture `_oa_provider` が `localhost:8080` に寄せてあるので、既存 36 test は non-Ollama-shape 判定で streaming probe も SKIP で通過。Ollama-shape opt-in の既存 5 num_ctx test には新たに 5 つ目の SSE mock (`_add_sse_ok_mock`) を 1 行で追加
+
+### Added
+
+- **`coderouter/doctor.py` — `_probe_streaming(provider)` async function** (~130 LOC)
+  - Deterministic prompt: `_STREAMING_PROBE_USER_PROMPT = "Count from 1 to 30, one number per line. Output only the numbers, nothing else."` — 正常応答は約 60-90 char (2 digit 数字 + 改行 × 30)、`num_predict=128` 辺りで頭打ちになると content が極端に短くなる observable pattern。canary のような hallucination 耐性は不要 — 出力長さ **そのもの** が被観測量
+  - Threshold constants: `_STREAMING_PROBE_MIN_EXPECTED_CHARS = 40` (30 個の数字を改行区切りで並べるだけで 60+ char、40 を切るのは明確に打ち切られたケース)、`_STREAMING_PROBE_NUM_PREDICT_DEFAULT = 4096` (Claude Code の typical 応答 200-2000 token をカバーしつつ VRAM 圧迫を避ける運用値)
+  - Probe body 構築: `body = dict(provider.extra_body); body.update({model, messages, max_tokens=128, temperature=0, stream=True})` — `num_ctx` probe と同じく operator が宣言した `options.*` を実際に使って送る唯一の 2 probe (他 4 は adapter 層をバイパスして raw 上流を見る)
+  - 5-way verdict branch: (a) non-Ollama-shape (`_is_ollama_like` False) → SKIP; (b) transport error / 4xx / 5xx → SKIP + 診断 note; (c) 2xx + 0 chunks (JSON 応答が来た / 非標準 SSE framing) → NEEDS_TUNING **advisory** (server-side 設定なので patch は emit せず、"upstream silently ignored `stream: true`" を report); (d) 2xx + `finish_reason="length"` + content < 40 char → NEEDS_TUNING + `num_predict: 4096` patch; (e) 2xx + `finish_reason="stop"` + content 十分 → OK (`[DONE]` terminator が無ければ OK + informational note)
+- **`_http_stream_sse(url, *, headers, body, timeout) -> tuple[int|None, list[dict], bool, str]`** helper — `httpx.AsyncClient().stream("POST", ...)` で SSE 消費、`resp.aiter_lines()` で `data: <json>` 行を json parse、`data: [DONE]` sentinel を observe。戻り値: (status, chunks, saw_done, error_text)。transport error は (None, [], False, error_msg) に均す (caller の branch logic を簡潔化)
+- **`_patch_providers_yaml_num_predict(provider_name, desired_predict=4096) -> str`** — `_patch_providers_yaml_num_ctx` の sibling、`extra_body.options.num_predict: 4096` を emit。header comment で "merge into any existing extra_body.options" を明示 (operator が `num_ctx` を既に書いている既定ケースを想定、collision 回避指示付き)。YAML round-trip test で parse-able を保証
+- **`_STREAMING_PROBE_USER_PROMPT` / `_STREAMING_PROBE_MIN_EXPECTED_CHARS` / `_STREAMING_PROBE_NUM_PREDICT_DEFAULT`** constants — `_NUM_CTX_ADEQUATE_THRESHOLD` と同じ section に module-level で宣言、test から直接 import 可能 (behavior invariant を test で lock する v0.5 以降の pattern)
+- **`check_model` orchestration update**: 5 probe chain を 6 probe chain に拡張、`auth → num_ctx → tool_calls → thinking → reasoning-leak → streaming` の順に実行。streaming を **最後** に置くのは意図的 — num_ctx (input-side) / tool_calls / thinking / reasoning-leak はいずれも「宣言された capability vs 実測」の宣言層 probe、streaming は output-side 専用の独立観測軸。先行 probe の verdict に干渉しない位置に置くことで、streaming の NEEDS_TUNING が他 probe の dominant signal を塗りつぶさない (v1.0-B で num_ctx を tool_calls の **前** に置いたのとは逆方向の判断、症状カテゴリが直交しているため)
+- **Auth short-circuit SKIP tuple 拡張**: `("num_ctx", "tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak", "streaming")`。auth が通らない時は後続全 probe を SKIP で埋める invariant を 5-probe → 6-probe に broadcast
+
+### Changed
+
+- **`coderouter/doctor.py` モジュール docstring**
+  - Symptom 対応表の symptom #1 行を `"空応答 / 意味不明応答 → num_ctx probe (v1.0-B) + streaming probe (v1.0-C)"` に更新。v1.0-B で input-side を直接拾えるようになり、v1.0-C で output-side も拾えるようになったことを明示 (symptom #1 は実は 2 種類の truncation が合流する beginner-level 症状で、probe side は分離する必要があった旨を section comment で補足)
+
+- **README.md — v1.0-C status section**
+  - 見出しを `## Status: v1.0-B — Direct num_ctx probe` → `## Status: v1.0-C — Streaming-path probe (2026-04-20)` に pivot
+  - 段落を v1.0-B の output-side sibling として位置づけ直し: `finish_reason=length` + 短い content が典型 fingerprint、Claude Code ユーザから見える症状は "応答が途中で切れる"。`options.num_predict` が 128/256 default のまま放置されている Ollama build が主要な原因。count-1-to-30 の deterministic prompt、`extra_body.options.num_predict: 4096` patch、secondary "2xx with 0 chunks" symptom を advisory で拾う、Ollama-shape gating は v1.0-B 踏襲。test 数を 441 → **453** (+12) に更新、v1.0 系通算 +71 (49 + 10 + 12)
+
+- **`tests/test_doctor.py` — 既存 Ollama-shape test に 5 番目の SSE mock 追加**
+  - 5 つの既存 `extra_body={"options": {"num_ctx": ...}}` 系 test (declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit / `extra_body.options.num_ctx` signal on non-11434 / `extra_body` merges into outbound body) に `_add_sse_ok_mock(httpx_mock, url)` を 1 行追加。6-probe chain が end まで走り切れるように
+  - `_sse_stream_count_body(*, numbers=30, finish_reason="stop", include_done=True) -> bytes` / `_add_sse_ok_mock(httpx_mock, url, **kwargs)` test helper 追加 — 10 個の streaming probe test から共通利用、content-type `text/event-stream` + `data: {...}` × N + closing chunk with `finish_reason` + 任意 `data: [DONE]` を組み立て
+
+### Design notes
+
+- **Why streaming probe runs last, not before tool_calls like num_ctx.** v1.0-B の num_ctx probe を tool_calls の **前** に置いたのは、truncation (input-side) が tool_calls 不在を誤検出させる干渉関係があったため。v1.0-C の streaming probe は output-side で、他 probe の判定空間とは独立 — 先行 probe が OK で走った後に "応答が途中で切れる" が起きても、それぞれが異なる症状に対応する。probe chain の **最後** に置くことで、streaming の NEEDS_TUNING が他の dominant signal を塗りつぶすリスクをゼロにする。原則は「症状カテゴリが直交するなら末尾、干渉するなら先頭」
+- **Why gate on `_is_ollama_like`, not all openai_compat.** 非 Ollama の upstream (OpenRouter / Together / Groq / Anthropic) は `options.num_predict` を honor する path が無い — 仮に streaming probe が truncation を検出しても patch の送り先が無い (`extra_body.options.num_predict: 4096` を書いても効かない)。対 Ollama 互換実装のうち、`num_predict` を honor しない fork (まれ) は content が十分長く来るので SKIP せず OK で抜ける、逆に honor する fork には正しい patch が届く。gate は v1.0-B の num_ctx probe と共用 (同じ `_is_ollama_like` helper) — 将来 vLLM の `max_model_len` / `max_tokens` を native に持つ upstream が増えたら、probe 側を `_has_output_length_knob(provider)` に rename + 別 signal 追加で拡張する余地。現状 YAGNI
+- **Why "count from 1 to 30", not "echo this canary".** v1.0-B は prompt が truncate されたか (input-side) が問いなので canary echo-back が直接的。v1.0-C は response 自体が truncate されるか (output-side) が問いで、observable は「応答が短すぎる」こと **そのもの**。canary 方式だと "canary は出たが続きで説明文が切れた" を拾えない (canary は短いので num_predict=128 でも間に合う)。Count 1-to-30 は正常時約 60-90 char / `num_predict=128` で頭打ち時 15-30 char という分離が明瞭で、低い threshold (40 char) で確実に判定できる。数字というのは hallucination free なのも bonus — "0, 1, 2..." 改行 + temperature=0 で deterministic
+- **Why `num_predict: 4096`, not "find the model's max".** `num_ctx` と同じ哲学 — doctor が model-specific limit database を抱え込むと責務超過。4096 は Claude Code の typical 応答 (200-2000 token) を余裕で飲み、かつ consumer GPU (24GB 以下) で 7B-14B モデルの KV cache 上限を使い切らない値。model の真の max (Llama 3.1 32K completion / Qwen2.5 4K default / etc.) を知りたい operator は patch を受けた後 dial up する
+- **Why `num_predict` patch and `num_ctx` patch are separate emitters, not one "num_everything" helper.** `num_ctx` は input-side (prompt 全体を入れる buffer size)、`num_predict` は output-side (response に割り当てる token 数)。OpenAI 互換 API semantics では前者は implicit (prompt を投げた分だけ自動配置)、Ollama では explicit に `options.num_ctx` で宣言しないと 2048 default。`num_predict` は逆に OpenAI `max_tokens` に相当する概念だが、Ollama は request-body `max_tokens` を一部 ignore して `options.num_predict` を優先する build がある (実測)。2 つを別々の emitter に分けるのは、probe の verdict が (a) input 切れ / (b) output 切れ / (c) 両方 を区別して出せるようにするため。operator が両方 NEEDS_TUNING を受けたら 1 回の YAML edit で `extra_body.options: {num_ctx: 32768, num_predict: 4096}` にまとめて merge できる — header comment で merge direction を明示済み
+- **Why advisory (no patch) for "2xx with 0 chunks".** 上流が `stream: true` を silent ignore して非 SSE 応答を返すケース (一部 reverse proxy、一部 LM Studio 旧 build 等) は、クライアント側 providers.yaml には修正点が無い — 上流サーバの設定ミス or fork bug。patch を emit しても "貼る先が無い" 状態になり、operator を混乱させる。代わりに "server returned 2xx with 0 streaming chunks — upstream may have ignored `stream: true`" の advisory を吐き、remediation は (a) 上流の streaming 設定確認 / (b) CodeRouter 側 `providers.yaml` で `stream: false` を強制する flag (現状無い、将来検討) を示唆する方向に留める。「patch が emit できないなら verdict は出しても patch 欄は空」という v0.7-B から続く contract を保つ
+
+### Follow-ons
+
+- **Anthropic native streaming variant for v1.0-D** — 現状 probe は `openai_compat` + Ollama-shape のみ発火。Anthropic native (`kind: "anthropic"`) の streaming probe を分離した `_probe_streaming_anthropic` として追加する案。ただし `api.anthropic.com` の `max_tokens` は request 側で明示必須 (server-side default 無し) なので symptom 発生経路が異なる — Claude Code が `max_tokens` をすでに request に含める場合はほぼ symptom が起きない。優先度は低、必要性は v1.0-C の real-machine verify で measure してから判断
+- ~~**Real-machine verify for v1.0-C**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario C (streaming probe). The combined v1.0 verify (A + B + C in one runner) subsumes the originally-scoped per-release verify script. Bare `verify-ollama-bare` triggers the `streaming …… [NEEDS TUNING]` verdict with `num_predict: 4096` patch; tuned `verify-ollama-tuned` flips to `streaming …… [OK]`. Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md) (v0.5-verify pattern — evidence embedded, not a separate file). Nginx reverse-proxy 0-chunk reproducer was deferred — the unit tests already lock that branch via pytest-httpx, and the symptom is environmentally specific (fork-dependent, not Ollama-default) so live verify would be flakier than it's worth
+- **vLLM `max_model_len` detection (output-side)** — vLLM は `--max-model-len` で output-side cap を設定、`extra_body.max_tokens` で request 毎に絞る。Ollama の `num_predict` に意味論的対応。`_is_ollama_like` → `_has_output_length_knob` に rename して vLLM signal を追加する余地、v1.2+
+- **Streaming probe timeout tuning** — 現状 `timeout=provider.doctor_probe_timeout_s` (default 5.0s) を使う。count-1-to-30 は CPU inference で 2-4 秒かかることがある (14B モデル + CPU-only CI)、将来 streaming probe 専用の timeout knob (`CodeRouterConfig.doctor.streaming_probe_timeout_s`) を提供する案。現状 default で CI green、defer
+- **Canary collision for streaming probe** — v1.0-B と違い streaming probe は canary を使わないので collision リスクは無い。ただし count 1-to-30 を model が "要約して 5 個だけ出力" することは可能 (稀)。その場合 content length ≈ 10 char で誤 NEEDS_TUNING を出し得る。現状実測で issue なし、defer
+
+---
+
+## [v1.0-B] — 2026-04-20 (Doctor `num_ctx` probe — direct Ollama truncation detection)
+
+**Theme: v0.7 retrospective「transformation には probe が伴う」の裏面 — probe そのものが症状の間接検出に頼っていた箇所を直接検出に置換する。** v0.7-B で `coderouter doctor --check-model` を出荷した時、plan.md §9.4 の 5 症状のうち 4 つ (symptom 2-5) は直接 probe を持っていた。残る symptom #1 — Ollama の `num_ctx` default 2048 による silent prompt truncation — だけが "tool_calls probe が `no tool_use emitted` を報告する" という **間接経路** にぶら下がっていた。これは操作者に誤った remediation (`capabilities.tools: false`) を提案するリスクがある。v1.0-B の `num_ctx` probe は canary echo-back スキームで truncation を直接観測し、`extra_body.options.num_ctx: 32768` という **正しい** patch を emit する。v0.7-B の 4-probe suite → v1.0-B の 5-probe suite で、5 症状すべてに固有の probe が対応するようになった。
+
+- Tests: 431 → **441** (+10)
+  - `tests/test_doctor.py` +10 (2 patch-emitter tests: `_patch_providers_yaml_num_ctx` shape + YAML round-trip / 8 probe behavior tests: port-heuristic SKIP / 11434 canary-missing NEEDS_TUNING / declared-high canary-echoed OK / declared-low canary-missing bump / declared-adequate canary-missing intrinsic-limit note / `extra_body.options.num_ctx` signal on non-11434 port / `extra_body` merges into outbound body / auth short-circuit includes num_ctx SKIP)
+- Runtime deps: 5 → 5 (canary + padding は pure string、依存追加なし)
+- Non-breaking: 既存 36 test は fixture `_oa_provider` の default base_url を `localhost:11434` → `localhost:8080` に寄せることで influence なし (port-heuristic によって non-Ollama-shape と判定 → probe SKIP)、test URL の replace-all (31 箇所) を先行して終わらせた
+
+### Added
+
+- **`coderouter/doctor.py` — `_probe_num_ctx(provider)` async function** (~85 LOC)
+  - Canary constants: `_NUM_CTX_PROBE_CANARY = "ZEBRA-MOON-847"` (all-caps hyphenated token、自然言語に絶対現れない shape)、`_NUM_CTX_PROBE_PADDING_SENTENCE = "The quick brown fox jumps over the lazy dog near the river bank today. "` (~16 tokens)、`_NUM_CTX_PROBE_PADDING_REPEATS = 300` (~4800 tokens — Ollama default 2048 を確実に突破)、`_NUM_CTX_ADEQUATE_THRESHOLD = 8192` (Claude Code system + tool prompt 15-20k を受けるのに最低必要な headroom 考慮)
+  - Prompt 構築: `"CANARY: ZEBRA-MOON-847\n\n" + padding*300 + "\n\nQuestion: What exact canary token appeared at the very beginning of this message?"`。canary を **先頭** に置くのがキモ — Ollama は overflow 時 beginning を truncate する
+  - `provider.extra_body` を outbound body に shallow merge する唯一の probe (他の 4 probe は extra_body を無視する)。これによって operator が宣言した `options.num_ctx` を **実際に使って** truncation が起きるかを観測できる。merge order は `body = dict(provider.extra_body); body.update({model, messages, max_tokens, temperature})` — top-level probe fields が extra_body collision で勝つ (adapter の merge order と同じ semantics)
+  - 5-way verdict branch: (a) canary echoed & declared ≥ 8192 → OK (operator tuned); (b) canary echoed & nothing declared → OK with informational note (upstream が non-default default を使っている、unusual but benign); (c) canary missing & nothing declared → `NEEDS_TUNING` + patch add 32768; (d) canary missing & declared < 8192 → `NEEDS_TUNING` + patch bump to 32768; (e) canary missing & declared ≥ 8192 → `NEEDS_TUNING` + "model intrinsic limit may be lower than declared" note (まれ、Llama 3 8B の 8192 cap 等で起きる)
+- **`_is_ollama_like(provider) -> bool`** — 2 signal detection: (a) base_url が `:11434` を含む (Ollama canonical port); (b) `provider.extra_body.options.num_ctx` が宣言されている (only Ollama honors この path、operator が書いたなら by construction Ollama-shape)。`kind != "openai_compat"` は短絡で False。llama.cpp (:8080) / OpenRouter / Together / Groq / Anthropic native では fire しない — false positive 防止
+- **`_declared_num_ctx(provider) -> int | None`** — `extra_body.options.num_ctx` を安全に int として取り出す helper。`options` が dict でないケースや value が int でないケースでは None
+- **`_patch_providers_yaml_num_ctx(provider_name, desired_ctx=32768) -> str`** — nested YAML patch emitter: `extra_body: \n  options:\n    num_ctx: <n>`。v0.7-B の `_patch_providers_yaml_capability` / v1.0-A の `_patch_providers_yaml_output_filters` と対称形、comment header が "merge into any existing extra_body" を明示 (operator が他の options を持っている場合を考慮)
+- **`check_model` orchestration update**: probe 実行順序を `auth → num_ctx → tool_calls → thinking → reasoning-leak` に変更。**num_ctx を tool_calls の前に置く** のは意図的 — 昔の挙動では truncation が `no tool_use emitted` と誤検出されて `tools: false` patch が提案されていた。num_ctx を先に走らせることで truncation verdict が報告で支配的になり、operator が正しい remediation を適用できる
+- **Auth short-circuit SKIP tuple 拡張**: `("tool_calls", "thinking", "reasoning-leak")` → `("num_ctx", "tool_calls", "thinking", "reasoning-leak")`。auth が通らない時は後続全 probe を SKIP で埋める既存 invariant を 4-probe → 5-probe に broadcast
+
+### Changed
+
+- **`coderouter/doctor.py` モジュール docstring**
+  - Symptom 対応表の symptom #1 行を `"空応答 / 意味不明応答 → num_ctx probe + basic-chat probe"` に更新 (v0.7-B 時代は `num_ctx probe` と書いてあったが、実在しなかった — v1.0-B で文字通り実在するようになった)。symptom #3 行も `thinking probe + reasoning-leak content-marker detection (v1.0-A)` に更新 (v1.0-A の副作用を反映)
+
+- **`README.md` — Ollama beginner symptom #1**
+  - "currently does not probe num_ctx (planned follow-on); symptom shows up indirectly as tool_calls probe..." の notice を削除
+  - `coderouter doctor --check-model` 出力例の expected diagnostic を `num_ctx: NEEDS_TUNING — canary missing from reply; upstream truncated (no ``extra_body.options.num_ctx`` declared)` に書き換え、doctor が直接 emit する patch を pre-print
+  - "As of v1.0-B the doctor probe detects this directly" 説明を追加、canary + 5K padding スキームと Ollama-shape gating (:11434 / declared options) を 1 段落で明示
+
+- **`tests/test_doctor.py` — fixture migration** (`_oa_provider` default base_url)
+  - `localhost:11434/v1` → `localhost:8080/v1` (llama.cpp port) に pivot。全 36 既存 test で fixture を使っていた URL 参照 (31 箇所) を `replace_all` で一括更新。これによって `_is_ollama_like` が False を返し、既存 test は mock 配列を 1 個も増やさずに済む (num_ctx probe が SKIP で通過)
+  - fixture signature を `extra_body: dict[str, Any] | None = None` 受け取り形に拡張、Ollama opt-in test が `extra_body={"options": {"num_ctx": 32768}}` を宣言できるように
+
+### Design notes
+
+- **Why the `:11434` + `options.num_ctx` disjunction, not a boolean config flag.** v0.6-A / v0.6-D 以降の pattern で operator 明示指定を要求する手もあったが、(a) Ollama の fresh install は 100% `:11434` を使うので port から推論できる、(b) operator が `options.num_ctx` を書いている時点で Ollama 以外あり得ない (他のどの openai_compat upstream もこの path を honor しない) — なので "implicit signal of intent" で十分、新しい flag を増やすべきではない。false positive は `:11434` を使う自作サーバに限定されるが、その場合も `num_ctx` を honor する Ollama-互換実装なら probe は正しく動く、honor しない実装は canary が echoed されて OK で抜ける (最悪 informational OK になるだけで damage なし)
+- **Why 300 repeats, not 500 or 150.** Ollama default `num_ctx = 2048` tokens を超えて truncation を **確実に** 誘発させるのに最小の padding は 2048 tokens 強 = 130 repeats 程度だが、chunking overhead や BPE tokenization のばらつきを考慮して 300 repeats (~4800 tokens) でマージンを取る。500 repeats だと timeout_s=5.0 の default fixture で risky (特に CPU-only CI)、150 repeats だと 2048 boundary に近すぎて一部 tokenizer で通ってしまう。300 は実測で safe margin
+- **Why the canary is "ZEBRA-MOON-847", not a hash or UUID.** UUID だと prompt の先頭にあっても LLM が "hallucinate another UUID" と出力する可能性がある (自然言語の prior に近い形)。hash (e.g. `a7f9e2`) は逆に model が "reasonable answer shape" と認識してしまう。全大文字 + 2 ハイフン + アルファベット+数字の mix は natural text に絶対現れない shape — model は prompt で実見しない限り produce できない。長さ 14 char なので tokenizer が BPE で何トークンに分解しようが `in` match で拾える
+- **Why emit `32768` as the default patch, not "find the max the model supports".** 32768 は Claude Code prompt (system + tool + user history) を余裕で受ける実用値、かつ consumer hardware (M-series 16-64GB / 24GB VRAM GPU) で大半のモデル (7B-14B) が走る閾値。model の真の max (Llama 3.1 128K / Qwen2.5 32K / etc.) を調査して optimal 値を出そうとすると doctor が model-name-to-context の別 registry を維持することになり責務超過。32768 を一律提案して operator が memory 制約で dial down する余地を残す方が運用コスト低
+- **Why num_ctx probe runs before tool_calls, not last.** v0.7-B 時代の報告形では tool_calls probe が truncation 症状を最初に observable として拾って `NEEDS_TUNING: capabilities.tools` を出していた。num_ctx probe を後ろに置くと "tools=false + num_ctx=32768" という冗長な 2-patch 提案になる。前に置くことで num_ctx verdict が自然に支配的になり、次回 run では num_ctx が OK になって tool_calls 本来の verdict が観察できる。"一番 dominant な症状を先に出す" は v0.7 retrospective 「silent-fail には optimal な診断順序がある」の具体化
+- **Why `extra_body` shallow-merge in the probe.** 他の 4 probe (auth / tool_calls / thinking / reasoning-leak) は `extra_body` を無視する — probe の目的が "adapter 層を迂回して raw upstream 応答を見る" ことで、`extra_body` をまじなに merge すると "adapter が add する field (`think: false` etc.)" との相互作用まで test してしまう。num_ctx probe は唯一例外 — probe の存在意義自体が "宣言された `options.num_ctx` が実際に効いているか" の観測なので、`extra_body.options` を送らない probe は意味を成さない。merge は top-level shallow (option fields は nested dict のまま保持)、probe 固有の top-level (`model` / `messages` / `max_tokens` / `temperature`) は extra_body を上書きする順序で確定性を保つ
+
+### Follow-ons
+
+- ~~**Real-machine verify for v1.0-B**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario B (num_ctx probe). Bare `verify-ollama-bare` triggers `num_ctx …… [NEEDS TUNING]` + `num_ctx: 32768` patch; tuned `verify-ollama-tuned` flips to `num_ctx …… [OK]`. Paired with scenario C (streaming) they share a single doctor CLI invocation per side (the 6-probe chain runs all at once). Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)
+- **Probe model detection accuracy** — 将来的に Ollama 以外で `num_ctx`-ish knob を持つ upstream (例: vLLM の `max_model_len`) が openai_compat を名乗って出てきた時、`_is_ollama_like` を `_has_context_length_knob` に rename + multi-signal (vLLM なら `extra_body.max_model_len`) に拡張する余地。現状 YAGNI
+- **Dynamic threshold** — `_NUM_CTX_ADEQUATE_THRESHOLD = 8192` を hard-coded している。Claude Code 側の system prompt が将来 30k まで膨らむと 8192 では足りなくなる (現状でも tool 全開宣言で 18-20k)。`CodeRouterConfig.doctor.min_context: int` を provide して operator が上書きできるようにする案、v1.2 scope (doctor の configuration hierarchy を整えるタイミングで)
+- **Canary collision risk** — 極めて低確率だが、training corpus に "ZEBRA-MOON-847" が入っている model は "canary" が truncate されていないのに model が hallucinate できてしまう。probe の反証: canary を毎回 random 生成 (process-local seed、同じ session 内の再現性は保つ) に変える。現状実測で issue なし、defer
+
+---
+
+## [v1.0-A] — 2026-04-20 (Declarative output cleaning chain)
+
+**Theme: v0.7 retrospective で予告した「transformation には probe が伴う」原則の first application。** v0.5-C の reasoning-field passive strip は "model が reasoning field を吐いてくれれば" のみに効く受動層だった。しかし現場の Ollama / HF 蒸留モデルは `<think>...</think>` や `<|turn|>` / `<|channel>thought` 等を **content チャネルに inline で** 流し込んでくる (v0.7-C README symptom #3)。これらを adapter 境界で **宣言的** に剥がす filter chain を追加した。`providers.yaml` に `output_filters: [strip_thinking, strip_stop_markers]` を書くだけで、streaming / non-streaming 両方、OpenAI-compat / Anthropic native 両 adapter で一貫して動く。併せて v0.7-B の reasoning-leak probe を拡張 — content-embedded `<think>` / stop markers を検出し、必要な filter を列挙した `providers.yaml` patch を emit する。**宣言 (v0.7-A YAML) → probe (v0.7-B doctor) → transformation (v1.0-A filter chain)** の triad でやっと "beginner が踏む症状 3 (think-leak)" の観測ループが閉じた。
+
+- Tests: 382 → **431** (+49)
+  - `tests/test_output_filters.py` +31 (pure unit: chunk-boundary correctness / chain composition / validate registry)
+  - `tests/test_output_filters_adapters.py` +12 (adapter integration: generate / stream / tail flush / per-block chain isolation)
+  - `tests/test_config.py` +3 (`output_filters: [...]` schema validation at load time)
+  - `tests/test_doctor.py` +3 (reasoning-leak probe: content `<think>` / stop markers detection + patch shape + silence when already configured)
+- Runtime deps: 5 → 5 (pure stateful scanner、依存追加なし)
+- `examples/providers.yaml`: `ollama-qwen-coder-7b` / `-14b` / `ollama-hf-example` stanza に `output_filters: [strip_thinking]` を enable
+
+### Added
+
+- **`coderouter/output_filters.py`** (新規モジュール、public API ~280 LOC)
+  - `DEFAULT_STOP_MARKERS: tuple[str, ...]` — Claude Code で実測された 6 markers: `<|turn|>` / `<|end|>` / `<|python_tag|>` / `<|im_end|>` / `<|eot_id|>` / `<|channel>thought`。閉じカギカッコ省略形 (`<|channel>thought`) を含むのは実機観測ベース。変更には CHANGELOG note を義務付け (regression test `test_default_stop_markers_contents` で lock)
+  - `KNOWN_FILTERS: tuple[str, ...] = ("strip_thinking", "strip_stop_markers")` — registry、v1.0-A 時点で 2 filter
+  - `validate_output_filters(names: list[str]) -> None` — unknown name は `ValueError` で known names を列挙。typo `strp_thinking` → コピペで直せるエラーメッセージに
+  - `OutputFilter` (Protocol) — `feed(text: str, eof: bool = False) -> str` / `modified: bool`。stateful、per-stream 1 instance 原則
+  - `StripThinkingFilter` — `<think>...</think>` を inclusive で除去。partial tag (`<thi` / `</thi`) は chunk 境界で hold-back、EOF で unmatched open があれば tail drop (未完了 thinking block の流出を防ぐ)
+  - `StripStopMarkersFilter` — `_earliest_match(buffer)` で最初にヒットした marker を iterative に strip、partial marker (`<|pyth`) は hold-back。marker で無い `<|` は EOF で flush
+  - `_max_suffix_overlap(buffer, needle)` — longest N where `buffer[-N:] == needle[:N]`、chunk-boundary hold-back の核心ルーチン (両 filter で共通)
+  - `OutputFilterChain(filter_names)` — declaration 順で適用。`any_applied` / `applied_filters()` / `names` / `is_empty` / `feed`。unknown name は construction 時に `ValueError` (fast-fail)
+  - `apply_output_filters(names, text) -> (scrubbed, applied)` — non-streaming convenience。空 chain は identity、適用された filter 名のみ返す
+- **`coderouter/config/schemas.py` — `ProviderConfig.output_filters`** (新 field)
+  - `output_filters: list[str] = Field(default_factory=list, ...)` を `append_system_prompt` の直後に配置 (v0.6-B の sibling position)
+  - `@model_validator(mode="after") _check_output_filters_known` で `validate_output_filters` を呼ぶ。import は local (config → output_filters の one-way dependency を維持、cycle 回避)
+- **`coderouter/adapters/openai_compat.py` — filter hook** (`generate` + `stream`)
+  - `generate()`: v0.5-C reasoning strip の直後に `data["choices"]` iteration を挿入、各 `message.content` に `OutputFilterChain.feed(text, eof=True)` を適用、`any_applied` なら `log_output_filter_applied` で 1 message 1 log
+  - `stream()`: 入口で `filter_chain: OutputFilterChain | None` を provider 宣言から lazy 構築、`output_filter_logged: bool` と `last_chunk_template: dict | None` を track。per-chunk で `delta["content"]` に `chain.feed(text)` を適用 (eof=False)。`[DONE]` 受信時は従来の `return` を `break` に変更 → loop 後の flush code path に処理を集約。`chain.feed("", eof=True)` で hold-back された tail を flush、非空なら `last_chunk_template` から `id` / `model` / `created` / `system_fingerprint` を借りた synthetic SSE chunk を 1 発 yield (OpenAI SDK 互換性を壊さない)、最後に `[DONE]` を再送して実ストリーム終端
+- **`coderouter/adapters/anthropic_native.py` — filter hook** (`generate_anthropic` + `stream_anthropic`)
+  - `generate_anthropic()`: response parse 後、`data["content"]` の各 block について `block["type"] == "text"` なら fresh `OutputFilterChain` を作って `block["text"]` に適用。applied filter の union を log (per-response 1 log)
+  - `_process_stream_event_for_filters(event, *, chains, logged_flag) -> list[event]` 新 helper
+    - `content_block_start` (type=text) → `chains[index]` に fresh chain を格納
+    - `content_block_delta` (type=text_delta) → `chains[index].feed(delta["text"])` で in-place mutation
+    - `content_block_stop` → `chains[index].feed("", eof=True)` で tail を取得、非空なら同 index 向けの synthetic `content_block_delta` event を `content_block_stop` の **前に** prepend (event 順を自然に保つ)。`logged_flag: list[bool] = [False]` mutable cell で 1 stream 1 log を保証
+  - `stream_anthropic()`: 2 か所の `yield AnthropicStreamEvent(...)` 呼び出しを `for out_event in self._process_stream_event_for_filters(...): yield out_event` に置換、入口で `filter_chains: dict[int, OutputFilterChain] = {}` + `logged_flag = [False]` を初期化。**per-text-block chain** なので block 0 の未完了 `<think>` が block 1 に漏れない
+- **`coderouter/logging.py` — `log_output_filter_applied` chokepoint helper**
+  - `OutputFilterAppliedPayload` TypedDict: `provider: str` / `filters: list[str]` / `streaming: bool`
+  - `log_output_filter_applied(logger, *, provider, filters, streaming)` — info level、`log_capability_degraded` と同じ pattern (single chokepoint、payload typed、provider 横断の集計が容易)
+- **`coderouter/doctor.py` — reasoning-leak probe extension**
+  - prompt を `"In one word: capital of France?"` → `"Think step by step about the capital of France, then answer in one word."` + `max_tokens=128` に変更 (thinking block を誘発して leak 経路を確実に叩く)
+  - parse 後: `has_think = "<think>" in content_text` / `leaked_markers = [m for m in DEFAULT_STOP_MARKERS if m in content_text]` を計算、`provider.output_filters` の現状と照合
+  - `needs_strip_thinking or needs_strip_markers` → verdict `NEEDS_TUNING`、`_patch_providers_yaml_output_filters(provider_name, filters)` が `providers:\n  - name: <p>\n    output_filters: [<missing>]` 形の copy-paste 可能 patch を emit
+  - 未検出時の OK detail を `"no `reasoning` field observed and no content-embedded markers — nothing to strip."` に更新 (既存 test `test_reasoning_leak_not_present_reports_clean` が "nothing to strip" を assert しているので保持)
+  - `format_report` の declarations section に `output_filters` 行を追加
+
+### Changed
+
+- **`examples/providers.yaml`**
+  - `ollama-qwen-coder-7b`: `output_filters: [strip_thinking]` + 解説コメント (Qwen2.5-Coder は Claude Code の tool-heavy prompting で `<think>` を間欠的に流す / `strip_stop_markers` は Ollama chat template が `<|im_end|>` で clean に終端するので不要)
+  - `ollama-qwen-coder-14b`: 同じく `output_filters: [strip_thinking]` + 14b は scrub cost が cheap なので unconditional enable
+  - `ollama-hf-example` (commented stanza): 症状 3 (v0.7-C README) の remediation が 2 経路 (source-side `/no_think` / output-side `output_filters`) に整理されていることを stanza 内 comment で明示、`output_filters: [strip_thinking]` を commented-in form で提示 (uncomment → 即 active)。古い `reasoning_passthrough` hint 行は削除 (v1.0-A 経路の方が general のため)
+
+### Design notes
+
+- **Why `output_filters` lives on `ProviderConfig`, not `FallbackChain`.** filter の必要性は model 族依存 (Qwen2.5-Coder は `<think>` を流す / Claude は流さない) で、chain 依存ではない。v0.6-B で `FallbackChain.timeout_s` / `append_system_prompt` を provider 上書き形で入れたのと同じ philosophy: 「default は provider 宣言」「chain は部分 override 可能 (必要になれば v1.0-B で追加)」
+- **Why stateful filter, not regex `re.sub`.** streaming で chunk が `<thi` / `nk>` に割れた時、regex は match しない (chunk 1 回目が "hello <thi" のまま leak する)。`_max_suffix_overlap` で partial suffix を hold-back する scanner を書く方が regex 合成より短く、かつ streaming と non-streaming で同じ code path を共有できる。`re.sub` route は non-streaming 専用の二重実装を招くので却下
+- **Why per-text-block chain on Anthropic.** Anthropic native は 1 response に複数 `content_block` (text / tool_use / thinking) を直列で吐く。`<think>` が block 0 の末尾で未完了のまま block 1 (text) が始まる場合、per-stream 1 chain だと block 1 が全部 hidden 扱いになって可視部分が消失する。`dict[int, OutputFilterChain]` で block index ごとに isolated な chain を持つことで、block 境界が state も reset する。block 0 で未完了なら block 0 の text が EOF で drop されるだけ (block 1 は正常に流れる)
+- **Why `_process_stream_event_for_filters` returns a list of events.** synthetic flush event (hold-back された tail の吐き出し) は `content_block_stop` の **直前** に挿入される必要がある。呼び出し側が単純に `yield event` していた元 code を壊さずに "1 入力 event → 0 ~ 2 出力 events" の可能性を表現するため、list 返却 + `for ... yield` の展開に統一。Python の generator delegation (`yield from`) でも書けるが、list の方が test しやすい
+- **Why fast-fail at config load, not at first request.** unknown filter name を request 到達時まで遅延させると、config deploy から symptom 観測までが長くなる。`validate_output_filters` を `ProviderConfig` validator + `OutputFilterChain` constructor の 2 箇所で呼ぶことで、(a) YAML load 時に全 provider 分を一括検証、(b) test 等で chain を直接組む path でも同じエラーが出る、を両立
+- **Why `log_output_filter_applied` fires at most once per stream.** filter 適用は SSE の delta ごとに起きうるが、observability の観点で欲しい粒度は "この request で strip_thinking が発動したか" であって "何回 chunk が scrub されたか" ではない。`output_filter_logged: bool` / `logged_flag: list[bool] = [False]` の mutable flag pattern で 1-stream 1-log を保証。非 streaming も同様 (per-message 1 log)
+- **Why the doctor probe prompt became "Think step by step about...".** 従来の "capital of France?" だと tuned model は thinking block を吐かずに一発で答え、leak の検出機会を逸する。prompt を "step by step" にし max_tokens を 128 に bump することで、thinking を誘発しつつ検出されるべき `<think>` / stop markers が確実に現れる。v0.7-B retrospective の "probe は観測すべき経路を能動的に活性化すべき" の follow-on
+- **Why the probe emits filter patches, not just diagnostics.** v0.7-B の tool_calls probe が `capabilities.tools: false` を copy-paste 形で emit したのと同じ philosophy: 検出した症状に対して **operator が即適用できる remediation** を併走させる。patch の列挙順は検出順 (`strip_thinking` first if `<think>` found / `strip_stop_markers` second if markers found)、chain declaration 順と一致するので YAML に貼り付けるだけで期待通りに動く
+
+### Follow-ons
+
+- ~~**Real-machine verify for v1.0-A**~~ — **Landed 2026-04-20** via `scripts/verify_v1_0.sh` scenario A (filter chain). Routes a `/v1/chat/completions` request through CodeRouter against `verify-v1-bare` then `verify-v1-tuned`, asserts the tuned response's `message.content` is `<think>`-free AND the server stderr log contains an `output-filter-applied` record for `filters=["strip_thinking"]`. Bare side is advisory (qwen is stochastic; if it doesn't emit `<think>` on the sample the script reports "symptom could not be induced" rather than failing). Evidence inline in [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md). v0.7 retrospective follow-on #5 (real-machine verify for v0.7) remains scheduled for v0.8 scope — that pass will also sanity-check model-capabilities.yaml matcher against live provider metadata
+- **Additional filters** — `strip_tool_call_text_wrapper` (v0.3-A の text→tool_calls lifting と対になる "万一流出した場合の scrubber")、`collapse_whitespace` (model によっては `<think>` strip 後に `"hello  world"` の 2 連 space が残る) を `KNOWN_FILTERS` に追加する候補。現状は YAGNI
+- **Filter performance under chunk storms** — 1 SSE chunk が 1-2 文字しか含まない model (一部 Ollama 設定) で `_max_suffix_overlap` が `len(buffer) * len(markers)` で O(N*M) になる。現状 DEFAULT_STOP_MARKERS 6 本 × 平均 marker len 10 なので worst 60 ops/chunk で無視できるが、将来 marker 数が増えたら trie ベースに置換 (v1.5+ scope)
+- **Chain-level `output_filters` override** — v0.6-B の `FallbackChain.timeout_s` / `append_system_prompt` と同じく chain-level 上書きが欲しいケース (stage-env ではフィルタ無効、prod では有効) が想定される。現状は provider を分割すれば済むが、v1.0-B or v1.1 で `FallbackChain.output_filters: list[str] | None` として追加検討
+- **Doctor probe: streaming path** — 現在の `_probe_reasoning_leak` は non-streaming endpoint を叩く。streaming で `<think>` が chunk 境界に割れた時のみ leak する稀な failure mode は拾えていない。`_probe_reasoning_leak_streaming` を v1.0-C 以降で足す (v0.5.1 A-2 の streaming verify pattern を再利用。v1.0-B は先に num_ctx direct probe を解消した)
+
+---
+
 ## [v0.7.0] — 2026-04-20 (Umbrella tag — Beginner UX, made legible)
 
 **Theme: v0.7-A / v0.7-B / v0.7-C を束ねる umbrella tag。** 「Ollama 立てたけど動かない」を 1 コマンドで切り分け可能にする minor。plan.md §9.4 の silent-fail 5 症状 (num_ctx truncation / tools incompetence / `<think>` leak / model-tag 404 / missing API key) を contract として、(A) 宣言を Python literal から YAML に外出し、(B) 宣言と実機を突合する live-probe (`coderouter doctor --check-model <provider>`) を実装、(C) 症状 × probe コマンド × YAML patch × fix command の 3–4 点セットを README Troubleshooting に章立て — の 3 段階で beginner UX の観測ループを閉じた。narrative layer は [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md)、per-sub-release の機能詳細は下の `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`。

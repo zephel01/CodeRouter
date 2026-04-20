@@ -97,7 +97,38 @@ class ProviderConfig(BaseModel):
         description="Appended to existing system message (or added as a new one).",
     )
 
+    # v1.0-A: declarative output cleaning chain. Names map to filter
+    # implementations in ``coderouter/output_filters.py`` — currently
+    # ``strip_thinking`` (``<think>...</think>`` blocks) and
+    # ``strip_stop_markers`` (``<|python_tag|>`` / ``<|eot_id|>`` /
+    # ``<|im_end|>`` / ``<|turn|>`` / ``<|end|>`` / ``<|channel>thought``).
+    # Empty = no scrubbing (backward compatible with v0.7.x). Applied at
+    # the adapter boundary on both streaming and non-streaming paths;
+    # stateful across SSE chunk boundaries. Unknown names fail at load.
+    output_filters: list[str] = Field(
+        default_factory=list,
+        description=(
+            "v1.0-A: ordered filter chain applied to assistant content. "
+            "Known: strip_thinking, strip_stop_markers. Empty = off."
+        ),
+    )
+
     capabilities: Capabilities = Field(default_factory=Capabilities)
+
+    @model_validator(mode="after")
+    def _check_output_filters_known(self) -> ProviderConfig:
+        """v1.0-A: fail at config-load on a typo'd filter name.
+
+        Same fast-fail pattern as ``_check_default_profile_exists`` —
+        surfaces ``output_filters: [strp_thinking]`` at startup rather
+        than silently no-op'ing forever.
+        """
+        # Import locally to avoid a hard package-level cycle
+        # (output_filters imports nothing from config).
+        from coderouter.output_filters import validate_output_filters
+
+        validate_output_filters(self.output_filters)
+        return self
 
 
 class FallbackChain(BaseModel):

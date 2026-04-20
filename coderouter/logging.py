@@ -209,3 +209,74 @@ def log_chain_paid_gate_blocked(
     logger.warning(
         "chain-paid-gate-blocked", extra=payload  # type: ignore[arg-type]
     )
+
+
+# ---------------------------------------------------------------------------
+# v1.0-A: output-filter-applied log shape
+#
+# Motivation (plan.md §10.2 "出力クリーニング" / retrospective v0.7 "transformation
+# には probe が伴う"):
+#   ``output_filters`` is an operator opt-in (declared in providers.yaml)
+#   rather than a passive / silent strip, so it does not fit the
+#   ``capability-degraded`` vocabulary — nothing is "degraded" when a user
+#   explicitly asked for scrubbing. A dedicated typed log line keeps the
+#   observability surface legible (grep for ``output-filter-applied`` to
+#   see exactly when a filter fired, for which provider, via which
+#   filters).
+#
+# Scope:
+#   - Fires ONCE per generate()/stream() call (log-once, mirroring the
+#     v0.5-C reasoning-strip dedupe).
+#   - Only fires when at least one filter actually modified the stream.
+#     A chain configured but never triggered stays quiet.
+# ---------------------------------------------------------------------------
+
+
+class OutputFilterAppliedPayload(TypedDict):
+    """Structured shape of the ``output-filter-applied`` log record.
+
+    Fields
+        provider: the ``name:`` of the ProviderConfig whose adapter ran
+            the chain — correlates with surrounding ``provider-ok`` /
+            ``provider-failed`` log lines.
+        filters: names of filters that actually modified the stream
+            (subset of the configured chain, preserving declaration
+            order). Single-entry today when only ``strip_thinking``
+            triggers, multi-entry once an operator enables two+.
+        streaming: True if emitted from the streaming path, False from
+            non-streaming. Lets a log-reading operator distinguish
+            "filter fired mid-stream" from "filter fired on the final
+            body" without cross-referencing the surrounding request
+            metadata.
+    """
+
+    provider: str
+    filters: list[str]
+    streaming: bool
+
+
+def log_output_filter_applied(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    filters: list[str],
+    streaming: bool,
+) -> None:
+    """Emit an ``output-filter-applied`` info record.
+
+    Single chokepoint mirroring :func:`log_capability_degraded`.
+    Called at most once per request/stream — adapter threads a
+    dedupe flag on the enclosing call. ``filters`` SHOULD be the subset
+    that actually modified text (see ``OutputFilterChain.applied_filters``),
+    not the declared chain — so a chain of ``[strip_thinking,
+    strip_stop_markers]`` where only the first triggers logs
+    ``filters=["strip_thinking"]``.
+    """
+    payload: OutputFilterAppliedPayload = {
+        "provider": provider,
+        "filters": filters,
+        "streaming": streaming,
+    }
+    logger.info(
+        "output-filter-applied", extra=payload  # type: ignore[arg-type]
+    )

@@ -45,6 +45,8 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.config.loader import resolve_api_key
+from coderouter.logging import get_logger, log_output_filter_applied
+from coderouter.output_filters import OutputFilterChain
 from coderouter.translation.anthropic import (
     AnthropicRequest,
     AnthropicResponse,
@@ -55,6 +57,8 @@ from coderouter.translation.convert import (
     to_anthropic_request,
     to_chat_response,
 )
+
+logger = get_logger(__name__)
 
 # Mirror openai_compat._RETRYABLE_STATUSES — same reasoning applies.
 # 404: upstream may not have the requested model → next provider.
@@ -221,6 +225,91 @@ class AnthropicAdapter(BaseAdapter):
             yield chunk
 
     # ------------------------------------------------------------------
+    # v1.0-A: output_filters helpers (native Anthropic streaming)
+    # ------------------------------------------------------------------
+
+    def _process_stream_event_for_filters(
+        self,
+        event: AnthropicStreamEvent,
+        *,
+        chains: dict[int, OutputFilterChain],
+        logged_flag: list[bool],
+    ) -> list[AnthropicStreamEvent]:
+        """Apply the configured output_filters chain to a parsed SSE event.
+
+        Returns the list of events to yield downstream:
+            - ``content_block_start`` (type=text) → create a fresh chain
+              keyed by block index, return [event].
+            - ``content_block_delta`` (type=text_delta) → filter the
+              delta text in place (may produce an empty string that the
+              downstream pass-through still emits; clients tolerate it).
+            - ``content_block_stop`` → flush the chain for this index.
+              If the flush produced tail text (the safe-to-emit suffix
+              the filter had been holding), a synthetic
+              ``content_block_delta`` event is prepended so the client
+              sees every byte that was not part of a matched tag, then
+              the original ``content_block_stop`` follows.
+            - All other event types pass through unchanged.
+
+        Logs ``output-filter-applied`` exactly once per stream (via the
+        ``logged_flag`` mutable cell; same dedupe shape as v0.5-C's
+        reasoning-strip log).
+        """
+        if not self.config.output_filters:
+            return [event]
+
+        data = event.data
+
+        if event.type == "content_block_start":
+            block = data.get("content_block") or {}
+            if isinstance(block, dict) and block.get("type") == "text":
+                idx = data.get("index", 0)
+                chains[idx] = OutputFilterChain(self.config.output_filters)
+            return [event]
+
+        if event.type == "content_block_delta":
+            delta = data.get("delta") or {}
+            if isinstance(delta, dict) and delta.get("type") == "text_delta":
+                idx = data.get("index", 0)
+                chain = chains.get(idx)
+                if chain is not None:
+                    text = delta.get("text", "")
+                    if isinstance(text, str) and text:
+                        delta["text"] = chain.feed(text)
+            return [event]
+
+        if event.type == "content_block_stop":
+            idx = data.get("index", 0)
+            chain = chains.pop(idx, None)
+            if chain is None:
+                return [event]
+            tail = chain.feed("", eof=True)
+            events: list[AnthropicStreamEvent] = []
+            if tail:
+                events.append(
+                    AnthropicStreamEvent(
+                        type="content_block_delta",
+                        data={
+                            "type": "content_block_delta",
+                            "index": idx,
+                            "delta": {"type": "text_delta", "text": tail},
+                        },
+                    )
+                )
+            events.append(event)
+            if chain.any_applied and not logged_flag[0]:
+                log_output_filter_applied(
+                    logger,
+                    provider=self.name,
+                    filters=chain.applied_filters(),
+                    streaming=True,
+                )
+                logged_flag[0] = True
+            return events
+
+        return [event]
+
+    # ------------------------------------------------------------------
     # Native Anthropic entry points (v0.3.x-1)
     # ------------------------------------------------------------------
 
@@ -266,6 +355,37 @@ class AnthropicAdapter(BaseAdapter):
                 retryable=False,
             ) from exc
 
+        # v1.0-A: apply output_filters to every text content block. One
+        # fresh chain per block so `<think>...</think>` state from block N
+        # never bleeds into block N+1 (matters when Anthropic thinking +
+        # text blocks coexist, or with future multi-block responses).
+        if self.config.output_filters:
+            any_block_modified = False
+            applied_names: list[str] = []
+            blocks = data.get("content")
+            if isinstance(blocks, list):
+                for block in blocks:
+                    if (
+                        isinstance(block, dict)
+                        and block.get("type") == "text"
+                        and isinstance(block.get("text"), str)
+                        and block["text"]
+                    ):
+                        chain = OutputFilterChain(self.config.output_filters)
+                        block["text"] = chain.feed(block["text"], eof=True)
+                        if chain.any_applied:
+                            any_block_modified = True
+                            for n in chain.applied_filters():
+                                if n not in applied_names:
+                                    applied_names.append(n)
+            if any_block_modified:
+                log_output_filter_applied(
+                    logger,
+                    provider=self.name,
+                    filters=applied_names,
+                    streaming=False,
+                )
+
         # Tag with provider metadata and return. Unknown Anthropic fields
         # (future additions like thinking blocks) pass through via
         # extra="allow" on AnthropicResponse.
@@ -291,6 +411,13 @@ class AnthropicAdapter(BaseAdapter):
         url = self._url()
         payload = self._payload(request, stream=True)
         timeout = self.effective_timeout(overrides)
+
+        # v1.0-A: per-block filter chains (keyed by content block index)
+        # + a mutable one-cell flag that lets the filter helper log
+        # exactly once per stream without ping-ponging state through
+        # every yield site.
+        filter_chains: dict[int, OutputFilterChain] = {}
+        logged_flag: list[bool] = [False]
 
         try:
             async with httpx.AsyncClient(timeout=timeout) as client:
@@ -327,9 +454,14 @@ class AnthropicAdapter(BaseAdapter):
                                     current_event = None
                                     data_lines = []
                                     continue
-                                yield AnthropicStreamEvent(
-                                    type=current_event, data=data_obj
-                                )
+                                for out_event in self._process_stream_event_for_filters(
+                                    AnthropicStreamEvent(
+                                        type=current_event, data=data_obj
+                                    ),
+                                    chains=filter_chains,
+                                    logged_flag=logged_flag,
+                                ):
+                                    yield out_event
                             current_event = None
                             data_lines = []
                             continue
@@ -349,11 +481,17 @@ class AnthropicAdapter(BaseAdapter):
                         data_str = "\n".join(data_lines)
                         try:
                             data_obj = json.loads(data_str)
-                            yield AnthropicStreamEvent(
-                                type=current_event, data=data_obj
-                            )
                         except json.JSONDecodeError:
-                            pass
+                            data_obj = None
+                        if data_obj is not None:
+                            for out_event in self._process_stream_event_for_filters(
+                                AnthropicStreamEvent(
+                                    type=current_event, data=data_obj
+                                ),
+                                chains=filter_chains,
+                                logged_flag=logged_flag,
+                            ):
+                                yield out_event
         except httpx.TimeoutException as exc:
             raise AdapterError(
                 f"timeout streaming from {url}", provider=self.name, retryable=True

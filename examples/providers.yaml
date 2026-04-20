@@ -91,6 +91,13 @@ providers:
     model: qwen2.5-coder:7b
     paid: false
     timeout_s: 120
+    # v1.0-A: Qwen2.5-Coder intermittently emits <think>...</think> in the
+    # content channel under Claude Code's tool-heavy prompting. Strip at the
+    # adapter boundary so the UI never renders it. `strip_stop_markers` is
+    # not needed here (Qwen2.5 uses <|im_end|> but Ollama's chat template
+    # terminates cleanly on it). Run `coderouter doctor --check-model
+    # ollama-qwen-coder-7b` to verify the probe agrees.
+    output_filters: [strip_thinking]
     capabilities:
       chat: true
       streaming: true
@@ -106,6 +113,10 @@ providers:
     model: qwen2.5-coder:14b
     paid: false
     timeout_s: 300
+    # v1.0-A: same reasoning as the 7b entry — Qwen2.5-Coder family leaks
+    # <think> blocks occasionally. Scrubbing is cheap (single regex-free pass
+    # over the stream) so enable it unconditionally on this SKU.
+    output_filters: [strip_thinking]
     capabilities:
       chat: true
       streaming: true
@@ -151,11 +162,20 @@ providers:
   #       # forgets it has tools. Bump to 32K for Claude Code workloads;
   #       # lower (8K) is fine for plain chat traffic.
   #       num_ctx: 32768
-  #   # Symptom 3: Qwen3 distills (and some R1 distills) inline <think>...</think>
-  #   # in the content channel instead of using a thinking block. Uncomment to
-  #   # suppress at the source via the model's native opt-out directive. Leave
-  #   # empty / remove for non-Qwen3 models.
+  #   # Symptom 3 (primary): Qwen3 distills (and some R1 distills) inline
+  #   # <think>...</think> in the content channel instead of using a thinking
+  #   # block. Two independent remediations, pick either (or both):
+  #   #
+  #   #   (a) Source-side opt-out — append Qwen3's native `/no_think` directive
+  #   #       to the system prompt. Cheapest when it works, but some distills
+  #   #       ignore the directive.
   #   # append_system_prompt: "/no_think"
+  #   #
+  #   #   (b) Output-side scrub (v1.0-A) — strip at the adapter boundary
+  #   #       regardless of what the model emits. Works on every model, at the
+  #   #       cost of a single pass over the stream. Prefer this if you also
+  #   #       see <|turn|> / <|end|> leakage — add `strip_stop_markers` too.
+  #   output_filters: [strip_thinking]
   #   capabilities:
   #     chat: true
   #     streaming: true
@@ -166,11 +186,6 @@ providers:
   #     # can't actually call tools causes Claude Code to hang waiting for a
   #     # tool_use block that never arrives.
   #     tools: false
-  #     # Symptom 3 alternative path: if the model emits content with
-  #     # <think>...</think> visible in the UI despite `/no_think`, keep this
-  #     # false (the default) so CodeRouter's v1.0 output-cleaning path can
-  #     # strip downstream. Setting `true` here opts out of all cleaning.
-  #     # reasoning_passthrough: false
 
   # ------------------------------------------------------------
   # Tier 2: free cloud (escape hatch)
@@ -283,6 +298,88 @@ providers:
     # extra_body:
     #   anthropic_version: "2023-06-01"
 
+  # ------------------------------------------------------------
+  # v1.0 real-machine verify providers (v1.0-verify)
+  #
+  # Paired Ollama stanzas used by `scripts/verify_v1_0.sh` to prove the
+  # three v1.0 sub-release gates (A output_filters / B num_ctx probe /
+  # C streaming probe) all behave end-to-end against a live local Ollama.
+  #
+  # `verify-ollama-bare`: worst-case setup — no output_filters, and
+  #   extra_body.options declared at deliberately pathological values
+  #   (num_ctx = 2048, num_predict = 16). Forces <think> leakage through
+  #   and guarantees the num_ctx / streaming probes both trip
+  #   NEEDS_TUNING regardless of what the local Ollama build's actual
+  #   defaults happen to be (some forks and newer builds raise num_ctx
+  #   well above 2048 and num_predict high enough that a "count to 30"
+  #   prompt finishes normally). num_predict = 16 is low enough that the
+  #   streaming probe's "Count from 1 to 30" prompt is cut off after
+  #   ~8 numbers (≈16 chars, well below the 40-char threshold for
+  #   NEEDS_TUNING) — and also low enough that the num_ctx probe's
+  #   canary-echo response cannot accidentally contain the canary token.
+  #   Used as the "symptom-present" side of the verify.
+  #
+  # `verify-ollama-tuned`: healthy counterpart — output_filters enabled,
+  #   both num_ctx and num_predict declared. Used as the "symptom-absent"
+  #   side; the doctor probes should flip to OK here.
+  #
+  # Prerequisite: `ollama pull qwen2.5-coder:7b` on localhost, Ollama
+  # service running on :11434. The verify script fails fast if either
+  # is missing.
+  # ------------------------------------------------------------
+
+  - name: verify-ollama-bare
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    # Deliberately NO output_filters here — v1.0-A scenario A needs to
+    # observe <think> leakage first, then flip to `verify-ollama-tuned`
+    # and confirm the filter strips it.
+    # Deliberately LOW extra_body.options — pins num_ctx to 2048 and
+    # num_predict to 16 so the v1.0-B canary probe reliably truncates
+    # (2048 < 8192 threshold, forces NEEDS_TUNING + patch) and the
+    # v1.0-C streaming probe reliably hits finish_reason=length with
+    # tiny content (≈16 chars for the "Count from 1 to 30" prompt, well
+    # below the 40-char threshold, forces NEEDS_TUNING + patch). The
+    # original design relied on fresh-install Ollama defaults, but some
+    # builds raise num_ctx default above 2048 and num_predict high
+    # enough that the count prompt completes normally — declaring
+    # pathological values explicitly makes the verify reproducible
+    # across Ollama forks without weakening the narrow-experimental-
+    # control property (bare and tuned still differ only in
+    # declaration-field values).
+    extra_body:
+      options:
+        num_ctx: 2048
+        num_predict: 16
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  - name: verify-ollama-tuned
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    # v1.0-A: filter chain turned on. Same shape as production
+    # `ollama-qwen-coder-7b`.
+    output_filters: [strip_thinking]
+    # v1.0-B + v1.0-C: both Ollama knobs declared at the patch defaults
+    # the doctor would emit. After applying these, doctor probes should
+    # return OK instead of NEEDS_TUNING on scenarios B and C.
+    extra_body:
+      options:
+        num_ctx: 32768
+        num_predict: 4096
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
 profiles:
   # Generic chain — safe default for curl / OpenAI SDK / non-Claude-Code use.
   - name: default
@@ -353,3 +450,35 @@ profiles:
   - name: verify-gpt-oss
     providers:
       - openrouter-gpt-oss-free
+
+  # v1.0 real-machine verify — Ollama-on-localhost chains. Two profiles, each
+  # pointing at a single stanza from the `verify-ollama-*` provider pair
+  # (below in `providers:`). `scripts/verify_v1_0.sh` fires three scenarios:
+  #
+  #   Scenario A (v1.0-A filter chain)   → `verify-v1-bare` + Claude Code-ish
+  #                                        system prompt that encourages
+  #                                        <think> blocks; then re-runs against
+  #                                        `verify-v1-tuned` and asserts the
+  #                                        `<think>` tags are gone from content
+  #                                        and `output_filter_applied` log
+  #                                        fires exactly once per request.
+  #   Scenario B (v1.0-B num_ctx probe)  → `coderouter doctor --check-model
+  #                                        verify-ollama-bare` → NEEDS_TUNING
+  #                                        + `extra_body.options.num_ctx: 32768`
+  #                                        patch. Then against
+  #                                        `verify-ollama-tuned` → OK.
+  #   Scenario C (v1.0-C streaming probe)→ same pair, asserts num_predict patch
+  #                                        emits on bare, streaming probe OK
+  #                                        on tuned.
+  #
+  # Not for production use — `verify-ollama-bare` is deliberately the worst-
+  # case Ollama setup (defaults honored as-is, no filter) so that every v1.0
+  # gate reliably trips. `verify-ollama-tuned` is the healthy counterpart,
+  # used to prove the same probes flip to OK once the YAML patches are in.
+  - name: verify-v1-bare
+    providers:
+      - verify-ollama-bare
+
+  - name: verify-v1-tuned
+    providers:
+      - verify-ollama-tuned

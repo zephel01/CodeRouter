@@ -41,6 +41,7 @@ Coverage map (mirrors plan.md §9.4 DoD):
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 import httpx
@@ -62,8 +63,11 @@ from coderouter.doctor import (
     DoctorReport,
     ProbeResult,
     ProbeVerdict,
+    _NUM_CTX_PROBE_CANARY,
     _patch_model_capabilities_yaml,
     _patch_providers_yaml_capability,
+    _patch_providers_yaml_num_ctx,
+    _patch_providers_yaml_num_predict,
     _probes_by_name,
     check_model,
     exit_code_for,
@@ -79,11 +83,12 @@ from coderouter.doctor import (
 def _oa_provider(
     *,
     name: str = "local",
-    base_url: str = "http://localhost:11434/v1",
+    base_url: str = "http://localhost:8080/v1",
     model: str = "qwen3-coder:7b",
     api_key_env: str | None = None,
     caps: Capabilities | None = None,
     timeout_s: float = 5.0,
+    extra_body: dict[str, Any] | None = None,
 ) -> ProviderConfig:
     return ProviderConfig(
         name=name,
@@ -93,6 +98,7 @@ def _oa_provider(
         api_key_env=api_key_env,
         capabilities=caps or Capabilities(),
         timeout_s=timeout_s,
+        extra_body=extra_body or {},
     )
 
 
@@ -175,6 +181,74 @@ def _openai_ok_response(
     }
 
 
+def _sse_stream_count_body(
+    *,
+    numbers: int = 30,
+    finish_reason: str = "stop",
+    include_done: bool = True,
+) -> bytes:
+    """v1.0-C helper: build an SSE body that simulates a successful
+    "count from 1 to N" streaming completion.
+
+    Default (numbers=30, finish_reason='stop', include_done=True) produces
+    ~80 chars of content — comfortably above the streaming probe's
+    40-char floor. Callers shorten ``numbers`` to simulate premature
+    termination (combined with ``finish_reason='length'``).
+    """
+    pieces: list[str] = []
+    for i in range(1, numbers + 1):
+        pieces.append(
+            "data: "
+            + json.dumps(
+                {
+                    "id": "s",
+                    "object": "chat.completion.chunk",
+                    "created": 0,
+                    "model": "probe-stream",
+                    "choices": [
+                        {"index": 0, "delta": {"content": f"{i}\n"}}
+                    ],
+                }
+            )
+            + "\n\n"
+        )
+    # Closing chunk with the finish_reason.
+    pieces.append(
+        "data: "
+        + json.dumps(
+            {
+                "id": "s",
+                "object": "chat.completion.chunk",
+                "created": 0,
+                "model": "probe-stream",
+                "choices": [
+                    {"index": 0, "delta": {}, "finish_reason": finish_reason}
+                ],
+            }
+        )
+        + "\n\n"
+    )
+    if include_done:
+        pieces.append("data: [DONE]\n\n")
+    return "".join(pieces).encode("utf-8")
+
+
+def _add_sse_ok_mock(
+    httpx_mock: HTTPXMock, url: str, **kwargs: Any
+) -> None:
+    """Register a successful streaming mock in one call.
+
+    Shared by existing Ollama-shape num_ctx tests that now need a 5th
+    mock for the v1.0-C streaming probe at the tail of the probe chain.
+    """
+    httpx_mock.add_response(
+        url=url,
+        method="POST",
+        content=_sse_stream_count_body(**kwargs),
+        headers={"content-type": "text/event-stream"},
+    )
+
+
 def _anthropic_ok_response(
     *,
     text_blocks: list[str] | None = None,
@@ -245,6 +319,63 @@ def test_patch_is_loadable_yaml() -> None:
     }
 
 
+def test_patch_num_ctx_contains_nested_options() -> None:
+    """v1.0-B num_ctx patch targets extra_body.options.num_ctx."""
+    out = _patch_providers_yaml_num_ctx("ollama-qwen", 32768)
+    assert "ollama-qwen" in out
+    assert "extra_body:" in out
+    assert "options:" in out
+    assert "num_ctx: 32768" in out
+    assert out.startswith("# providers.yaml")
+
+
+def test_patch_num_ctx_is_loadable_yaml() -> None:
+    """The num_ctx patch parses as YAML with the expected nested shape."""
+    import yaml
+
+    out = _patch_providers_yaml_num_ctx("ollama-qwen", 16384)
+    body = "\n".join(line for line in out.splitlines() if not line.startswith("#"))
+    parsed = yaml.safe_load(body)
+    assert parsed == {
+        "providers": [
+            {
+                "name": "ollama-qwen",
+                "extra_body": {"options": {"num_ctx": 16384}},
+            }
+        ]
+    }
+
+
+def test_patch_num_predict_contains_nested_options() -> None:
+    """v1.0-C num_predict patch targets extra_body.options.num_predict."""
+    out = _patch_providers_yaml_num_predict("ollama-qwen", 4096)
+    assert "ollama-qwen" in out
+    assert "extra_body:" in out
+    assert "options:" in out
+    assert "num_predict: 4096" in out
+    assert out.startswith("# providers.yaml")
+    # Crucially, this patch does NOT name num_ctx — a user merging both
+    # patches will end up with both keys under options (expected).
+    assert "num_ctx" not in out
+
+
+def test_patch_num_predict_is_loadable_yaml() -> None:
+    """The num_predict patch parses as YAML with the expected nested shape."""
+    import yaml
+
+    out = _patch_providers_yaml_num_predict("ollama-qwen", 8192)
+    body = "\n".join(line for line in out.splitlines() if not line.startswith("#"))
+    parsed = yaml.safe_load(body)
+    assert parsed == {
+        "providers": [
+            {
+                "name": "ollama-qwen",
+                "extra_body": {"options": {"num_predict": 8192}},
+            }
+        ]
+    }
+
+
 # ---------------------------------------------------------------------------
 # Auth probe
 # ---------------------------------------------------------------------------
@@ -257,7 +388,7 @@ async def test_auth_probe_401_returns_auth_fail_and_short_circuits(
     """401 from upstream → AUTH_FAIL; remaining probes become SKIP."""
     provider = _oa_provider(api_key_env="CR_TEST_MISSING_KEY")
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=401,
         json={"error": "unauthorized"},
@@ -281,7 +412,7 @@ async def test_auth_probe_403_returns_auth_fail(
     """403 is the same class of failure as 401 for auth semantics."""
     provider = _oa_provider(api_key_env="CR_TEST_MISSING_KEY")
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=403,
         json={"error": "forbidden"},
@@ -302,7 +433,7 @@ async def test_auth_probe_404_reports_model_not_installed(
     """404 on openai_compat probe means the model string is wrong / not pulled."""
     provider = _oa_provider(model="qwen3-mystery:1b")
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=404,
         json={"error": "model not found"},
@@ -339,7 +470,7 @@ async def test_auth_probe_2xx_unparseable_body(
     """2xx but garbage body is a protocol-level transport error."""
     provider = _oa_provider()
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         content=b"not json at all",
@@ -349,6 +480,356 @@ async def test_auth_probe_2xx_unparseable_body(
     )
     auth = _probes_by_name(report.results)["auth+basic-chat"]
     assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
+
+
+# ---------------------------------------------------------------------------
+# v1.0-B: num_ctx probe
+#
+# Direct detection of Ollama's silent prompt truncation (plan.md §9.4
+# symptom #1). The probe fires only for Ollama-shape providers — port
+# 11434 in the base URL or an explicit ``extra_body.options.num_ctx``
+# declaration. On non-Ollama upstreams it SKIPs without issuing HTTP,
+# which lets every existing test (default fixture → :8080) remain
+# unchanged.
+#
+# The probe embeds a canary at the front of a ~5k-token prompt and
+# asks the model to echo it back. A model at Ollama's 2048-token
+# default loses the canary (the front of the prompt is truncated) and
+# cannot echo it. A properly-bumped ``num_ctx`` preserves it.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_skips_for_non_ollama_port(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Default :8080 base_url → num_ctx probe SKIPs, no HTTP call issued."""
+    provider = _oa_provider()  # :8080, no extra_body
+    # Only auth + tool_calls + reasoning-leak hit the endpoint.
+    for body in (
+        _openai_ok_response(content="PONG"),
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:8080/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    assert num_ctx.verdict == ProbeVerdict.SKIP
+    assert "Ollama-shape" in num_ctx.detail
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_ollama_port_canary_missing_suggests_patch(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Ollama default 2048 → canary dropped → NEEDS_TUNING with patch.
+
+    Simulates the typical fresh-install Ollama symptom: the upstream
+    silently drops the front of the prompt so the model responds with
+    something that doesn't contain the canary token.
+    """
+    provider = _oa_provider(
+        name="ollama-default",
+        base_url="http://localhost:11434/v1",
+        model="qwen2.5-coder:7b",
+    )
+    # auth OK
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: model replies without echoing the canary (truncation).
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="I don't see any canary token."),
+    )
+    # tool_calls
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="nothing"),
+    )
+    # thinking SKIP — openai_compat.
+    # reasoning-leak
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="Paris"),
+    )
+    # v1.0-C streaming probe — succeeds; not the subject of this test.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
+    assert num_ctx.target_file == "providers.yaml"
+    assert num_ctx.suggested_patch is not None
+    assert "num_ctx: 32768" in num_ctx.suggested_patch
+    assert "options:" in num_ctx.suggested_patch
+    assert exit_code_for(report) == 2
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_declared_high_canary_echoed_is_ok(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Operator already set num_ctx=32768 → canary survives → OK."""
+    provider = _oa_provider(
+        name="ollama-tuned",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    # auth OK
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: canary echoed.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    # tool_calls + reasoning-leak
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # v1.0-C streaming probe — succeeds.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    assert num_ctx.verdict == ProbeVerdict.OK
+    assert "32768" in num_ctx.detail
+    assert exit_code_for(report) == 0
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_declared_low_canary_missing_bumps(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Operator set num_ctx=4096 (still too low) → NEEDS_TUNING → bump to 32768."""
+    provider = _oa_provider(
+        name="ollama-low",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 4096}},
+    )
+    # auth OK
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: canary missing.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="I'm not sure."),
+    )
+    # tool_calls + reasoning-leak
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # v1.0-C streaming probe — succeeds.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
+    assert "4096" in num_ctx.detail
+    assert "num_ctx: 32768" in (num_ctx.suggested_patch or "")
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_declared_adequate_canary_missing_informs_intrinsic_limit(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Operator declared num_ctx=16384 but the canary is still missing →
+    NEEDS_TUNING that warns about the model's intrinsic limit."""
+    provider = _oa_provider(
+        name="ollama-highish",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 16384}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: canary missing despite adequate-looking declared value.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="Sorry, nothing like that."),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # v1.0-C streaming probe — succeeds.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    assert num_ctx.verdict == ProbeVerdict.NEEDS_TUNING
+    # The detail should flag the model's intrinsic limit as the suspect.
+    assert "intrinsic" in num_ctx.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_extra_body_signal_fires_on_non_11434_port(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Operator on a non-default Ollama port (say :12345) with a num_ctx
+    declaration → probe still fires because the declaration itself signals
+    Ollama-shape."""
+    provider = _oa_provider(
+        name="ollama-custom-port",
+        base_url="http://localhost:12345/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:12345/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: canary echoed (adequate).
+    httpx_mock.add_response(
+        url="http://localhost:12345/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:12345/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # v1.0-C streaming probe — also fires on the non-11434 port because
+    # the same Ollama-shape signal (declared options) triggers both.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:12345/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    num_ctx = _probes_by_name(report.results)["num_ctx"]
+    # Must NOT be SKIP — the extra_body signal should fire.
+    assert num_ctx.verdict == ProbeVerdict.OK
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_request_body_merges_extra_body_options(
+    httpx_mock: HTTPXMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The probe must forward ``extra_body`` into the outbound request so
+    the upstream actually gets the declared ``options.num_ctx``."""
+    provider = _oa_provider(
+        name="ollama-merge",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768, "keep_alive": "5m"}},
+    )
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    # Second request is the num_ctx probe (after auth). Its body should
+    # carry the merged options.
+    import json as _json
+
+    num_ctx_body = _json.loads(captured[1].content.decode("utf-8"))
+    assert num_ctx_body["options"] == {"num_ctx": 32768, "keep_alive": "5m"}
+    # And the probe's own fields must be present and dominate over any
+    # extra_body collisions on top-level keys.
+    assert num_ctx_body["model"] == provider.model
+    assert num_ctx_body["max_tokens"] == 32
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_auth_fail_short_circuits_num_ctx_probe(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Auth failure → num_ctx is also SKIPped (alongside the others)."""
+    provider = _oa_provider(
+        name="ollama-bad-auth",
+        base_url="http://localhost:11434/v1",
+        api_key_env="CR_TEST_MISSING_KEY",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=401,
+        json={"error": "unauthorized"},
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    by_name = _probes_by_name(report.results)
+    assert by_name["auth+basic-chat"].verdict == ProbeVerdict.AUTH_FAIL
+    assert by_name["num_ctx"].verdict == ProbeVerdict.SKIP
+    assert "auth probe did not succeed" in by_name["num_ctx"].detail
 
 
 # ---------------------------------------------------------------------------
@@ -364,14 +845,14 @@ async def test_tool_calls_native_with_tools_registry_declared_true_is_ok(
     provider = _oa_provider()
     # Probe 1: auth OK.
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(content="PONG"),
     )
     # Probe 2: tool_calls native.
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(
@@ -388,7 +869,7 @@ async def test_tool_calls_native_with_tools_registry_declared_true_is_ok(
     # Probe 3: thinking SKIP for openai_compat → no HTTP call.
     # Probe 4: reasoning-leak — no reasoning field.
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(content="Paris"),
@@ -425,7 +906,7 @@ async def test_tool_calls_native_but_registry_silent_suggests_true(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -456,7 +937,7 @@ async def test_tool_calls_text_json_only_with_declared_false_is_ok(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -486,7 +967,7 @@ async def test_tool_calls_text_json_with_declared_true_needs_tuning(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -513,7 +994,7 @@ async def test_tool_calls_none_with_declared_true_suggests_false(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -541,7 +1022,7 @@ async def test_tool_calls_none_with_declared_false_is_ok(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -574,7 +1055,7 @@ async def test_tool_calls_explicit_providers_caps_true_takes_precedence(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -605,7 +1086,7 @@ async def test_thinking_skipped_for_openai_compat_without_opt_in(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -630,7 +1111,7 @@ async def test_thinking_skipped_for_openai_compat_with_opt_in_flag_warns(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -775,14 +1256,14 @@ async def test_reasoning_leak_detected_is_informational_ok(
     provider = _oa_provider()
     # auth
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(content="PONG"),
     )
     # tool_calls
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(content="nothing"),
@@ -790,7 +1271,7 @@ async def test_reasoning_leak_detected_is_informational_ok(
     # thinking SKIP — no HTTP call.
     # reasoning-leak: response carries a reasoning field.
     httpx_mock.add_response(
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         status_code=200,
         json=_openai_ok_response(
@@ -819,7 +1300,7 @@ async def test_reasoning_leak_not_present_reports_clean(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -856,6 +1337,605 @@ async def test_reasoning_leak_skipped_for_anthropic_kind(
     )
     leak = _probes_by_name(report.results)["reasoning-leak"]
     assert leak.verdict == ProbeVerdict.SKIP
+
+
+# ---------------------------------------------------------------------------
+# v1.0-A: reasoning-leak probe — content-embedded marker detection
+#
+# The probe's ``_probe_reasoning_leak`` now ALSO inspects
+# ``message.content`` for the markers that the new ``output_filters``
+# chain would scrub, and issues NEEDS_TUNING with a copy-paste patch
+# when the configured chain doesn't cover what was observed. Pairs with
+# the transformation layer — "transformation には probe が伴う" from the
+# v0.7 retrospective.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reasoning_leak_detects_content_embedded_think(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """``<think>...</think>`` in content when no strip_thinking configured
+    → NEEDS_TUNING with a providers.yaml output_filters patch."""
+    provider = _oa_provider()  # default: output_filters=[]
+    # auth probe
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # tool_calls probe
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="nothing"),
+    )
+    # thinking probe SKIP for openai_compat.
+    # reasoning-leak probe: leaky content.
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(
+            content="Answer: <think>reasoning happens here</think> Paris"
+        ),
+    )
+
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    leak = _probes_by_name(report.results)["reasoning-leak"]
+    assert leak.verdict == ProbeVerdict.NEEDS_TUNING
+    assert "<think>" in leak.detail
+    assert leak.target_file == "providers.yaml"
+    assert leak.suggested_patch is not None
+    assert "output_filters" in leak.suggested_patch
+    assert "strip_thinking" in leak.suggested_patch
+    # NEEDS_TUNING → exit code 2.
+    assert exit_code_for(report) == 2
+
+
+@pytest.mark.asyncio
+async def test_reasoning_leak_detects_stop_markers_in_content(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Stop marker in content, chain does not include strip_stop_markers
+    → NEEDS_TUNING with the marker-specific filter in the patch."""
+    provider = _oa_provider()
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="nothing"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="Paris<|eot_id|>"),
+    )
+
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    leak = _probes_by_name(report.results)["reasoning-leak"]
+    assert leak.verdict == ProbeVerdict.NEEDS_TUNING
+    assert "<|eot_id|>" in leak.detail
+    assert "strip_stop_markers" in (leak.suggested_patch or "")
+
+
+@pytest.mark.asyncio
+async def test_reasoning_leak_silent_when_filter_already_configured(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Chain covers what was observed → no NEEDS_TUNING, fall through to
+    the v0.5-C reasoning-field observation (here: clean → OK)."""
+    provider = _oa_provider()
+    provider.output_filters = ["strip_thinking"]
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="nothing"),
+    )
+    # Content has <think> but strip_thinking is configured → no tuning.
+    httpx_mock.add_response(
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="<think>x</think>Paris"),
+    )
+
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    leak = _probes_by_name(report.results)["reasoning-leak"]
+    assert leak.verdict == ProbeVerdict.OK
+
+
+# ---------------------------------------------------------------------------
+# v1.0-C: streaming probe
+#
+# Direct detection of Ollama output-side truncation (``options.num_predict``
+# cap) and of "stream: true silently ignored" framing. Same Ollama-shape
+# gating as the v1.0-B num_ctx probe: ``:11434`` port OR declared
+# ``extra_body.options.num_ctx``. Fires last in the probe chain so the
+# num_ctx / tool_calls / thinking / reasoning-leak verdicts dominate the
+# report — streaming is an output-side sibling of num_ctx and its verdict
+# stands independently.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_skips_for_non_ollama_port(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Default :8080 base_url → streaming probe SKIPs (same gating as num_ctx)."""
+    provider = _oa_provider()  # :8080, no extra_body
+    for body in (
+        _openai_ok_response(content="PONG"),
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:8080/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.SKIP
+    assert "Ollama-shape" in streaming.detail
+    # Critically — no HTTP request was issued for the streaming probe.
+
+
+@pytest.mark.asyncio
+async def test_streaming_skips_for_anthropic_kind(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Anthropic native uses a different stream event shape → SKIP without HTTP."""
+    provider = _anthropic_provider()
+    # For kind=anthropic the probe chain is: auth → num_ctx SKIP →
+    # tool_calls (HTTP) → thinking (HTTP, unconditional for anthropic) →
+    # reasoning-leak SKIP → streaming SKIP. So 3 HTTP calls total.
+    for body in (
+        _anthropic_ok_response(text_blocks=["hi"]),
+        _anthropic_ok_response(text_blocks=["no tool"]),
+        _anthropic_ok_response(text_blocks=["Paris"]),
+    ):
+        httpx_mock.add_response(
+            url="https://api.anthropic.com/v1/messages",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.SKIP
+    # The SKIP reason should NOT be the auth fallback — auth succeeded.
+    assert "auth" not in streaming.detail.lower()
+
+
+@pytest.mark.asyncio
+async def test_streaming_ollama_port_successful_stream_is_ok(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Full stream with finish_reason=stop + [DONE] + adequate content → OK."""
+    provider = _oa_provider(
+        name="ollama-stream-ok",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    # auth OK
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    # num_ctx: echo canary so the probe reports OK.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    # tool_calls + reasoning-leak
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # streaming — 30 chunks, finish_reason=stop, [DONE] terminator.
+    _add_sse_ok_mock(httpx_mock, "http://localhost:11434/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.OK
+    assert streaming.suggested_patch is None
+    # The OK detail reports chunk / char counts and finish_reason.
+    assert "chunks" in streaming.detail
+    assert "'stop'" in streaming.detail
+    # No note about missing [DONE] when terminator is present.
+    assert "[DONE]" not in streaming.detail or "terminator" not in streaming.detail
+
+
+@pytest.mark.asyncio
+async def test_streaming_finish_length_short_content_needs_tuning_with_num_predict_patch(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """finish_reason=length + truncated content → NEEDS_TUNING with num_predict patch.
+
+    Simulates the num_predict=128 Ollama default biting Claude Code — the
+    stream closes after only a handful of tokens.
+    """
+    provider = _oa_provider(
+        name="ollama-low-num-predict",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # streaming — truncated at 3 numbers ("1\n2\n3\n" = 6 chars), length finish.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        content=_sse_stream_count_body(
+            numbers=3, finish_reason="length", include_done=True
+        ),
+        headers={"content-type": "text/event-stream"},
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.NEEDS_TUNING
+    assert streaming.target_file == "providers.yaml"
+    assert streaming.suggested_patch is not None
+    assert "num_predict: 4096" in streaming.suggested_patch
+    assert "options:" in streaming.suggested_patch
+    # The detail should say "length" and mention num_predict as the
+    # likely culprit so operators know what to look for in their config.
+    assert "length" in streaming.detail
+    assert "num_predict" in streaming.detail
+    assert exit_code_for(report) == 2
+
+
+@pytest.mark.asyncio
+async def test_streaming_zero_chunks_is_needs_tuning_no_patch(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """2xx with no SSE chunks at all → NEEDS_TUNING (advisory, no patch).
+
+    Simulates an upstream that silently returned JSON / non-SSE to a
+    ``stream: true`` request.
+    """
+    provider = _oa_provider(
+        name="ollama-broken-stream",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # streaming — upstream returns a plain JSON object as if stream=true
+    # were ignored. No SSE framing at all.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        content=b'{"id":"x","object":"chat.completion","choices":[]}',
+        headers={"content-type": "application/json"},
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.NEEDS_TUNING
+    # Advisory — no patch because the remediation is server-side /
+    # framing, not a providers.yaml knob we can set.
+    assert streaming.suggested_patch is None
+    assert "no streaming chunks" in streaming.detail
+    # Exit code still escalates to 2 since this is a NEEDS_TUNING.
+    assert exit_code_for(report) == 2
+
+
+@pytest.mark.asyncio
+async def test_streaming_no_done_terminator_is_ok_with_note(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Stream completes but upstream omits ``data: [DONE]`` → OK + note.
+
+    Most clients (and CodeRouter's own adapter) tolerate a missing
+    terminator; strict SSE parsers may stall. The probe reports OK
+    but surfaces the observation so operators can check their toolchain.
+    """
+    provider = _oa_provider(
+        name="ollama-no-done",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # streaming — complete SSE but no [DONE] line.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        content=_sse_stream_count_body(include_done=False),
+        headers={"content-type": "text/event-stream"},
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.OK
+    # The informational note should mention DONE / terminator so
+    # operators can check their parser tolerance.
+    assert "DONE" in streaming.detail
+
+
+@pytest.mark.asyncio
+async def test_streaming_extra_body_signal_fires_on_non_11434_port(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Streaming probe fires on custom ports when extra_body declares num_ctx.
+
+    Same disjunctive gating as the num_ctx probe — the declaration of
+    Ollama-specific ``options.num_ctx`` is itself evidence of Ollama-shape.
+    """
+    provider = _oa_provider(
+        name="ollama-custom-port-stream",
+        base_url="http://localhost:12345/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:12345/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:12345/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:12345/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    _add_sse_ok_mock(httpx_mock, "http://localhost:12345/v1/chat/completions")
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    # Must NOT be SKIP — extra_body signal fires even on non-11434.
+    assert streaming.verdict == ProbeVerdict.OK
+
+
+@pytest.mark.asyncio
+async def test_streaming_request_body_carries_stream_true_and_merges_extra_body(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Streaming probe must set ``stream: true`` and forward declared extra_body.
+
+    Mirrors :func:`test_num_ctx_request_body_merges_extra_body_options`
+    but targets the streaming probe's outbound body. The merge matters
+    because a declared ``options.num_predict`` must actually travel
+    with the request for the probe to observe its effect.
+    """
+    provider = _oa_provider(
+        name="ollama-stream-merge",
+        base_url="http://localhost:11434/v1",
+        extra_body={
+            "options": {"num_ctx": 32768, "num_predict": 4096, "keep_alive": "5m"}
+        },
+    )
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        # Return a valid streaming body for the streaming probe, valid
+        # JSON for the earlier probes. Branch on the URL/headers would
+        # over-fit; using content-type alone is enough since the non-
+        # streaming probes don't parse SSE from `resp.json()` paths —
+        # but they DO call resp.json(), so we return JSON for all and
+        # let the streaming probe land on NEEDS_TUNING. That still
+        # captures the outbound body, which is what this test verifies.
+        body = json.loads(request.content.decode("utf-8"))
+        if body.get("stream") is True:
+            return httpx.Response(
+                200,
+                content=_sse_stream_count_body(),
+                headers={"content-type": "text/event-stream"},
+            )
+        # canary echoed for the num_ctx probe; generic OK otherwise.
+        return httpx.Response(
+            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    # The last captured request is the streaming probe.
+    streaming_body = json.loads(captured[-1].content.decode("utf-8"))
+    assert streaming_body.get("stream") is True
+    assert streaming_body["options"] == {
+        "num_ctx": 32768,
+        "num_predict": 4096,
+        "keep_alive": "5m",
+    }
+    # Top-level probe fields must win over any extra_body collision.
+    assert streaming_body["model"] == provider.model
+
+
+@pytest.mark.asyncio
+async def test_streaming_http_500_skips(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Upstream 500 on the streaming probe → SKIP (transport-level noise)."""
+    provider = _oa_provider(
+        name="ollama-flaky-stream",
+        base_url="http://localhost:11434/v1",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content="PONG"),
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=200,
+        json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY),
+    )
+    for body in (
+        _openai_ok_response(content="nothing"),
+        _openai_ok_response(content="Paris"),
+    ):
+        httpx_mock.add_response(
+            url="http://localhost:11434/v1/chat/completions",
+            method="POST",
+            status_code=200,
+            json=body,
+        )
+    # streaming probe itself 500s.
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=500,
+        content=b"internal server error",
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    streaming = _probes_by_name(report.results)["streaming"]
+    assert streaming.verdict == ProbeVerdict.SKIP
+    assert "500" in streaming.detail
+
+
+@pytest.mark.asyncio
+async def test_streaming_auth_fail_short_circuits_streaming_probe(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Auth failure → streaming SKIP (alongside num_ctx / tool_calls / etc.)."""
+    provider = _oa_provider(
+        name="ollama-bad-auth-stream",
+        base_url="http://localhost:11434/v1",
+        api_key_env="CR_TEST_MISSING_KEY",
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    httpx_mock.add_response(
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        status_code=401,
+        json={"error": "unauthorized"},
+    )
+    report = await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    by_name = _probes_by_name(report.results)
+    assert by_name["auth+basic-chat"].verdict == ProbeVerdict.AUTH_FAIL
+    assert by_name["streaming"].verdict == ProbeVerdict.SKIP
+    assert "auth probe did not succeed" in by_name["streaming"].detail
 
 
 # ---------------------------------------------------------------------------
@@ -937,7 +2017,7 @@ async def test_check_model_uses_default_registry_when_not_passed(
         _openai_ok_response(content="Paris"),
     ):
         httpx_mock.add_response(
-            url="http://localhost:11434/v1/chat/completions",
+            url="http://localhost:8080/v1/chat/completions",
             method="POST",
             status_code=200,
             json=body,
@@ -962,7 +2042,7 @@ async def test_api_key_env_set_adds_authorization_header(
 
     httpx_mock.add_callback(
         _capture,
-        url="http://localhost:11434/v1/chat/completions",
+        url="http://localhost:8080/v1/chat/completions",
         method="POST",
         is_reusable=True,
     )

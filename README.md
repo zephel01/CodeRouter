@@ -60,9 +60,9 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-## Status: v0.7.0 — Beginner UX, made legible (2026-04-20)
+## Status: v1.0-C — Streaming-path probe (2026-04-20)
 
-Most recent work: v0.7.0 umbrella tag closing out v0.7-A / v0.7-B / v0.7-C. The minor's goal was to make the "I set up Ollama and something is off" phenotype diagnosable in a single command. Three sub-releases closed the loop: **v0.7-A** externalized the capability heuristic from Python regex literals into a declarative `model-capabilities.yaml` (bundled default + optional user override, glob + first-match-per-flag semantics); **v0.7-B** added `coderouter doctor --check-model <provider>`, a four-probe live diagnostic that diffs observed upstream behavior against the v0.7-A registry and emits copy-paste YAML patches on mismatch with CI-friendly exit codes (`0` match / `2` needs-tuning / `1` blocker); **v0.7-C** closed the narrative loop with a `Ollama beginner — 5 silent-fail symptoms` README subsection (each symptom has its probe command, YAML patch, and fix) plus an `ollama-hf-example` reference stanza in `examples/providers.yaml`. Tests: 306 → **382** (+76, +25%); runtime deps: 5 → 5. Retrospective: [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md). Per-sub-release detail: [CHANGELOG.md](./CHANGELOG.md) `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`. Prior: v0.6.0 umbrella with retrospective at [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md).
+Most recent work: **v1.0-C** adds a 6th probe — the streaming-path integrity check — to `coderouter doctor --check-model`. Where v1.0-B caught **input-side** silent truncation (prompt drops from a low `num_ctx`), v1.0-C catches its **output-side** sibling: the upstream closing the SSE stream early with `finish_reason: length` and heavily-truncated content. The usual culprit is Ollama's `options.num_predict` set too low (older builds default to 128; some Ollama-compat forks default to 256). Claude Code users experience this as "the assistant's response cut off mid-word". The probe issues a small deterministic streaming request ("count from 1 to 30"), consumes the SSE stream, and branches on `finish_reason` + observed content length; truncated output emits a copy-paste `extra_body.options.num_predict: 4096` patch. Also catches a secondary symptom: `2xx` response with zero streaming chunks (upstream silently ignored `stream: true` or uses non-standard framing), reported as NEEDS_TUNING with an advisory rather than a patch because the remediation is server-side. Same Ollama-shape gating as v1.0-B (`:11434` port OR declared `options.num_ctx`) so cloud openai_compat providers SKIP without HTTP. Prior: **v1.0-B** added the direct `num_ctx` probe for input-side truncation via canary echo-back; **v1.0-A** added the declarative `output_filters: [strip_thinking, strip_stop_markers]` chain on both adapters across streaming + non-streaming. Tests: 382 → **453** (+71: 49 from v1.0-A filter chain + 10 from v1.0-B num_ctx probe + 12 from v1.0-C streaming probe). Runtime deps: 5 → 5. Prior: v0.7.0 umbrella (Beginner UX, made legible) — retrospective at [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md). Per-release detail: [CHANGELOG.md](./CHANGELOG.md) `[v1.0-C]` / `[v1.0-B]` / `[v1.0-A]` / `[v0.7-A]` / `[v0.7-B]` / `[v0.7-C]`.
 
 What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 
@@ -89,7 +89,9 @@ What works today (see [CHANGELOG.md](./CHANGELOG.md) for the full log):
 - [x] **`mode_aliases` + `X-CodeRouter-Mode` header (v0.6-D)** — clients send an intent name (`coding` / `long` / `fast`) via header; a YAML `mode_aliases:` block resolves it to the concrete profile. Lets the chain be rewired without touching client code. Precedence: body `profile` > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > default (explicit implementation always wins over intent). Broken alias targets fast-fail at startup; unknown modes → 400 with the list of declared aliases; a `mode-alias-resolved` INFO log records every resolution.
 - [x] **Declarative `model-capabilities.yaml` registry (v0.7-A)** — the "which Anthropic model families accept the `thinking` body field" heuristic (and future `tools` / `reasoning_passthrough` / `max_context_tokens` defaults) lives in `coderouter/data/model-capabilities.yaml` instead of being baked into Python. Users can extend or override at `~/.coderouter/model-capabilities.yaml`. Schema: `rules: [{match: <fnmatch glob>, kind: anthropic|openai_compat|any, capabilities: {...}}]` with first-match-per-flag semantics. Precedence: `providers.yaml` `capabilities.*` (explicit per-provider) > user YAML > bundled YAML > unset. Adding a new Anthropic family when it ships is a one-line YAML edit; no code change required.
 - [x] **`coderouter doctor --check-model <provider>` (v0.7-B)** — live probes one provider from `providers.yaml` (auth + basic chat / tool_calls / thinking / reasoning-leak), compares with the v0.7-A registry, and prints a per-capability verdict table plus copy-paste YAML patches on mismatch. Uses direct `httpx` (not the adapter) so the reasoning-leak probe sees the raw upstream body before the v0.5-C strip, and the thinking probe sends Anthropic's native shape. Auth-probe failure short-circuits the remaining probes (`SKIP`) to save tokens. Exit codes: `0` match / `2` needs-tuning / `1` unrecoverable (auth / unreachable / unknown provider).
-- [x] JSON-line structured logging, `/healthz`, tests (**382 green**)
+- [x] **Declarative output-cleaning filter chain (v1.0-A)** — `output_filters: [strip_thinking, strip_stop_markers]` on any provider scrubs `<think>...</think>` blocks and the six default stop markers (`<|turn|>` / `<|end|>` / `<|python_tag|>` / `<|im_end|>` / `<|eot_id|>` / `<|channel>thought`) from model output. Stateful streaming: partial tags split across SSE chunks (`<thi` / `nk>`) are held back and re-examined with the next chunk; EOF flushes any safe tail via a synthetic chunk on OpenAI-compat or a synthetic `content_block_delta` on Anthropic. Per-text-block chain on Anthropic so `<think>` leakage in one content block cannot bleed into the next. One log per stream (`output-filter-applied` with `provider` / `filters` / `streaming`). Unknown filter names fail fast at config load, not on the first request. The v0.7-B doctor reasoning-leak probe now observes content-embedded markers and emits the exact `output_filters: [...]` patch needed — the first application of "transformation always rides with a probe".
+- [x] **Doctor `num_ctx` probe (v1.0-B)** — direct detection of Ollama silent prompt truncation (plan.md §9.4 symptom #1). The probe embeds a canary token at the front of a ~5K-token prompt and asks the model to echo it back; a missing canary implies the front of the prompt was dropped. Fires only for Ollama-shape providers (port 11434, or an `extra_body.options.num_ctx` declaration) — other `kind: openai_compat` upstreams SKIP. Four verdict branches: canary echoed & declared adequate → OK; canary echoed with nothing declared → informational OK; canary missing with nothing declared → NEEDS_TUNING with patch adding `extra_body.options.num_ctx: 32768`; canary missing with a declaration present → NEEDS_TUNING bumping to 32768 and, when the declaration already exceeds the threshold, a note that the model's intrinsic context limit may be the real ceiling. Runs between auth and tool_calls in the pipeline so truncation verdicts dominate the report (the previous heuristic misattributed the symptom to `capabilities.tools`).
+- [x] JSON-line structured logging, `/healthz`, tests (**441 green**)
 
 ### Use it with Claude Code
 
@@ -261,10 +263,9 @@ The subcommand targets **one** provider per invocation by design: a doctor probe
 - **Tool selection quality** is a model limitation, not a wire issue. CodeRouter repairs the wire (text JSON → `tool_use` block); whether the model chose the *right* tool is on the model. qwen2.5-coder:14b sometimes picks `Glob` where `Bash` would be correct — the remedy is a stronger local model or falling through to Claude via `ALLOW_PAID=true`.
 - **Mid-stream failure** (Ollama dies after first chunk) surfaces as a single `event: error` to the client, no retry — the partial response is preserved and the stream closes cleanly.
 
-Coming next (see [plan.md §9.4](./plan.md) for v0.7, §18 for v1.0+):
+Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
 
-- v0.7-C — README Troubleshooting for the 5 Ollama beginner silent-fail symptoms (num_ctx / tools / `<think>` leak / model tag 404 / missing API key), HF-on-Ollama reference profile in `examples/providers.yaml`
-- v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness), output cleaning
+- v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
 - v1.1 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers
 - v1.5 — Metrics dashboard
 
@@ -319,15 +320,21 @@ Mid-stream failures surface as a single `event: error` with `type: api_error` in
 
 **1. Blank / gibberish reply even though the provider returned 200.** Ollama's default `num_ctx` is 2048 tokens. Claude Code's system prompt alone is 15–20K tokens per turn, so everything after the first 2048 gets silently dropped from the **front** of the prompt — tool definitions, task description, everything. The model replies from the leftover tail.
 
+```bash
+coderouter doctor --check-model <provider>
+# → num_ctx: NEEDS_TUNING — canary missing from reply; upstream truncated
+#   (no `extra_body.options.num_ctx` declared, Ollama default is 2048)
+```
+
 ```yaml
-# providers.yaml — patch:
+# providers.yaml — patch suggested by doctor:
 - name: <provider>
   extra_body:
     options:
       num_ctx: 32768    # or 16384 if you need to save VRAM
 ```
 
-`coderouter doctor --check-model <provider>` does **not** currently probe `num_ctx` (planned follow-on); the symptom shows up indirectly as the tool_calls probe returning "no tool_call emitted" on a model the registry claims supports tools.
+As of **v1.0-B** the doctor probe detects this directly — it sends a canary token at the front of a ~5K-token prompt and asks the model to echo it back. If the canary is missing, Ollama truncated the front of the prompt. The probe fires only for Ollama-shape providers (port 11434 in the base URL, or a declared `extra_body.options.num_ctx`), so other `kind: openai_compat` upstreams SKIP it silently.
 
 **2. Claude Code keeps saying "I can't read files".** The model received the `tools` parameter, got confused, and returned an empty assistant message. Small quantized models (≤ 7B, Q4) frequently can't handle tool specs at all. CodeRouter's v0.3-A tool-call repair can recover *malformed* tool JSON, but this case is "model never attempted a tool call" — nothing to repair.
 
@@ -349,18 +356,27 @@ With `tools: false` the chain moves on to the next provider when a tool-heavy re
 
 ```bash
 coderouter doctor --check-model <provider>
-# → reasoning-leak: informational — observed `<think>` in content
+# → reasoning-leak: NEEDS_TUNING — observed `<think>` in content,
+#   provider has no `output_filters` declared
 ```
 
-Suppress at the source with the model's native opt-out directive (supported by Qwen3 / R1-distill families):
+As of **v1.0-A** the doctor probe emits a ready-to-apply filter patch. Two independent remediations — pick either or both:
 
 ```yaml
-# providers.yaml — patch:
+# providers.yaml — output-side scrub (v1.0-A, always works, recommended):
+- name: <provider>
+  output_filters: [strip_thinking]
+  # Add `strip_stop_markers` too if you also see <|turn|> / <|channel>thought / ...
+```
+
+```yaml
+# providers.yaml — source-side opt-out (cheap when the model honors it;
+# Qwen3 / R1-distill families respect `/no_think`):
 - name: <provider>
   append_system_prompt: "/no_think"
 ```
 
-If the model doesn't honor `/no_think`, the v1.0 output-cleaning work (planned) will strip the tags downstream. Until then, pick a non-reasoning variant for interactive use.
+`output_filters` operates on the byte stream at the adapter boundary, so it works on every model — at the cost of one pass over the content. The two can be layered; the sample `ollama-qwen-coder-*` profiles in `examples/providers.yaml` ship with `output_filters: [strip_thinking]` enabled.
 
 **4. First request to the chain always fails, then recovers.** The `model` field in `providers.yaml` has a typo or you forgot `ollama pull <tag>`. Ollama returns `404 model not found`, which is classified as retryable (bug fix from v0.2-x), so the chain falls through — but you lose the local-tier latency advantage on every turn.
 
