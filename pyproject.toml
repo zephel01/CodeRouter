@@ -20,7 +20,7 @@ classifiers = [
 # All upstream calls go through httpx directly.
 # ============================================================
 dependencies = [
-    "fastapi>=0.115.0",
+    "fastapi>=0.136.0",
     "uvicorn[standard]>=0.32.0",
     "httpx>=0.27.0",
     "pydantic>=2.9.0",
