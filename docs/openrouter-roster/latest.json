@@ -1,0 +1,174 @@
+{
+  "schema_version": 1,
+  "fetched_at": "2026-04-20T06:35:32Z",
+  "entries": [
+    {
+      "id": "arcee-ai/trinity-large-preview:free",
+      "context_length": 131000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+      "context_length": 32768,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-3-12b-it:free",
+      "context_length": 32768,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-3-27b-it:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-3-4b-it:free",
+      "context_length": 32768,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-3n-e2b-it:free",
+      "context_length": 8192,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-3n-e4b-it:free",
+      "context_length": 8192,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-4-26b-a4b-it:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/gemma-4-31b-it:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/lyria-3-clip-preview",
+      "context_length": 1048576,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "google/lyria-3-pro-preview",
+      "context_length": 1048576,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "liquid/lfm-2.5-1.2b-instruct:free",
+      "context_length": 32768,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "liquid/lfm-2.5-1.2b-thinking:free",
+      "context_length": 32768,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "meta-llama/llama-3.2-3b-instruct:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "meta-llama/llama-3.3-70b-instruct:free",
+      "context_length": 65536,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "minimax/minimax-m2.5:free",
+      "context_length": 196608,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nousresearch/hermes-3-llama-3.1-405b:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-3-nano-30b-a3b:free",
+      "context_length": 256000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-3-super-120b-a12b:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-nano-12b-v2-vl:free",
+      "context_length": 128000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "nvidia/nemotron-nano-9b-v2:free",
+      "context_length": 128000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "openai/gpt-oss-120b:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "openai/gpt-oss-20b:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "openrouter/elephant-alpha",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "openrouter/free",
+      "context_length": 200000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "qwen/qwen3-coder:free",
+      "context_length": 262000,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "qwen/qwen3-next-80b-a3b-instruct:free",
+      "context_length": 262144,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    },
+    {
+      "id": "z-ai/glm-4.5-air:free",
+      "context_length": 131072,
+      "pricing_prompt": "0",
+      "pricing_completion": "0"
+    }
+  ]
+}
