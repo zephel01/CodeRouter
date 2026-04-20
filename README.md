@@ -17,7 +17,7 @@ Client (Claude Code / OpenAI SDK / curl)
         │
         ▼
   CodeRouter  ──►  ① local model (free, top priority)
-                   ② free cloud (OpenRouter free, etc.)
+                   ② free cloud (OpenRouter qwen3-coder:free, deepseek-r1:free, ...)
                    ③ paid cloud (Claude / GPT-4 — only if ALLOW_PAID=true)
 ```
 

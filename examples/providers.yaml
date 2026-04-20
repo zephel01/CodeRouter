@@ -12,13 +12,20 @@
 #   4. coderouter serve
 #
 # Profiles provided (see the `profiles:` section at the bottom):
-#   - default       generic chain, 7b local → free cloud → (paid if allowed)
+#   - default       generic chain, 7b local → 2 free clouds → (paid if allowed)
 #   - claude-code   tuned for Claude Code (see README "Use it with Claude Code")
 #                   — 7b first for latency, 14b as quality fallback, 14b has
 #                     timeout_s=300 because Claude Code sends 15-20K-token
 #                     system prompts every turn that take ~100s to prefill.
+#                     Then 2 free OpenRouter models (qwen3-coder / deepseek-r1)
+#                     as cloud escape hatches, Claude as paid last resort.
 #   - coding        alias of default, kept for backward compat
 #   - free-only     skips paid tier entirely
+#
+# Free-tier notes (2026-04):
+#   OpenRouter free models are rate-limited to ~20 req/min and ~200 req/day
+#   per model per account. Listing TWO free providers in each profile gives
+#   you one escape hatch when one of them returns 429.
 # ============================================================
 
 allow_paid: false
@@ -85,11 +92,22 @@ providers:
 
   # ------------------------------------------------------------
   # Tier 2: free cloud (escape hatch)
+  #
+  # OpenRouter free-tier rate limits (as of 2026-04):
+  #   ~20 req/min, ~200 req/day per model, per account.
+  # Listing multiple free providers lets the chain fall through when one
+  # model hits the daily cap — keep both entries enabled if you use Claude
+  # Code heavily.
   # ------------------------------------------------------------
+
+  # Primary free choice. Qwen3-Coder 480B MoE (35B active) — optimized for
+  # agentic coding with tool use, 262K context. Can emit tool calls inside
+  # <tool_call>{...}</tool_call> text wrappers; v0.3-A tool-call repair
+  # extracts the JSON body and lifts it back to a proper tool_use block.
   - name: openrouter-free
     kind: openai_compat
     base_url: https://openrouter.ai/api/v1
-    model: qwen/qwen-2.5-coder-32b-instruct:free
+    model: qwen/qwen3-coder:free
     api_key_env: OPENROUTER_API_KEY
     paid: false                # OpenRouter free tier — no charge
     timeout_s: 60
@@ -98,9 +116,29 @@ providers:
       streaming: true
       tools: true
 
+  # Rate-limit escape hatch for when openrouter-free returns 429. DeepSeek R1
+  # is reasoning-oriented (164K context, free). Tool-call reliability is less
+  # proven than Qwen3-Coder, but the repair path covers its quirks too.
+  - name: openrouter-deepseek-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: deepseek/deepseek-r1:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 90                # reasoning models are slower
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
   # ------------------------------------------------------------
   # Tier 3: paid cloud (last resort, blocked unless ALLOW_PAID=true)
   # ------------------------------------------------------------
+
+  # Claude via OpenRouter. OpenRouter typically maintains slug aliases that
+  # point to the current-stable Anthropic model, so `claude-sonnet-4` will
+  # often redirect to the latest minor version. Pin to a specific slug
+  # (e.g. `anthropic/claude-sonnet-4.6`) if you want reproducibility.
   - name: openrouter-claude
     kind: openai_compat
     base_url: https://openrouter.ai/api/v1
@@ -119,6 +157,7 @@ profiles:
     providers:
       - ollama-qwen-coder-7b
       - openrouter-free
+      - openrouter-deepseek-free
       - openrouter-claude
 
   # Tuned for `ANTHROPIC_BASE_URL=http://localhost:8088 claude`.
@@ -126,12 +165,14 @@ profiles:
   # so the router always engages the v0.3-D tool-downgrade path. That means
   # user-felt latency ≈ upstream total response time. Keep the first provider
   # fast and capable of tool-calling; put 14b second for retries when 7b
-  # mis-selects a tool.
+  # mis-selects a tool, then two free-tier OpenRouter models as cloud escape
+  # hatches (rate-limit covered), and Claude as the paid last resort.
   - name: claude-code
     providers:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
       - openrouter-free
+      - openrouter-deepseek-free
       - openrouter-claude
 
   # Alias — historically used for code-heavy tasks. Kept for backward compat.
@@ -139,6 +180,7 @@ profiles:
     providers:
       - ollama-qwen-coder-7b
       - openrouter-free
+      - openrouter-deepseek-free
       - openrouter-claude
 
   # Strictly no paid providers, even if ALLOW_PAID=true.
@@ -147,3 +189,4 @@ profiles:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
       - openrouter-free
+      - openrouter-deepseek-free
