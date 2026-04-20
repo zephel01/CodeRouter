@@ -6,10 +6,41 @@ on:
   pull_request:
     branches: [main]
 
+# CI philosophy (plan.md §5.4, retrospective v1.0):
+#   CodeRouter ships no binary build — it's a pure-Python router/CLI
+#   that the operator runs locally. CI is therefore scoped to two
+#   concerns that actually save the operator's time:
+#
+#     1. Regression safety  — pytest + ruff check + SDK-forbid grep
+#     2. Supply-chain hygiene — lockfile freeze + secret scan +
+#                               multi-source CVE audit + dep-review
+#
+#   Style (ruff format) and strict typing (mypy --strict) are useful
+#   during development but are not enforced in CI because they do not
+#   catch security or functional regressions. Run locally:
+#       uv run ruff format .
+#       uv run ruff check .
+
+# Supply-chain hardening: default every job to read-only. Jobs that
+# need write access (e.g. gitleaks posting a PR comment) opt in
+# explicitly at the job level.
+permissions:
+  contents: read
+
 jobs:
+  # -------------------------------------------------------------------
+  # Regression gate — functional safety across the 3.12 / 3.13 matrix.
+  #
+  # `uv sync --frozen` refuses to proceed if `uv.lock` drifted from
+  # `pyproject.toml`. This is the first line of supply-chain defense:
+  # nothing resolves a new transitive without an explicit lockfile
+  # update committed to the repo.
+  # -------------------------------------------------------------------
   test:
+    name: Tests & Lint (py ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         python-version: ["3.12", "3.13"]
     steps:
@@ -21,17 +52,11 @@ jobs:
       - name: Set up Python
         run: uv python install ${{ matrix.python-version }}
 
-      - name: Install dependencies
-        run: uv sync --extra dev
+      - name: Install dependencies (lockfile-frozen)
+        run: uv sync --frozen --extra dev
 
       - name: Lint (ruff)
         run: uv run ruff check .
-
-      - name: Format check (ruff)
-        run: uv run ruff format --check .
-
-      - name: Type check (mypy)
-        run: uv run mypy coderouter
 
       - name: Tests
         run: uv run pytest -v
@@ -43,3 +68,79 @@ jobs:
             echo "Forbidden SDK import detected — see plan.md §5.4 (dependency minimalism)."
             exit 1
           fi
+
+  # -------------------------------------------------------------------
+  # Secret-leak gate — scan full history for committed credentials.
+  #
+  # Runs on push AND pull_request so forks can't sneak a secret in.
+  # gitleaks exits non-zero on any finding.
+  # -------------------------------------------------------------------
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history — gitleaks scans every commit, not just HEAD.
+          fetch-depth: 0
+
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # -------------------------------------------------------------------
+  # CVE audit — multi-source (pip-audit + OSV-Scanner).
+  #
+  # Two sources of advisories because they don't perfectly overlap:
+  #   - pip-audit: PyPA Advisory DB (primary for Python packages)
+  #   - OSV-Scanner: Google OSV (broader, picks up GHSA + language-
+  #                  agnostic advisories PyPA hasn't mirrored yet)
+  #
+  # Both scan the locked dependency set (uv.lock) so results match
+  # exactly what `uv sync --frozen` installs in the test job.
+  # -------------------------------------------------------------------
+  cve-audit:
+    name: Dependency CVE audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies (lockfile-frozen)
+        run: uv sync --frozen --extra dev
+
+      - name: pip-audit
+        # Audits the installed environment. Because the install step
+        # used `uv sync --frozen`, this is exactly the uv.lock pin set.
+        run: uv run --with pip-audit pip-audit --strict
+
+      - name: OSV-Scanner (lockfile mode)
+        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        with:
+          scan-args: |-
+            --lockfile=./uv.lock
+
+  # -------------------------------------------------------------------
+  # PR-only: block pulls that introduce a vulnerable dep *at PR time*,
+  # so we catch the regression before it lands on main.
+  # -------------------------------------------------------------------
+  dependency-review:
+    name: Dependency review (PR)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependency Review
+        uses: actions/dependency-review-action@v4
+        with:
+          # Fail on any new Critical/High severity finding introduced
+          # by the PR. The cve-audit job re-checks the full installed
+          # set on every push as a belt-and-braces backstop.
+          fail-on-severity: high

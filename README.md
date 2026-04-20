@@ -428,6 +428,14 @@ Strict — see [`plan.md` §5.4](./plan.md). Runtime deps:
 
 That's it. No `litellm`, no `langchain`, no `openai`/`anthropic` SDKs.
 
+## Security
+
+Secrets live in env vars, not config files. CI enforces secret
+scanning (`gitleaks`), multi-source dependency CVE audit (`pip-audit`
++ OSV-Scanner), and lockfile-frozen installs — see
+[`docs/security.md`](./docs/security.md) for the full posture and
+reporting instructions.
+
 ## License
 
 MIT

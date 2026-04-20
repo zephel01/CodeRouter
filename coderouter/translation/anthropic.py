@@ -70,7 +70,8 @@ AnthropicContentBlock = (
     | AnthropicImageBlock
     | AnthropicToolUseBlock
     | AnthropicToolResultBlock
-    | dict  # forward-compat for unknown block types (thinking, document, etc.)
+    # forward-compat for unknown block types (thinking, document, etc.)
+    | dict[str, Any]
 )
 
 

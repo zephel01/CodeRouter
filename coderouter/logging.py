@@ -154,7 +154,7 @@ def log_capability_degraded(
         "dropped": dropped,
         "reason": reason,
     }
-    logger.info("capability-degraded", extra=payload)  # type: ignore[arg-type]
+    logger.info("capability-degraded", extra=payload)
 
 
 # ---------------------------------------------------------------------------
@@ -227,7 +227,7 @@ def log_chain_paid_gate_blocked(
     }
     logger.warning(
         "chain-paid-gate-blocked",
-        extra=payload,  # type: ignore[arg-type]
+        extra=payload,
     )
 
 
@@ -299,5 +299,5 @@ def log_output_filter_applied(
     }
     logger.info(
         "output-filter-applied",
-        extra=payload,  # type: ignore[arg-type]
+        extra=payload,
     )

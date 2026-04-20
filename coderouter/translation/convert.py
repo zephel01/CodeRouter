@@ -20,7 +20,7 @@ import json
 import time
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Any, Literal
 
 from coderouter.adapters.base import (
     AdapterError,
@@ -270,7 +270,9 @@ def to_chat_request(req: AnthropicRequest) -> ChatRequest:
 # ============================================================
 
 
-_FINISH_REASON_MAP = {
+_FINISH_REASON_MAP: dict[
+    str, Literal["end_turn", "max_tokens", "stop_sequence", "tool_use"]
+] = {
     "stop": "end_turn",
     "length": "max_tokens",
     "tool_calls": "tool_use",

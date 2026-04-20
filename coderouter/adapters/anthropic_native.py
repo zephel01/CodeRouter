@@ -190,7 +190,7 @@ class AnthropicAdapter(BaseAdapter):
             chat_resp.coderouter_provider = self.name
         return chat_resp
 
-    async def stream(  # type: ignore[override]
+    async def stream(
         self,
         request: ChatRequest,
         *,

@@ -1,0 +1,63 @@
+# Dependabot configuration — supply-chain hygiene for a library-pollution-
+# aware era (2025+). Covers two distinct attack surfaces:
+#
+#   1. Python runtime / dev deps (fastapi, httpx, pydantic, ruff, ...)
+#      → Weekly PR to bump to the latest non-breaking release. CVE
+#        patches land automatically.
+#
+#   2. GitHub Actions workflow deps (actions/checkout, astral-sh/setup-uv,
+#      gitleaks/gitleaks-action, ...)
+#      → Weekly PR. Crucial because recent supply-chain incidents
+#        (e.g. tj-actions/changed-files) exploited outdated Action
+#        versions with compromised tags.
+#
+# Dependabot PRs themselves run through the main CI workflow, so no
+# auto-merge is configured — the operator reviews each bump manually.
+
+version: 2
+
+updates:
+  # ------------------------------------------------------------------
+  # Python package ecosystem (pyproject.toml + uv.lock).
+  # ------------------------------------------------------------------
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "python"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      # Group dev-only bumps into a single PR to reduce review load;
+      # runtime deps stay individual so each can be risk-assessed.
+      dev-dependencies:
+        patterns:
+          - "pytest*"
+          - "ruff"
+          - "mypy"
+          - "types-*"
+
+  # ------------------------------------------------------------------
+  # GitHub Actions — pins actions/* and third-party action versions.
+  # ------------------------------------------------------------------
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "07:00"
+      timezone: "Asia/Tokyo"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "ci"
+      include: "scope"
