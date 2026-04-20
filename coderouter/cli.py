@@ -28,6 +28,16 @@ def _build_parser() -> argparse.ArgumentParser:
              "./providers.yaml, or ~/.coderouter/providers.yaml.",
     )
     serve.add_argument(
+        "--mode",
+        default=None,
+        help=(
+            "Override the YAML default_profile for this server instance. "
+            "Equivalent to setting CODEROUTER_MODE=<profile>. "
+            "Per-request overrides via header/body still win. "
+            "Unknown profile names fail fast at startup."
+        ),
+    )
+    serve.add_argument(
         "--reload", action="store_true", help="Auto-reload on code change (dev only)."
     )
     serve.add_argument(
@@ -46,6 +56,15 @@ def main(argv: list[str] | None = None) -> int:
         import os
         if args.config:
             os.environ["CODEROUTER_CONFIG"] = args.config
+
+        # v0.6-A: --mode translates to CODEROUTER_MODE for the worker. Strip
+        # surrounding whitespace defensively — quoting accidents like
+        # ``--mode " coding "`` would otherwise surface as confusing
+        # "profile not found: ' coding '" errors in the loader.
+        if args.mode is not None:
+            stripped = args.mode.strip()
+            if stripped:
+                os.environ["CODEROUTER_MODE"] = stripped
 
         uvicorn.run(
             "coderouter.ingress.app:create_app",

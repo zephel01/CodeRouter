@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 
 import pytest
@@ -19,7 +18,12 @@ from coderouter.config.schemas import (
 @pytest.fixture(autouse=True)
 def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """Wipe env vars that the loader picks up so tests are deterministic."""
-    for var in ("ALLOW_PAID", "CODEROUTER_CONFIG", "OPENROUTER_API_KEY"):
+    for var in (
+        "ALLOW_PAID",
+        "CODEROUTER_CONFIG",
+        "CODEROUTER_MODE",
+        "OPENROUTER_API_KEY",
+    ):
         monkeypatch.delenv(var, raising=False)
 
 

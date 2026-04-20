@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
 
 
 class Capabilities(BaseModel):
@@ -125,6 +125,24 @@ class CodeRouterConfig(BaseModel):
     default_profile: str = Field(default="default")
     providers: list[ProviderConfig] = Field(..., min_length=1)
     profiles: list[FallbackChain] = Field(..., min_length=1)
+
+    @model_validator(mode="after")
+    def _check_default_profile_exists(self) -> CodeRouterConfig:
+        """v0.6-A: surface a typo'd ``default_profile`` at load time.
+
+        Previously a bad ``default_profile`` only blew up on the first
+        request (``profile_by_name`` → KeyError → 500). Checking here
+        converts a silent-until-used misconfig into a fast-fail at
+        startup, which matches how ``--mode`` / ``CODEROUTER_MODE`` are
+        validated in ``loader.py``.
+        """
+        names = {p.name for p in self.profiles}
+        if self.default_profile not in names:
+            raise ValueError(
+                f"default_profile {self.default_profile!r} is not declared in "
+                f"profiles: known={sorted(names)}"
+            )
+        return self
 
     def provider_by_name(self, name: str) -> ProviderConfig:
         """Look up a provider config by name. Raises KeyError if not found."""

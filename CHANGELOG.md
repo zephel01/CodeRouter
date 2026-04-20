@@ -6,6 +6,48 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v0.6-A] — 2026-04-20 (`--mode` CLI + CODEROUTER_MODE env + startup validation)
+
+**Theme: サーバー起動時点の profile 選択を 1 級市民に昇格。** v0.5 までは「YAML の `default_profile` を書き換える」か「クライアントごとに header を毎回投げる」の二択だった。v0.6-A で `--mode <profile>` CLI オプション + `CODEROUTER_MODE` 環境変数を追加し、サーバー単位 / プロセス単位の軽い override を可能に。併せて `default_profile` が profiles リストに存在しない場合は起動時に fast-fail するように (従来は最初のリクエスト時に 500)。
+
+- Tests: 267 → **275** (+8, CLI 5 + config loader 3)
+- 優先順位: request per-call > `--mode` (= `CODEROUTER_MODE`) > YAML `default_profile` > built-in "default"
+- §9.3 の 5 項目中 2 項目 (`--mode` CLI / 起動時 fast-fail) を消化
+
+### Added
+
+- **`coderouter/cli.py`**
+  - `serve --mode <profile>` 引数。指定値の前後 whitespace を strip してから `CODEROUTER_MODE` env var を export (shell quoting 事故で `" coding "` が渡ってきても loader まで届かない)
+  - 既存 `CODEROUTER_MODE` が shell に pre-set されている場合、`--mode` が未指定なら尊重、指定されていれば上書き
+- **`coderouter/config/schemas.py`**
+  - `CodeRouterConfig` に `@model_validator(mode="after")` で `default_profile` が `profiles` に存在するかチェック。従来は `profile_by_name` lookup 時 (= 最初のリクエスト) まで typo が検出されなかった
+- **`coderouter/config/loader.py`**
+  - `CODEROUTER_MODE` env var (空白 strip 後に truthy なら) を `raw["default_profile"]` に被せてから pydantic validate。model-validator の存在チェックが「effective mode」に対して走る
+- **`coderouter/ingress/app.py`**
+  - 起動 log `coderouter-startup` に `default_profile` + `mode_source: "env" | "config"` を追加。operator が「shell が driver してる」か「YAML で決まってる」かを 1 行で把握可能
+- **`tests/test_cli.py`** (新規) — `--mode` → env, `--mode` vs pre-set env, whitespace strip, `--mode` 未指定時は env を触らない、既存 `--config` の回帰テスト (+5)
+- **`tests/test_config.py`** — `CODEROUTER_MODE` env override, 空文字列は ignore, YAML 側で default_profile が不正な場合の fast-fail (+3)
+
+### Changed
+
+- **`tests/conftest.py`** — `_clear_env` fixture に `CODEROUTER_MODE` を追加。テスト間で env が漏れるのを防ぐ既存パターンに合わせた
+- **`README.md`** — Claude Code セクションに `--mode` 例を追加。YAML 側の `default_profile:` を書き換える方法と併記
+
+### Design notes
+
+- **なぜ env 一本化?** `--mode` は単に `CODEROUTER_MODE` を export する薄いラッパにした。`uvicorn --reload` が fork で worker を立ち上げる関係で、引数を直接渡すには factory 関数への引数付け足しが必要で、既存の `--config` と同じ env 経由パターンに揃えた方が自然。worker 側は `os.environ.get("CODEROUTER_MODE")` 1 発で拾える
+- **loader で env を raw に被せる順序.** `CodeRouterConfig.model_validate(raw)` の *前* に env override を適用している。これで model-validator の `default_profile exists` チェックが (a) YAML の値に対してではなく (b) 実際に使われる値に対して走る。結果として「YAML は古い profile 名を残してるが env で新しい名前を指してる」というケースが正しく通り、逆に env で typo を打つと起動時に即エラー
+- **空文字列の扱い.** `CODEROUTER_MODE=""` または `CODEROUTER_MODE="   "` は「未設定」と同義に扱う (strip 後 empty なら override しない)。shell で `export FOO=` が「clear」のセマンティクスを持つのに合わせた
+- **fast-fail の境界.** 未知 profile の検出は起動時 + loader 呼び出し時のみ。runtime (リクエスト中) に profile が "消える" ことはないので、毎リクエスト検証するオーバーヘッドは不要
+
+### Follow-ons
+
+- **v0.6-B**: profile-level `timeout_s` / `append_system_prompt` / `retry_max` override (§9.3 残 #4)
+- **v0.6-C**: `ALLOW_PAID` 宣言的 gate の強化 — startup log に paid provider 列挙 + `chain-paid-gate-blocked` structured log (§9.3 残 #3)
+- **v0.6-D**: `mode_aliases` YAML block で `X-CodeRouter-Mode: coding` → profile 名の mapping (§9.3 残 #5)
+
+---
+
 ## [v0.5-D] — 2026-04-20 (OpenRouter roster weekly cron)
 
 **Theme: proactive free-tier 棚卸の自動化。** v0.4-B で「消えた後でしか気付けなかった `deepseek-r1:free`」が動機。`scripts/openrouter_roster_diff.py` が `httpx + stdlib` だけで `/api/v1/models` を週次でポーリングし、free-tier (`pricing.prompt` と `pricing.completion` がどちらも数値 0) の差分を `docs/openrouter-roster/CHANGES.md` に newest-first で追記する。`coderouter` パッケージへの import は 0 — cron は本体が mid-change でも安全に動く。

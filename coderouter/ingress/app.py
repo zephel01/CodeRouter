@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
+import os
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
@@ -24,6 +25,13 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        # v0.6-A: surface the effective default_profile + where it came from,
+        # so operators can tell at a glance whether a shell env is driving the
+        # server ("oh, my .envrc set CODEROUTER_MODE") vs the YAML file
+        # ("default_profile: coding was committed").
+        mode_source = (
+            "env" if os.environ.get("CODEROUTER_MODE", "").strip() else "config"
+        )
         logger.info(
             "coderouter-startup",
             extra={
@@ -31,6 +39,8 @@ def create_app(config_path: str | None = None) -> FastAPI:
                 "providers": [p.name for p in config.providers],
                 "profiles": [pr.name for pr in config.profiles],
                 "allow_paid": config.allow_paid,
+                "default_profile": config.default_profile,
+                "mode_source": mode_source,
             },
         )
         yield

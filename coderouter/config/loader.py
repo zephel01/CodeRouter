@@ -44,6 +44,15 @@ def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     with chosen.open("r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
+    # v0.6-A: CODEROUTER_MODE env overrides the YAML default_profile BEFORE
+    # initial validation, so that (a) a typo'd file default that would otherwise
+    # fail can be rescued by an explicit env-set mode, and (b) the model-
+    # validator's "default_profile must exist in profiles" check applies to the
+    # *effective* mode the engine will see, not the pre-override YAML value.
+    env_mode = os.environ.get("CODEROUTER_MODE", "").strip()
+    if env_mode:
+        raw["default_profile"] = env_mode
+
     config = CodeRouterConfig.model_validate(raw)
 
     # Env var ALLOW_PAID overrides file value (so users can flip it per-shell)

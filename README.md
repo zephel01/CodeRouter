@@ -98,7 +98,14 @@ To use the `claude-code` profile from `examples/providers.yaml` (7b first, 14b a
 default_profile: claude-code
 ```
 
-Or select it per-request via the `X-CodeRouter-Profile` header when your client lets you set headers.
+Or pick the profile at server-launch time with the `--mode` flag (v0.6-A):
+
+```bash
+uv run coderouter serve --port 8088 --mode claude-code
+# equivalent to: CODEROUTER_MODE=claude-code uv run coderouter serve --port 8088
+```
+
+`--mode` overrides the YAML `default_profile` for this process only. Per-request overrides (`X-CodeRouter-Profile` header, or `profile` field in the body) still win, so `--mode` is the right knob when you want to try a different chain without editing the config file. Unknown profile names fail fast at startup rather than on the first request.
 
 The profile itself looks like this in `examples/providers.yaml` — copy it verbatim, then edit the `base_url` / `model` of each `providers:` entry to match your local stack:
 
