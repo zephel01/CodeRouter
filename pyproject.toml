@@ -1,6 +1,6 @@
 [project]
 name = "coderouter"
-version = "0.1.0"
+version = "1.0.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,7 +8,7 @@ license = { text = "MIT" }
 authors = [{ name = "zephel01" }]
 keywords = ["llm", "router", "fallback", "local-first", "claude", "openai", "openrouter"]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
