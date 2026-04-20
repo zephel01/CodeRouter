@@ -112,15 +112,18 @@ jobs:
       - name: Set up Python
         run: uv python install 3.12
 
-      - name: Install dependencies (lockfile-frozen)
-        run: uv sync --frozen --extra dev
+      - name: Export lockfile as requirements.txt (no project)
+        # `--no-emit-project` excludes the root package (coderouter
+        # itself), which is not published on PyPI. The resulting
+        # requirements.txt is exactly the pinned transitive set from
+        # uv.lock — no editable install, no unpublished names.
+        run: uv export --frozen --no-emit-project --no-hashes --extra dev --format requirements-txt -o requirements-audit.txt
 
-      - name: pip-audit
-        # Audits the installed environment. Because the install step
-        # used `uv sync --frozen`, this is exactly the uv.lock pin set.
-        # `--skip-editable` excludes the project itself (installed
-        # editable by `uv sync`), which is not published on PyPI.
-        run: uv run --with pip-audit pip-audit --strict --skip-editable
+      - name: pip-audit (requirements)
+        # Audits the exported requirements file. `--strict` fails the
+        # build on any skipped dependency; because we exported without
+        # the editable project, there is nothing to skip.
+        run: uv run --with pip-audit pip-audit --strict -r requirements-audit.txt
 
       - name: OSV-Scanner (lockfile mode)
         uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
