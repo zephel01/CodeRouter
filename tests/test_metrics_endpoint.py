@@ -235,8 +235,8 @@ def test_metrics_prom_has_help_and_type_before_samples(client: TestClient) -> No
     for idx, line in enumerate(lines):
         if line.startswith("coderouter_requests_total "):
             earlier = lines[:idx]
-            assert any(l.startswith("# HELP coderouter_requests_total ") for l in earlier)
-            assert any(l.startswith("# TYPE coderouter_requests_total ") for l in earlier)
+            assert any(ln.startswith("# HELP coderouter_requests_total ") for ln in earlier)
+            assert any(ln.startswith("# TYPE coderouter_requests_total ") for ln in earlier)
             break
     else:  # pragma: no cover - the fixture should always produce this line
         raise AssertionError("requests_total sample line not found")

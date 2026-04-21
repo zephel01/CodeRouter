@@ -353,7 +353,7 @@ _DASHBOARD_HTML = r"""<!doctype html>
     setBind("rate_last", delta);
     setBind("rate_meta", "avg " + avg.toFixed(1) + " · peak " + peak);
 
-    // Map samples to SVG coordinates. viewBox is 300×60; 0 is at the
+    // Map samples to SVG coordinates. viewBox is 300x60; 0 is at the
     // top in SVG, so we invert the y-axis. When only a few samples
     // exist we still draw — left-justified so the movement is visible.
     const n = sparkBuffer.length;

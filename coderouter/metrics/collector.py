@@ -42,12 +42,13 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import threading
 import time
 from collections import Counter, deque
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
 
@@ -71,7 +72,7 @@ def _utc_now_iso() -> str:
     for its ``ts`` field, so the recent-events ring reads the same way as
     the stderr log stream.
     """
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S")
 
 
 class MetricsCollector(logging.Handler):
@@ -357,10 +358,8 @@ def uninstall_collector() -> None:
     global _collector
     with _collector_lock:
         if _collector is not None:
-            try:
+            with contextlib.suppress(ValueError):  # pragma: no cover - already detached
                 logging.getLogger().removeHandler(_collector)
-            except ValueError:  # pragma: no cover - already detached
-                pass
             _collector = None
         _uninstall_jsonl_mirror()
 
@@ -405,14 +404,10 @@ def _uninstall_jsonl_mirror() -> None:
     global _jsonl_handler
     if _jsonl_handler is None:
         return
-    try:
+    with contextlib.suppress(ValueError):  # pragma: no cover - already detached
         logging.getLogger().removeHandler(_jsonl_handler)
-    except ValueError:  # pragma: no cover - already detached
-        pass
-    try:
+    with contextlib.suppress(Exception):  # pragma: no cover - best-effort cleanup
         _jsonl_handler.close()
-    except Exception:  # pragma: no cover - best-effort cleanup
-        pass
     _jsonl_handler = None
 
 
@@ -439,7 +434,7 @@ def _record_ts_iso(record: logging.LogRecord) -> str:
     ``datetime.now()`` so the recent-events ring and the stderr log line
     for the same event carry identical timestamps.
     """
-    return datetime.fromtimestamp(record.created, tz=timezone.utc).strftime(
+    return datetime.fromtimestamp(record.created, tz=UTC).strftime(
         "%Y-%m-%dT%H:%M:%S"
     )
 

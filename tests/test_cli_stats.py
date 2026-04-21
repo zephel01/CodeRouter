@@ -31,7 +31,6 @@ from coderouter.cli_stats import (
     main,
 )
 
-
 # ---------------------------------------------------------------------------
 # Snapshot fixtures
 # ---------------------------------------------------------------------------
@@ -425,7 +424,7 @@ class _FakeResponse:
     def __init__(self, body: bytes) -> None:
         self._body = body
 
-    def __enter__(self) -> "_FakeResponse":
+    def __enter__(self) -> _FakeResponse:
         return self
 
     def __exit__(self, *a: object) -> None:

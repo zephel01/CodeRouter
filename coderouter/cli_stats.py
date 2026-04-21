@@ -31,10 +31,9 @@ import sys
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any, Final
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
-
 
 # ---------------------------------------------------------------------------
 # Defaults
@@ -86,7 +85,7 @@ class ProviderRow:
 
     @property
     def ok_rate_pct(self) -> int:
-        """Rounded success percentage (``ok / attempts × 100``).
+        """Rounded success percentage (``ok / attempts * 100``).
 
         Returns 100 when ``attempts`` is zero so the UI shows a neutral
         value rather than ``0%`` for a provider that hasn't been tried.
@@ -176,7 +175,7 @@ def fetch_snapshot(
     when the server is starting, for example) without crashing.
     """
     try:
-        with urllib.request.urlopen(url, timeout=timeout_s) as resp:  # noqa: S310
+        with urllib.request.urlopen(url, timeout=timeout_s) as resp:
             raw = resp.read()
     except urllib.error.URLError as exc:
         return FetchError(f"connection failed: {exc.reason}")
@@ -328,7 +327,7 @@ def _format_ts_in_tz(ts_full: str, tz: ZoneInfo | None) -> str:
     if tz is None or not ts_full:
         return naive
     try:
-        dt_utc = datetime.fromisoformat(ts_full).replace(tzinfo=timezone.utc)
+        dt_utc = datetime.fromisoformat(ts_full).replace(tzinfo=UTC)
     except ValueError:
         return naive
     return dt_utc.astimezone(tz).strftime("%H:%M:%S")
