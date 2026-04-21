@@ -6,6 +6,112 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.5.0] — 2026-04-22 (Umbrella tag — Observability pillar)
+
+**Theme: plan.md §12「計測ダッシュボード」を丸ごと 1 minor で受ける。** 収集 (v1.5-A `MetricsCollector` + `/metrics.json`) / 配信 (v1.5-B Prometheus `/metrics` + `$CODEROUTER_EVENTS_PATH` JSONL mirror) / 可視化 CLI (v1.5-C `coderouter stats` curses TUI) / 可視化 HTML (v1.5-D `/dashboard` 1 ページ) / timezone 表示 (v1.5-E `display_timezone` config) / demo 同梱 (v1.5-F `scripts/demo_traffic.sh`) の 6 sub-release を横並びで出荷。READMEに live dashboard のスクショ (`docs/assets/dashboard-demo.png`) と「このダッシュボードを見ると何の問いに即答できるか」を明記するセクションを追加 ("モデルが動作してる / 利用されてる / 切り替わった" が読み取れること) — 数字の羅列ではなく運用上の問いを起点にした書き直し。**SemVer 番号について**: `v1.0.1 → v1.5.0` で旧 v1.1 (= 配布 / launcher / doctor、plan.md §11) を飛び越しているため、plan.md §11 ヘッダは **v1.6** にリラベル、`v1.1.0`-`v1.4.x` は欠番扱い。`v1.5.0` umbrella で plan.md §12 を受け、§11 (v1.6) が次の minor。
+
+- Tests: 457 → **527** (+70, +15.3%)、v1.5-A +41 / v1.5-B +16 / v1.5-C ±0 (data/render layer、D で統合計上) / v1.5-D +12 / v1.5-E +1 / v1.5-F ±0
+- Runtime deps: 5 → 5 — `curses` / `urllib` / `datetime.zoneinfo` は全て stdlib、tailwind は CDN 1 ファイル、Prometheus 形式は自前文字列生成で SDK 依存ゼロ (12+ sub-release 連続で依存数据え置き)
+- Non-breaking: 新設 endpoint (`/metrics.json` / `/metrics` / `/dashboard`) + 新設 CLI (`coderouter stats`) + 新設 config field (`display_timezone`、任意) のみで既存 endpoint / CLI / config は verbatim 維持
+
+### Added
+
+- **v1.5-A — `MetricsCollector` + `GET /metrics.json`** (coderouter/metrics/collector.py +463 LOC / coderouter/ingress/metrics_routes.py +92 LOC)
+  - `MetricsCollector` は `logging.Handler` のサブクラス。既存の structured log stream (v0.3 以降不変の JSON line shape) に handler として `addHandler()` するだけで発火、コード側のログ呼び出しは 1 行も書き換えない。in-memory ring (counters / providers / recent 50 events / startup snapshot) を `_process_record()` で毎秒 refresh
+  - `GET /metrics.json` (`FastAPI` JSON response) で snapshot を JSON として返す。`/dashboard` HTML (v1.5-D) と `coderouter stats` CLI (v1.5-C) が同じ endpoint を fetch する single-source-of-truth 設計
+  - app.py の lifespan 内で `MetricsCollector` を root logger にアタッチ、startup で `coderouter-startup` event を fire して `startup` snapshot に version / providers / profiles / allow_paid / mode_source を seed
+- **v1.5-B — Prometheus text exposition + JSONL mirror** (coderouter/metrics/prometheus.py +211 LOC)
+  - `GET /metrics` が Prometheus `text/plain; version=0.0.4` で exposition を返す。`coderouter_*` prefix (慣習)、全て scalar (ラベルなし)、gauge + counter 混成 (e.g. `coderouter_requests_total`, `coderouter_providers_healthy`)
+  - `$CODEROUTER_EVENTS_PATH` env が設定されているとき、collector が同じ log record を JSONL としてそのパスに append。snapshot とは完全独立な side-effect (snapshot の in-memory ring はそのまま、JSONL だけが長期保存用に伸びる)。`JsonLineFormatter` と同一行シェイプなので既存の log 解析 pipeline にそのまま乗る
+  - +11 tests (test_metrics_prometheus.py)、+5 tests (test_metrics_jsonl.py)
+- **v1.5-C — `coderouter stats` CLI TUI** (coderouter/cli_stats.py +752 LOC)
+  - stdlib `curses` + `urllib` のみで動く 5 パネル dashboard: Providers (健康状態 + latency_ms + last_event)、Fallback & Gates (fallback chain 進行 / ALLOW_PAID / capability-degraded カウント)、Requests/min sparkline (60 秒 rolling bucket)、Recent Events (直近 10 件、新しい順、tz 変換済み)、Usage Mix (local / free / paid の比率)
+  - `--once` mode: TTY 不在 (CI / pipe / `demo_traffic.sh` banner) で単発レンダー、stdout に plain text 版を出す。driver (`_Screen` curses wrapper) と pure data+render layer を分離、unit test は render layer だけを叩く
+  - +39 tests (test_cli_stats.py、data layer + render + `--once` snapshot)
+- **v1.5-D — `/dashboard` HTML 1 ページ** (coderouter/ingress/dashboard_routes.py +493 LOC)
+  - tailwind CDN 1 ファイル + vanilla JS (`setInterval` + `fetch("/metrics.json")` 2 秒間隔) の single-page。htmx を避けたのは 5-dep policy と、fetch polling で十分な TTFB を確認できたため (plan.md §12.3.6 参照)
+  - 5 パネルは CLI TUI と同じ意味論 (Providers / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) を HTML で表現。dark theme 既定、`data-bind` attribute で JS 側が部分更新
+  - +12 tests (test_dashboard_endpoint.py、HTML 200 / snapshot 埋込 / polling 引数)
+- **v1.5-E — `display_timezone` config field** (coderouter/config/schemas.py + cli_stats.py + dashboard_routes.py)
+  - `providers.yaml` top-level に `display_timezone: "Asia/Tokyo"` 等を宣言 (任意、IANA zone 名、未設定時 UTC)。集約された UTC 時刻は触らず、**表示層だけ**変換する: CLI TUI は `TzFormatter` (zoneinfo + cache、同じゾーンの繰り返し変換を O(1) に)、HTML は `Intl.DateTimeFormat` (ブラウザ native、zone 引き継ぎ)
+  - `/metrics.json` の `config.display_timezone` で JS 側に伝搬、`examples/providers.yaml` に reference stanza 追加
+  - +1 test (display_timezone 専用 fixture、tz-aware datetime の format 一致)
+- **v1.5-F — `scripts/demo_traffic.sh`** (+861 LOC)
+  - weighted scenario picker: normal 4/10 / stream 3/10 / burst+idle 2/10 / fallback 1/10、paid-gate every 8th tick。各 scenario は dashboard で panel がどう動くかを意図して設計 (例: burst+idle → sparkline のスパイク + idle で減衰を観察)
+  - flag: `--duration <sec>` (既定 60、`∞` で SIGINT まで連続)、`--serve` (mock HTTP server を `127.0.0.1:4444` で起動、ローカル単体で回せる)、`--dry-run` (scenario picker の確率分布 sampler だけ実行、traffic は送らない)
+  - Banner + expected-count table + elapsed/progress readout (`tick N/M, elapsed=XmYs`)、`scenario_*` 関数群、`log_info/ok/warn/err` 統一ログ
+  - macOS `/bin/bash` 3.2 互換修正: (i) heredoc-inside-`$()` が bash 3.2 parser で稀に hang するため `PLAN_PY_SRC` / `BODY_PY_SRC` を single-quoted 変数に外出し → `python3 -c "$VAR"`、(ii) 並行 bg job の集約で bare `wait` が SIGCHLD 取りこぼしで hang するため `wait_pids()` helper (`$!` で集めた PID を個別 wait) を新設、`scenario_fallback_burst` / `scenario_burst_then_steady` で適用
+- **README dashboard snapshot** (README.md / README.ja.md + docs/assets/dashboard-demo.png)
+  - "Live dashboard" セクションを architecture 図の直後に挿入。キャプションは数字の羅列ではなく「このダッシュボードを見ると何の問いに即答できるか」という運用問い起点: どの provider が生きて今応答しているか / fallback が直近で発火したか / 有料ゲートは閉じたままか / 直近数分のリクエスト流量 / 直近 N 件のイベント
+  - パネル配置説明 (左上から右下へ: Provider / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) で読者が画像とキャプションを突き合わせられるように
+
+### Changed
+
+- **plan.md §11 ヘッダを "v1.1" → "v1.6" にリラベル** — `v1.0.1 → v1.5.0` で §11 (配布 / launcher / doctor) を飛ばしたため。TOC / §6.1 マイルストーン表 / §6.2 リリース履歴詳細 / 本文中の v1.1 言及 (5 箇所) を全て v1.6 に置換、`v1.1` 番号は欠番扱いを明文化
+- **README "Coming next" を v1.5 ✅ 出荷済み表示に** — README.md L149 + L324 付近、README.ja.md 対応箇所。旧: "v1.1 — launcher; v1.5 — metrics dashboard"、新: "v1.5 ✅ — metrics (shipped); v1.6 — launcher (旧 v1.1 ラベル、v1.5 先行出荷により繰り下げ)"
+- **docs/usage-guide.{md,ja.md}** — "v1.1" Docker image tracking を "v1.6 (旧 v1.1)" に置換
+- **pyproject.toml / coderouter/__init__.py** — `version = "1.0.0"` / `__version__ = "1.0.0"` → `1.5.0`
+
+### Non-Added (explicitly out of scope / deferred)
+
+- **Retrospective `docs/retrospectives/v1.5.md`** — umbrella narrative は別途執筆予定。本 release は CHANGELOG + plan.md status line + README snapshot で compaction、retrospective は 6 sub-release をまたいだ設計 through-line (例: pure data+render layer を CLI と HTML で共有する 2-consumer-1-producer 設計、env-gated JSONL side-effect が snapshot に依存しない isolation 原則、`display_timezone` を表示層だけに限る "aggregate in UTC, render in local" 原則) を書く価値があるので deferral
+- **v0.7 / v1.0 follow-ons の着地** — CHANGELOG [v1.0.1] で v1.1+ に push したアイテム (output_filters chain-level override / doctor probe-grouping refactor / num_predict-without-max_tokens / Ollama 0.20.5 silent-override investigation) は v1.5 では未着手。`v1.6` (旧 v1.1) または v1.7 で順次拾う。v1.5 は観測可能性に scope を集中させ "観測 → 矯正" のうち観測側だけを完成させる方針を優先
+
+### Follow-ons
+
+- **v1.5.0 の live-verify scenario** — v0.5-verify / v1.0-verify の pattern を踏襲して `scripts/verify_v1_5.sh` を書く。bare (collector 無効) と tuned (collector 有効 + `$CODEROUTER_EVENTS_PATH` セット) の delta で "JSONL 行が書き込まれる / `/metrics` が 200 を返す / `/dashboard` が HTML を返す" を assertion
+- **dashboard retrospective narrative** — 前述
+- **`scripts/demo_traffic.sh` の README への runbook セクション** — 現状 `--help` にしか書いていない。scenario 配分 / expected count / `--serve` の意味 / bash 3.2 互換のために仕込んだ `wait_pids` の why が operator doc として欲しい
+- **long-running demo の evidence** — 今回スクショだけ貼ったが、"3 分 × 87 リクエストで dashboard が stable" を別 section で時系列 log として残すと後の regression 判定で便利
+
+---
+
+## [v1.0.1] — 2026-04-21 (Hygiene pass — public error hierarchy + docstring + mypy strict)
+
+**Theme: v1.0.0 umbrella のあと、埋まりきっていなかった 3 つの足回りを 1 release で片付ける。** (1) `CodeRouterError` root 例外の新設 — 既存の 3 leaf (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError`) を共通親で束ね、downstream integrator が `except CodeRouterError` 一文で router が raise する全例外を拾えるようにした。`coderouter.errors` モジュールを新設、`coderouter` top-level で re-export、既存 import パスは全て非破壊。(2) docstring 網羅率を **75.6% → 91.2%** へ引き上げ — `interrogate` ベースで measure、public API 系ファイル (adapters / routing / ingress / translation の model / logging) 全て 100%、残りは stream-state 内部 helper / CLI / doctor / translation の private 関数のみ。(3) mypy `--strict` 0 errors を確認 (v0.6 以降累積していた 10 errors を ingress routes の `response_model=None` + `AsyncIterator[str]` + fallback.py の `isinstance(adapter, AnthropicAdapter)` narrowing + `StreamChunk.usage` 型宣言で解消済 — v1.0-verify で未記録だった分を本 release で明文化)。**453 → 457 tests** (+4 は `tests/test_errors.py` 新設、3 leaf 例外の `CodeRouterError` 継承 invariant を lock するガード)。実質 public API の追加は `CodeRouterError` 1 つだけで、既存 CI gate / 実機 verify が全て pass するため semver 上は **patch-level (minor の bump 不要)**。
+
+- Tests: 453 → **457** (+4)
+  - `tests/test_errors.py` 新設 +4 (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError` の 3 clase が `CodeRouterError` を継承すること + `AdapterError("boom", provider="p", status_code=500, retryable=False)` を実際に raise して `except CodeRouterError` で catch できることの instance-level smoke test)
+- Runtime deps: 5 → 5 (docstring coverage の measure に使う `interrogate` は dev-only、runtime には入らない)
+- Non-breaking: 既存 3 例外は基底クラスのみ `Exception` → `CodeRouterError` に変更、`CodeRouterError(Exception)` なので `except Exception` を書いていた caller も従来通り動く。import パスは全て既存位置維持 (`from coderouter.adapters.base import AdapterError` など無変更)。
+
+### Added
+
+- **`coderouter/errors.py` — root `CodeRouterError(Exception)` class** (~30 LOC)
+  - 既存 3 leaf 例外の共通親。動作は `Exception` と同じ (`pass`-only 定義)、存在理由は downstream integrator が `except CodeRouterError` で router-side failure を wholesale に catch できるよう API surface を固定すること。leaf を個別 import して enumerate する必要がなくなる。docstring で「leaves are free to grow over time」と明記、将来新例外を追加するときの invariant を文書化
+  - 配置理由: `coderouter/adapters/base.py` や `coderouter/routing/fallback.py` に root を置くと import cycle の温床 (`logging.py` 方式と同じ失敗モード)。`errors.py` は dependency-less leaf モジュールとして独立させ、adapters / routing の両方が import する。これで import graph 上は `errors.py` が最深層に落ち着く
+- **`coderouter/__init__.py` から `CodeRouterError` を re-export** — `from coderouter import CodeRouterError` を 1 行で可能に。`__all__ = ["CodeRouterError", "__version__"]` として top-level の public API を明示
+- **`tests/test_errors.py` — 継承 invariant の regression guard** +4 tests
+  - `test_adapter_error_inherits_root` / `test_no_providers_available_inherits_root` / `test_mid_stream_error_inherits_root` — `issubclass(X, CodeRouterError)` で継承関係を静的に assert。将来誰かが leaf の基底を `Exception` に巻き戻したら unit test が FAIL する lockstep
+  - `test_adapter_error_instance_is_caught_as_root` — `raise AdapterError(...)` を実際に raise して `except CodeRouterError` で catch できることを instance レベルで確認。`str(exc) == "[p status=500] boom"` で `__str__` フォーマットまで合わせて lock (将来 `AdapterError.__str__` を変えるときに別 test として気づける)
+
+### Changed
+
+- **`AdapterError` / `NoProvidersAvailableError` / `MidStreamError` の基底を `Exception` → `CodeRouterError` に差し替え** — 3 ファイル × 1-2 行の変更
+  - `coderouter/adapters/base.py`: `from coderouter.errors import CodeRouterError` を追加、`class AdapterError(Exception)` → `class AdapterError(CodeRouterError)`
+  - `coderouter/routing/fallback.py`: 同 import 追加、`class NoProvidersAvailableError(Exception)` → `(CodeRouterError)`、`class MidStreamError(Exception)` → `(CodeRouterError)`
+  - 既存 signature / docstring / behavior は verbatim 維持。MRO 上は `Exception` を継承しているので例外を bare `except:` や `except Exception:` で受けていたコードは影響なし
+- **Docstring 網羅率 75.6% → 91.2%** (`interrogate coderouter` 基準、目標 90%)
+  - 100% 化したファイル: `adapters/base.py` (Message / ChatRequest / AdapterError.__init__+__str__ / BaseAdapter.__init__+name に追加)、`adapters/openai_compat.py` (_headers / _payload / _url / generate / stream)、`adapters/anthropic_native.py` (_url / _headers)、`routing/fallback.py` (NoProvidersAvailableError.__init__ / MidStreamError.__init__ / FallbackEngine class + __init__ + generate)、`ingress/app.py` (create_app / lifespan / healthz / root / __getattr__)、`ingress/openai_routes.py` (chat_completions)、`ingress/anthropic_routes.py` (messages / _format_anthropic_sse)、`output_filters.py` (StripThinkingFilter.__init__+feed / StripStopMarkersFilter.__init__+feed / OutputFilterChain.__init__+is_empty)、`translation/anthropic.py` (AnthropicTextBlock / AnthropicUsage)、`translation/convert.py` (_convert_anthropic_tools)、`logging.py` (JsonLineFormatter.format / get_logger)
+  - 残 gap (21 項目、今回 out of scope): `cli.py` の `_build_parser` / `main` (2)、`doctor.py` 内 private helper (5)、`config/capability_registry.py` の internal reader (3)、`config/loader.py` の `_candidate_paths` (1)、`translation/convert.py` の `_StreamState` stream-state helper (8)、`translation/tool_repair.py` 内 closure (1)、`translation/convert.py` helper 2 つ — いずれも真の internal / closure / stream-state plumbing で、public surface から外れた実装詳細。90% floor は public API で達成済
+- **mypy `--strict` 0 errors を確認** — v1.0 系の compaction で取りこぼしていた 10 errors を以下で解消 (うち一部は既に v1.0-C 時点で修正済、未記録だった分を本 release で明文化)
+  - `coderouter/ingress/openai_routes.py` / `anthropic_routes.py`: `@router.post(..., response_model=None)` + `payload: dict[str, Any]` + `-> StreamingResponse | dict[str, Any]` + `AsyncIterator[str]` を type 注釈に追加 (FastAPI が union return type を Pydantic field として reject する問題 + AsyncIterator の import)
+  - `coderouter/routing/fallback.py`: `generate_anthropic` / `stream_anthropic` の Anthropic-shaped method 呼び出し箇所で `if is_native:` boolean guard を `if isinstance(adapter, AnthropicAdapter):` に書き換え — `is_native` boolean は log 用に保持、method 呼び出し分岐では mypy が narrowing できる形へ (`BaseAdapter` 自体が `generate_anthropic` / `stream_anthropic` を宣言していないため、boolean variable では narrow しない)
+  - `coderouter/adapters/base.py`: `StreamChunk` に `usage: dict[str, Any] | None = None` field を明示宣言 (Pydantic の `extra="allow"` は runtime では許容するが mypy は見ないため、`convert.py` の reverse translation が `usage=...` kwarg を渡す箇所で Unexpected keyword を指摘していた)
+
+### Non-Added (explicitly out of scope)
+
+- **docstring の CI 強制** (`interrogate` を pre-commit / CI gate に昇格) — 91.2% を floor に設定したい気持ちはあるが、本 release は hygiene pass 1 発で treadmill を避ける、という scope 固定。gate 化は v1.0 系 follow-on が落ち着く v1.1 系で別 ticket に切り出す
+- **pytest 間接的に含まれる他 `Exception` 継承 class** (adapters の upstream 4xx 抽象化候補など) — 今回は既存 3 leaf のみを `CodeRouterError` に帰属させた。新 leaf の追加タイミングで同 root に紐付ける規約を `errors.py` docstring + `tests/test_errors.py` の header で文書化済なので、次に増える時は invariant が壊れた瞬間 (= test FAIL) に気づける
+
+### Follow-ons
+
+- **`docs/retrospectives/v1.0.1.md`** — 本 release は hygiene pass なので narrative 書くほど厚みが無い。そのため retrospective skip。ただし v1.1 retrospective の冒頭で "v1.0.1 で足回りを整えてから v1.1 に入った" を 1 行で mention して系譜を保つ
+- **docstring 90% CI gate** — `pyproject.toml` に `[tool.interrogate]` section を足し `fail-under = 90`、`pre-commit` or CI step で `interrogate coderouter` を回す。現状は手動 regression が無ければ coverage が少しずつ下がりうる (新コードに docstring を忘れた場合)
+- **残 21 箇所の private docstring** — stream-state plumbing が中心なので「書いても読まれない」コスパ懸念あり。ただし `_StreamState._start_event` / `_close_current_block` / `_open_text_block` / `_open_tool_use_block` / `_handle_delta` は Anthropic SSE spec を知らないと読めないので、1-line ずつでも付けて state machine の役割を outline するのは独立した価値あり。v1.1 か v1.2 で別途
+
+---
+
 ## [v1.0.0] — 2026-04-20 (Umbrella tag — The observation loop, closed)
 
 **Theme: v1.0-A / v1.0-B / v1.0-C を束ねる umbrella tag。** v0.7 retrospective で "transformation には probe が伴う" 原則を予告した、その具体化を 1 つの minor に束ねた。v1.0-A で宣言的 `output_filters` filter chain (transformation) + doctor reasoning-leak probe 拡張 (probe) を同一 release で同梱、v1.0-B で v0.7-B の symptom #1 (input-side `num_ctx` truncation) を間接検出から直接検出へ置換 — canary `ZEBRA-MOON-847` + ~5K token padding + echo-back → 5-verdict branch + `extra_body.options.num_ctx: 32768` patch、v1.0-C で同じ手法を output-side に鏡像化 — `"Count from 1 to 30"` deterministic prompt を streaming で投げ `finish_reason="length"` + 短 content から output truncation を直接検出 + `options.num_predict: 4096` patch。Ollama の 2 つの truncation knob (入力側 `num_ctx` / 出力側 `num_predict`) 両方が直接観測可能になった。併せて v1.0-verify として 3-scenario 実機 runner (`scripts/verify_v1_0.sh`) + `verify-ollama-bare` / `verify-ollama-tuned` provider pair を整備 — v0.5-verify の bare/tuned delta assertion pattern を 2 度目の instance として再利用、実機 run (Ollama 0.20.5 + qwen2.5-coder:7b、2026-04-20 23:23 JST) で **3/3 PASS**。副次成果として Ollama 0.20.5 が `/v1/chat/completions` の request-time `options.num_ctx` / `options.num_predict` を silent override する build であることが判明 — bare 側で症状を induce できなかったため B+C scenario に **ADVISORY branch** を追加 (bare は advisory、tuned 側の `[OK]` flip と patch-default-value 反映が hard evidence)、`coderouter/doctor.py` の num_ctx probe canary-echoed 分岐を 3-branch に split (`declared is None` と `declared < threshold but still echoed` を診断的に分離)。narrative layer は [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)、per-sub-release の機能詳細は下の `[v1.0-A]` / `[v1.0-B]` / `[v1.0-C]`、live-verify の evidence doc は [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。

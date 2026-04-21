@@ -83,6 +83,12 @@ class AnthropicAdapter(BaseAdapter):
     # ------------------------------------------------------------------
 
     def _url(self) -> str:
+        """Resolve the ``/v1/messages`` endpoint URL from ``base_url``.
+
+        ``base_url`` may be given with or without a trailing ``/v1`` —
+        we normalize by stripping it so appending ``/v1/messages``
+        always yields a valid URL.
+        """
         base = str(self.config.base_url).rstrip("/")
         # Users may point base_url at either `https://api.anthropic.com`
         # or `https://api.anthropic.com/v1`. We normalize to the former so
@@ -92,6 +98,14 @@ class AnthropicAdapter(BaseAdapter):
         return f"{base}/v1/messages"
 
     def _headers(self, request: AnthropicRequest | None = None) -> dict[str, str]:
+        """Build Anthropic-native HTTP headers, including beta-header forwarding.
+
+        Always sets ``anthropic-version`` (configurable via ``extra_body``)
+        and, when an API key is configured, ``x-api-key``. When the
+        caller passes an ``AnthropicRequest`` that carries an
+        ``anthropic-beta`` header value, it is forwarded verbatim so
+        beta-gated body fields (``context_management`` etc.) survive.
+        """
         headers: dict[str, str] = {
             "Content-Type": "application/json",
             "User-Agent": "CodeRouter/0.1",

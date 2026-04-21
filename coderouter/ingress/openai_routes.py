@@ -17,6 +17,8 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -50,13 +52,22 @@ async def list_models(request: Request) -> dict[str, object]:
     }
 
 
-@router.post("/chat/completions")
+@router.post("/chat/completions", response_model=None)
 async def chat_completions(
-    payload: dict,
+    payload: dict[str, Any],
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
-):
+) -> StreamingResponse | dict[str, Any]:
+    """OpenAI Chat Completions endpoint.
+
+    Validates the body into :class:`ChatRequest`, resolves the profile
+    per the precedence described in the module docstring, and dispatches
+    to the engine. Streaming requests return a :class:`StreamingResponse`
+    that serializes chunks onto the OpenAI SSE wire (``data: {json}`` +
+    trailing ``data: [DONE]``); non-streaming requests return the JSON
+    response body.
+    """
     engine: FallbackEngine = request.app.state.engine
     config = request.app.state.config
 
@@ -113,7 +124,7 @@ async def chat_completions(
     return response.model_dump(exclude_none=True)
 
 
-async def _sse_iterator(engine: FallbackEngine, chat_req: ChatRequest):
+async def _sse_iterator(engine: FallbackEngine, chat_req: ChatRequest) -> AsyncIterator[str]:
     """Wrap the engine's stream into SSE wire format."""
     try:
         async for chunk in engine.stream(chat_req):

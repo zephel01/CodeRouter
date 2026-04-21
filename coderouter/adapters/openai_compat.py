@@ -85,6 +85,7 @@ class OpenAICompatAdapter(BaseAdapter):
     """Talks the OpenAI Chat Completions wire format over httpx."""
 
     def _headers(self) -> dict[str, str]:
+        """Build per-request HTTP headers; injects ``Authorization`` if configured."""
         headers = {
             "Content-Type": "application/json",
             "User-Agent": "CodeRouter/0.1",
@@ -133,6 +134,14 @@ class OpenAICompatAdapter(BaseAdapter):
         stream: bool,
         overrides: ProviderCallOverrides | None = None,
     ) -> dict[str, Any]:
+        """Assemble the outbound JSON body for ``/v1/chat/completions``.
+
+        The provider's configured ``model`` is always used (client's
+        ``request.model`` is ignored by design — routing is a profile
+        concern, not a client concern). When streaming, adds
+        ``stream_options.include_usage`` so a terminal usage chunk
+        arrives for accounting.
+        """
         # CodeRouter routing is decided by `profile`, NOT by `request.model`.
         # The OpenAI API requires a `model` field in the body, but here it's
         # always set from the provider config — clients that pass arbitrary
@@ -163,6 +172,7 @@ class OpenAICompatAdapter(BaseAdapter):
         return body
 
     def _url(self) -> str:
+        """Build the ``{base_url}/chat/completions`` endpoint URL."""
         # base_url is normalized to OpenAI shape: it should already include /v1
         # We just append /chat/completions.
         base = str(self.config.base_url).rstrip("/")
@@ -185,6 +195,14 @@ class OpenAICompatAdapter(BaseAdapter):
         *,
         overrides: ProviderCallOverrides | None = None,
     ) -> ChatResponse:
+        """Single HTTP POST; raises :class:`AdapterError` on any failure.
+
+        Transport / timeout / non-retryable-parse errors are always
+        raised. HTTP 4xx/5xx are raised with ``retryable`` set from
+        :data:`_RETRYABLE_STATUSES`. On success, applies the v0.5-C
+        ``reasoning`` field strip and the v1.0-A output-filter chain to
+        the response body before returning.
+        """
         url = self._url()
         payload = self._payload(request, stream=False, overrides=overrides)
         timeout = self.effective_timeout(overrides)
@@ -261,6 +279,14 @@ class OpenAICompatAdapter(BaseAdapter):
         *,
         overrides: ProviderCallOverrides | None = None,
     ) -> AsyncIterator[StreamChunk]:
+        """Yield :class:`StreamChunk` objects from an SSE response.
+
+        Applies the v0.5-C reasoning strip and the v1.0-A output-filter
+        chain incrementally (per SSE chunk). The chain is stateful so
+        ``<think>`` / stop markers split across chunk boundaries are
+        still recognized; at end-of-stream any held-back safe suffix is
+        flushed in a synthesized content-only chunk.
+        """
         url = self._url()
         payload = self._payload(request, stream=True, overrides=overrides)
         timeout = self.effective_timeout(overrides)

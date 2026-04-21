@@ -18,6 +18,7 @@
 
 allow_paid: false
 default_profile: default
+display_timezone: Asia/Tokyo
 
 providers:
   # --- Tier 1: local coding (primary) ---

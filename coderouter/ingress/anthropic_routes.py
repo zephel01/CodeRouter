@@ -21,6 +21,8 @@ SDKs send values like "2023-06-01"; we log it for diagnostics only.
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
+from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -45,15 +47,24 @@ _ANTHROPIC_VERSION_HEADER = "anthropic-version"
 _ANTHROPIC_BETA_HEADER = "anthropic-beta"
 
 
-@router.post("/messages")
+@router.post("/messages", response_model=None)
 async def messages(
-    payload: dict,
+    payload: dict[str, Any],
     request: Request,
     x_coderouter_profile: str | None = Header(default=None, alias=_PROFILE_HEADER),
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
     anthropic_version: str | None = Header(default=None, alias=_ANTHROPIC_VERSION_HEADER),
     anthropic_beta: str | None = Header(default=None, alias=_ANTHROPIC_BETA_HEADER),
-):
+) -> StreamingResponse | dict[str, Any]:
+    """Anthropic Messages API endpoint.
+
+    Validates the body into :class:`AnthropicRequest`, resolves the
+    profile (body > profile header > mode header > config default),
+    then dispatches to the engine's Anthropic-shaped entry points. For
+    streaming requests, returns a :class:`StreamingResponse` that
+    serializes engine events onto the Anthropic SSE wire; otherwise
+    returns the JSON response body.
+    """
     engine: FallbackEngine = request.app.state.engine
     config = request.app.state.config
 
@@ -123,7 +134,9 @@ async def messages(
     return anth_resp.model_dump(exclude_none=True)
 
 
-async def _anthropic_sse_iterator(engine: FallbackEngine, anth_req: AnthropicRequest):
+async def _anthropic_sse_iterator(
+    engine: FallbackEngine, anth_req: AnthropicRequest
+) -> AsyncIterator[str]:
     """Serialize engine.stream_anthropic() onto the Anthropic SSE wire.
 
     Each emitted block is `event: <type>\\ndata: <json>\\n\\n` per the
@@ -170,5 +183,12 @@ async def _anthropic_sse_iterator(engine: FallbackEngine, anth_req: AnthropicReq
 
 
 def _format_anthropic_sse(ev: AnthropicStreamEvent) -> str:
+    """Serialize an :class:`AnthropicStreamEvent` onto the SSE wire.
+
+    Anthropic's SSE format requires both an ``event:`` and a ``data:``
+    line per frame (unlike OpenAI's ``data:``-only chunks). The event
+    name carries the type (``message_start`` / ``content_block_delta``
+    / ...) and the data line carries the JSON payload.
+    """
     payload = json.dumps(ev.data, ensure_ascii=False)
     return f"event: {ev.type}\ndata: {payload}\n\n"

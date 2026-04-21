@@ -164,11 +164,19 @@ class StripThinkingFilter:
     name = "strip_thinking"
 
     def __init__(self) -> None:
+        """Initialize the per-request buffer + in-think state to empty."""
         self.modified: bool = False
         self._in_think: bool = False
         self._buffer: str = ""
 
     def feed(self, text: str, *, eof: bool = False) -> str:
+        """Append ``text`` to the buffer and return the safe-to-emit prefix.
+
+        Tags are matched greedily; a partial prefix at the buffer end
+        is held back across calls so a ``<think>`` split across two
+        SSE deltas is still recognized. At ``eof`` any unmatched open
+        tag is silently dropped (remainder treated as thinking).
+        """
         self._buffer += text
         out_parts: list[str] = []
 
@@ -229,6 +237,13 @@ class StripStopMarkersFilter:
     name = "strip_stop_markers"
 
     def __init__(self, markers: tuple[str, ...] = DEFAULT_STOP_MARKERS) -> None:
+        """Initialize with an optional custom marker set.
+
+        The default :data:`DEFAULT_STOP_MARKERS` covers the observed
+        Llama 3.x / ChatML / Qwen / Gemma / harmony leaks. Tests and
+        future extensions may pass a bespoke tuple; v1.0-A does not
+        expose this knob via providers.yaml.
+        """
         self.modified: bool = False
         self._buffer: str = ""
         self._markers: tuple[str, ...] = markers
@@ -245,6 +260,13 @@ class StripStopMarkersFilter:
         return best
 
     def feed(self, text: str, *, eof: bool = False) -> str:
+        """Emit ``text`` minus any marker matches; buffer partial prefixes.
+
+        A complete marker anywhere in the buffer is excised in place.
+        A trailing partial prefix that could complete on the next
+        :meth:`feed` is held back; at ``eof`` it is flushed verbatim
+        (we only hide bytes that are definitively part of a marker).
+        """
         self._buffer += text
         out_parts: list[str] = []
 
@@ -318,6 +340,13 @@ class OutputFilterChain:
     """
 
     def __init__(self, filter_names: list[str]) -> None:
+        """Construct a fresh chain of filters by name.
+
+        Raises :class:`ValueError` via :func:`validate_output_filters`
+        if any name is unknown — callers should be
+        :class:`ProviderConfig` (validation happens at config-load
+        time) so bad configs fail loudly at startup.
+        """
         validate_output_filters(filter_names)
         self._filters: list[OutputFilter] = [KNOWN_FILTERS[n]() for n in filter_names]
         self._names: list[str] = list(filter_names)
@@ -329,6 +358,7 @@ class OutputFilterChain:
 
     @property
     def is_empty(self) -> bool:
+        """True when no filters were configured — lets callers skip the hot path."""
         return not self._filters
 
     @property

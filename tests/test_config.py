@@ -272,3 +272,82 @@ def test_output_filters_unknown_name_fails_at_load() -> None:
     assert "strp_thinking" in msg
     # Error lists known filters so the fix is a copy-paste.
     assert "strip_thinking" in msg
+
+
+# ======================================================================
+# v1.5-E: display_timezone validation at config-load time
+# ======================================================================
+
+
+def _minimal_config_kwargs(**overrides: object) -> dict[str, object]:
+    """Smallest valid kwargs for :class:`CodeRouterConfig`.
+
+    Factored so every display_timezone test doesn't repeat the
+    providers/profiles boilerplate. Overrides merge on top.
+    """
+    from coderouter.config.schemas import FallbackChain, ProviderConfig
+
+    base: dict[str, object] = {
+        "allow_paid": False,
+        "default_profile": "default",
+        "providers": [
+            ProviderConfig(
+                name="local",
+                base_url="http://localhost:8080/v1",
+                model="qwen-coder",
+            ),
+        ],
+        "profiles": [FallbackChain(name="default", providers=["local"])],
+    }
+    base.update(overrides)
+    return base
+
+
+def test_display_timezone_none_by_default() -> None:
+    """Configs without a ``display_timezone:`` block default to ``None``.
+
+    Unset → UTC fallback in the dashboard / stats renderers. Guards the
+    "v1.5-E is opt-in" contract so existing providers.yaml files keep
+    their UTC output unchanged.
+    """
+    cfg = CodeRouterConfig(**_minimal_config_kwargs())  # type: ignore[arg-type]
+    assert cfg.display_timezone is None
+
+
+def test_display_timezone_accepts_valid_iana_name() -> None:
+    """Well-known IANA zones round-trip without modification."""
+    cfg = CodeRouterConfig(
+        **_minimal_config_kwargs(display_timezone="Asia/Tokyo"),  # type: ignore[arg-type]
+    )
+    assert cfg.display_timezone == "Asia/Tokyo"
+
+
+def test_display_timezone_accepts_utc() -> None:
+    """``UTC`` is a valid zoneinfo key and must be accepted verbatim.
+
+    Important because operators who want an explicit "render in UTC"
+    declaration (rather than relying on the ``None`` default) should
+    not be blocked.
+    """
+    cfg = CodeRouterConfig(
+        **_minimal_config_kwargs(display_timezone="UTC"),  # type: ignore[arg-type]
+    )
+    assert cfg.display_timezone == "UTC"
+
+
+def test_display_timezone_rejects_typo() -> None:
+    """Fast-fail: a misspelled zone name must raise at load time.
+
+    Same philosophy as ``_check_default_profile_exists`` — surface the
+    misconfig at startup rather than on the first dashboard poll.
+    """
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError) as info:
+        CodeRouterConfig(
+            **_minimal_config_kwargs(display_timezone="Asia/Tokyoo"),  # type: ignore[arg-type]
+        )
+    msg = str(info.value)
+    assert "Asia/Tokyoo" in msg
+    # Error message should hint at the expected format so the fix is obvious.
+    assert "IANA" in msg or "Asia/Tokyo" in msg

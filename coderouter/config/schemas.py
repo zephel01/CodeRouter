@@ -198,6 +198,24 @@ class CodeRouterConfig(BaseModel):
             "names (must exist in ``profiles``). Empty dict = feature off."
         ),
     )
+    # v1.5-E: display-time timezone for dashboard + ``coderouter stats``.
+    # The metrics ring keeps timestamps in UTC ISO form (stable wire format,
+    # matches JsonLineFormatter); this field only affects rendering. When
+    # unset, consumers default to UTC (no behavior change from v1.5-D). An
+    # IANA name is required — offset strings like ``+09:00`` are rejected to
+    # keep DST semantics unambiguous. Validated via ``zoneinfo.ZoneInfo`` at
+    # load time so a typo like ``Asia/Tokyoo`` fails fast rather than 500'ing
+    # the first dashboard poll.
+    display_timezone: str | None = Field(
+        default=None,
+        description=(
+            "v1.5-E: IANA timezone name used for rendering timestamps in "
+            "``/dashboard`` and ``coderouter stats``. Example: ``Asia/Tokyo`` "
+            "or ``America/New_York``. None → UTC. The underlying "
+            "``/metrics.json`` snapshot keeps UTC ISO timestamps; conversion "
+            "is display-only."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_default_profile_exists(self) -> CodeRouterConfig:
@@ -215,6 +233,31 @@ class CodeRouterConfig(BaseModel):
                 f"default_profile {self.default_profile!r} is not declared in "
                 f"profiles: known={sorted(names)}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_display_timezone_resolves(self) -> CodeRouterConfig:
+        """v1.5-E: fail fast on a typo'd IANA zone name.
+
+        Same philosophy as the other ``_check_*`` validators — a broken
+        ``display_timezone`` would otherwise silently fall back to UTC
+        (or worse, blow up the first dashboard poll with a stack trace).
+        Checking at load time converts that into a startup error with the
+        offending value in the message.
+        """
+        if self.display_timezone is None:
+            return self
+        # Imported locally to sidestep the slow ``zoneinfo`` cold-import
+        # cost on machines that never set a display timezone.
+        from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+        try:
+            ZoneInfo(self.display_timezone)
+        except ZoneInfoNotFoundError as exc:
+            raise ValueError(
+                f"display_timezone={self.display_timezone!r} is not a known "
+                f"IANA zone (try 'Asia/Tokyo', 'America/New_York', 'UTC'): {exc}"
+            ) from exc
         return self
 
     @model_validator(mode="after")

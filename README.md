@@ -8,7 +8,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.0.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.5.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -39,6 +39,44 @@ Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
                    ② free cloud (OpenRouter qwen3-coder:free, gpt-oss-120b:free, …)
                    ③ paid cloud (Claude / GPT — only if ALLOW_PAID=true)
 ```
+
+### Live dashboard
+
+`coderouter dashboard` answers the questions you actually ask mid-incident, without grepping logs:
+
+- Which providers are alive right now, and which one is currently answering?
+- Has a fallback fired recently, and why?
+- Is the paid gate still closed (i.e. am I still on the free path)?
+- What's the request volume over the last few minutes?
+- What just happened — the last N events, in order?
+
+![CodeRouter dashboard — provider health, fallback gates, requests/min sparkline, recent events, usage mix](./docs/assets/dashboard-demo.png)
+
+The snapshot above was taken while `scripts/demo_traffic.sh` drove mixed traffic (normal / stream / burst / fallback / paid-gate) against a local mock. Panels left-to-right, top-to-bottom: provider status, fallback & gate state, requests/min sparkline, recent events (most recent on top), and usage mix.
+
+## Do you need CodeRouter?
+
+CodeRouter is a wire-translation + band-aid layer. If your agent already speaks OpenAI and your model behaves well, you probably don't need it. The two tables below are the short version; the full decision guide is in [`docs/when-do-i-need-coderouter.md`](./docs/when-do-i-need-coderouter.md).
+
+**By agent** — what can reach Ollama directly:
+
+| Agent | Wire | Direct-to-Ollama | Need CodeRouter? |
+|---|---|---|---|
+| Claude Code | Anthropic | No | **Yes** — wire translation |
+| Codex CLI / plain OpenAI SDK | OpenAI | Yes, via `OPENAI_BASE_URL` | Optional |
+| gemini-cli | Gemini | No | Yes (adapter) |
+| GitHub Copilot CLI | GitHub-proprietary | **No (locked backend)** | N/A — can't be redirected |
+
+**By model** — what misbehaves on direct path:
+
+| Model | Clean output? | CodeRouter filter that helps |
+|---|---|---|
+| `llama3.1` / `mistral-nemo` / `phi-4` / `qwen2.5` (non-coder) | Yes | — |
+| `qwen2.5-coder` | No — leaks `<think>` | `strip_thinking` |
+| `gpt-oss` / `deepseek-r1` / `qwq` | No — reasoning leaks | `strip_thinking` |
+| Small quants (Q2 / Q3) or Modelfiles with wrong template | Often no — bad tool JSON or stop markers | `repair_tool_call` / `strip_stop_markers` |
+
+If you're on an OpenAI-compatible agent with a well-behaved model and don't need fallback, `OPENAI_BASE_URL=http://localhost:11434/v1` is the simpler answer. Anything else — especially Claude Code, reasoning models, or multi-tier fallback with mid-stream safety — is where CodeRouter is doing real work.
 
 ## Why not just use X directly?
 
@@ -108,7 +146,7 @@ What CodeRouter can do for you today:
 
 **Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
 
-**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.1 — `coderouter doctor --network` for CI, plus launcher scripts. v1.5 — metrics dashboard.
+**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ — metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh` (shipped). v1.6 — `coderouter doctor --network` for CI, plus launcher scripts (originally slated for v1.1; re-scoped after v1.5).
 
 ### Use it with Claude Code
 
@@ -283,8 +321,8 @@ The subcommand targets **one** provider per invocation by design: a doctor probe
 Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
 
 - v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
-- v1.1 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers
-- v1.5 — Metrics dashboard
+- v1.5 — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
+- v1.6 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers (originally scoped as v1.1; re-labelled to v1.6 after v1.5 shipped ahead of the launcher block)
 
 ## Choosing `kind: openai_compat` vs `kind: anthropic`
 
@@ -444,6 +482,22 @@ Strict — see [`plan.md` §5.4](./plan.md). Runtime deps:
 | `pyyaml` | Config parsing |
 
 That's it. No `litellm`, no `langchain`, no `openai`/`anthropic` SDKs.
+
+## Catching errors programmatically (v1.0.1)
+
+If you're embedding CodeRouter (calling the engine directly, or wrapping `coderouter serve` in a harness), every failure CodeRouter raises internally inherits from `CodeRouterError`. One `except` clause catches the lot:
+
+```python
+from coderouter import CodeRouterError
+
+try:
+    response = await engine.generate(chat_request)
+except CodeRouterError as exc:
+    # Covers AdapterError, NoProvidersAvailableError, MidStreamError
+    logger.error("coderouter-failed", extra={"reason": str(exc)})
+```
+
+The leaves stay in their original modules — `AdapterError` in `coderouter.adapters.base`, `NoProvidersAvailableError` and `MidStreamError` in `coderouter.routing.fallback` — and keep working when imported directly, so existing catch blocks don't need to change. The root class exists specifically so downstream code doesn't have to enumerate (and re-import) the leaves as the hierarchy grows.
 
 ## Security
 

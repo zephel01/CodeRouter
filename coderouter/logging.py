@@ -28,6 +28,14 @@ class JsonLineFormatter(logging.Formatter):
     """Emit each record as a single JSON line."""
 
     def format(self, record: logging.LogRecord) -> str:
+        """Render a LogRecord as a single-line JSON string.
+
+        Standard ``logging`` attributes (levelname, funcName, lineno, …)
+        are whitelisted out; everything attached via ``extra={...}`` is
+        included, so structured calls like
+        ``logger.info("evt", extra={"provider": "ollama"})`` surface
+        ``"provider": "ollama"`` verbatim in the output line.
+        """
         payload: dict[str, Any] = {
             "ts": self.formatTime(record, datefmt="%Y-%m-%dT%H:%M:%S"),
             "level": record.levelname,
@@ -81,6 +89,10 @@ def configure_logging(level: str = "INFO") -> None:
 
 
 def get_logger(name: str) -> logging.Logger:
+    """Alias for :func:`logging.getLogger` — exists so modules can import
+    from :mod:`coderouter.logging` without reaching into stdlib directly,
+    keeping future logger customization (tags, adapters, …) to one line.
+    """
     return logging.getLogger(name)
 
 

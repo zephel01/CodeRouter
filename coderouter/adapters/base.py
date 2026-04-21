@@ -14,9 +14,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from coderouter.config.schemas import ProviderConfig
+from coderouter.errors import CodeRouterError
 
 
 class Message(BaseModel):
+    """A single chat message in OpenAI Chat Completions shape.
+
+    Mirrors the OpenAI wire format (role + content, plus tool-call
+    fields for assistant/tool turns). ``content`` is ``None`` on
+    assistant messages that carry only ``tool_calls`` — the OpenAI
+    spec allows this, and the Anthropic→OpenAI translation in
+    :mod:`coderouter.translation.convert` emits it for tool-use turns.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     role: Literal["system", "user", "assistant", "tool"]
@@ -30,6 +40,16 @@ class Message(BaseModel):
 
 
 class ChatRequest(BaseModel):
+    """An inbound OpenAI-shaped request to the engine.
+
+    Accepts the standard OpenAI Chat Completions fields plus the
+    CodeRouter-specific ``profile`` extension (carried in the body as
+    ``{"profile": "fast"}``; excluded from any upstream serialization
+    via ``Field(exclude=True)``). ``extra="allow"`` lets callers pass
+    provider-specific knobs (e.g. Ollama's ``think: false``) straight
+    through without a schema bump.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     model: str | None = None
@@ -72,9 +92,15 @@ class StreamChunk(BaseModel):
     created: int
     model: str
     choices: list[dict[str, Any]]
+    # Present on the trailing chunk when a provider honors
+    # `stream_options.include_usage=true`. Also populated by the
+    # Anthropic→OpenAI reverse translation in
+    # coderouter.translation.convert when mirroring `message_delta`
+    # usage into an OpenAI stream.
+    usage: dict[str, Any] | None = None
 
 
-class AdapterError(Exception):
+class AdapterError(CodeRouterError):
     """Raised when a provider call fails in a way the fallback engine should retry on."""
 
     def __init__(
@@ -85,12 +111,27 @@ class AdapterError(Exception):
         status_code: int | None = None,
         retryable: bool = True,
     ) -> None:
+        """Construct an AdapterError.
+
+        Args:
+            message: Human-readable failure reason.
+            provider: The ``ProviderConfig.name`` that failed — used by
+                the fallback engine's log trail and by tests that assert
+                WHICH provider raised.
+            status_code: HTTP status code when the failure originated
+                from an upstream response. ``None`` for transport /
+                JSON-parse / pre-flight failures.
+            retryable: When True, the fallback engine may try the next
+                provider in the chain. When False, the engine stops
+                and surfaces the error as a terminal failure.
+        """
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
         self.retryable = retryable
 
     def __str__(self) -> str:
+        """Render as ``[provider status=NNN] message`` for log trails."""
         sc = f" status={self.status_code}" if self.status_code is not None else ""
         return f"[{self.provider}{sc}] {super().__str__()}"
 
@@ -121,10 +162,17 @@ class BaseAdapter(ABC):
     """Provider-specific adapter. Subclasses implement HTTP plumbing."""
 
     def __init__(self, config: ProviderConfig) -> None:
+        """Bind the adapter to a :class:`ProviderConfig`.
+
+        Subclasses do not need to override this; HTTP clients are
+        constructed lazily inside :meth:`generate` / :meth:`stream` so
+        each call can honor a per-call timeout override.
+        """
         self.config = config
 
     @property
     def name(self) -> str:
+        """Shortcut for ``self.config.name`` — used in log trails and errors."""
         return self.config.name
 
     # ---- v0.6-B override resolution helpers -----------------------------

@@ -51,6 +51,15 @@
 
 allow_paid: false
 default_profile: default
+display_timezone: Asia/Tokyo
+
+# v1.5-E: timezone used to render timestamps in the dashboard header /
+# "Recent Events" list and in `coderouter stats` output. Must be an IANA
+# zone name (e.g. "Asia/Tokyo", "America/New_York", "Europe/London").
+# Unset → UTC. The underlying /metrics.json snapshot always carries UTC
+# ISO timestamps; conversion is display-only, so switching this value
+# does NOT re-write historical events in the ring.
+# display_timezone: Asia/Tokyo
 
 providers:
   # ------------------------------------------------------------

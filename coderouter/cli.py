@@ -75,6 +75,40 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # v1.5-C: `coderouter stats` — live TUI over GET /metrics.json.
+    # Lazy-imports ``curses`` inside the runner so the CLI boot stays
+    # snappy and environments without curses (rare, but e.g. minimal
+    # containers) can still use ``--once`` for script-mode dumps.
+    stats = sub.add_parser(
+        "stats",
+        help="Live TUI over the metrics endpoint (v1.5-C).",
+        description=(
+            "Connect to a running `coderouter serve` and render providers, "
+            "fallback/gate counters, and a recent-events ring. Refreshes "
+            "once per --interval seconds. Use --once for a single plain-"
+            "text dump (also the default when stdout is not a TTY, so "
+            "`coderouter stats | grep foo` works in scripts)."
+        ),
+    )
+    from coderouter.cli_stats import DEFAULT_INTERVAL_S, DEFAULT_URL
+
+    stats.add_argument(
+        "--url",
+        default=DEFAULT_URL,
+        help=f"Metrics endpoint URL (default {DEFAULT_URL}).",
+    )
+    stats.add_argument(
+        "--interval",
+        type=float,
+        default=DEFAULT_INTERVAL_S,
+        help=f"Refresh interval in seconds (default {DEFAULT_INTERVAL_S}).",
+    )
+    stats.add_argument(
+        "--once",
+        action="store_true",
+        help="Print one snapshot as plain text and exit (scripts / non-tty).",
+    )
+
     return parser
 
 
@@ -110,6 +144,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "doctor":
         return _run_doctor(args)
+
+    if args.command == "stats":
+        # v1.5-C: stats is intentionally a thin wrapper — all logic
+        # (fetch, render, curses loop) lives in coderouter.cli_stats so
+        # the CLI file stays focused on argparse wiring.
+        from coderouter.cli_stats import main as stats_main
+
+        return stats_main(args.url, interval=args.interval, once=args.once)
 
     print(f"unknown command: {args.command}", file=sys.stderr)
     return 2

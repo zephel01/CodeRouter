@@ -38,6 +38,7 @@ from coderouter.adapters.base import (
 )
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
+from coderouter.errors import CodeRouterError
 from coderouter.logging import get_logger, log_chain_paid_gate_blocked
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
@@ -60,17 +61,24 @@ from coderouter.translation import (
 logger = get_logger(__name__)
 
 
-class NoProvidersAvailableError(Exception):
+class NoProvidersAvailableError(CodeRouterError):
     """Raised when every provider in the chain has failed (or was filtered out)."""
 
     def __init__(self, profile: str, errors: list[AdapterError]) -> None:
+        """Construct with the resolved profile name and per-provider errors.
+
+        ``errors`` may be empty when every provider was filtered out
+        before a call was attempted (e.g. the paid-gate blocked the
+        whole chain); in that case the rendered message falls back to
+        ``"no providers eligible"``.
+        """
         self.profile = profile
         self.errors = errors
         detail = " | ".join(str(e) for e in errors) or "no providers eligible"
         super().__init__(f"profile={profile!r}: all providers failed: {detail}")
 
 
-class MidStreamError(Exception):
+class MidStreamError(CodeRouterError):
     """Raised when a provider fails AFTER it has already emitted at least
     one chunk to the client. Fallback is not attempted (the client has
     received partial content, so switching providers would corrupt the
@@ -78,6 +86,12 @@ class MidStreamError(Exception):
     """
 
     def __init__(self, provider: str, original: AdapterError) -> None:
+        """Wrap the underlying :class:`AdapterError` with the provider name.
+
+        The ingress layer catches this and converts it into an in-stream
+        ``event: error`` (never a 5xx) because HTTP headers have already
+        shipped by the time we know the stream failed.
+        """
         self.provider = provider
         self.original = original
         super().__init__(f"provider {provider!r} failed mid-stream: {original}")
@@ -146,7 +160,25 @@ def _warn_if_uniform_auth_failure(errors: list[AdapterError], *, profile: str) -
 
 
 class FallbackEngine:
+    """Sequential fallback router — the core of CodeRouter.
+
+    Holds the resolved :class:`CodeRouterConfig` plus a pre-built adapter
+    per provider (adapters are cheap but constructing them per-request
+    would repeatedly re-read provider config). Exposes four entry
+    points: :meth:`generate` / :meth:`stream` for OpenAI-shaped requests,
+    :meth:`generate_anthropic` / :meth:`stream_anthropic` for Anthropic
+    Messages API requests. See the module docstring for the per-kind
+    translation behavior.
+    """
+
     def __init__(self, config: CodeRouterConfig) -> None:
+        """Pre-build one adapter per configured provider.
+
+        Adapters are stateless with respect to requests (all state is
+        held in the per-call ``ProviderCallOverrides``), so caching by
+        provider name across requests is safe and avoids the cost of
+        re-parsing YAML / re-resolving env vars on every request.
+        """
         self.config = config
         # Cache adapters so we don't re-instantiate per request
         self._adapters: dict[str, BaseAdapter] = {
@@ -242,6 +274,16 @@ class FallbackEngine:
         return capable + degraded
 
     async def generate(self, request: ChatRequest) -> ChatResponse:
+        """Non-streaming OpenAI-shaped generation with sequential fallback.
+
+        Walks the chain in order, returning the first provider's response.
+        On retryable :class:`AdapterError` (transport failure, rate
+        limit, upstream 5xx, etc.) the loop advances; on non-retryable
+        errors it breaks immediately. When every provider has been tried
+        without success, raises :class:`NoProvidersAvailableError` with
+        the full per-provider error list so the ingress layer can
+        surface a single 502.
+        """
         adapters = self._resolve_chain(request.profile)
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
@@ -400,7 +442,11 @@ class FallbackEngine:
                 },
             )
             try:
-                if is_native:
+                # `is_native` is the same test as this `isinstance`; we do
+                # it directly here so mypy narrows `adapter` to
+                # AnthropicAdapter inside the branch (BaseAdapter itself
+                # does not declare the Anthropic-shaped methods).
+                if isinstance(adapter, AnthropicAdapter):
                     resp = await adapter.generate_anthropic(effective_request, overrides=overrides)
                 else:
                     chat_req = to_chat_request(effective_request)
@@ -493,7 +539,10 @@ class FallbackEngine:
             event_iter: AsyncIterator[AnthropicStreamEvent]
             first: AnthropicStreamEvent
             try:
-                if is_native:
+                # See the non-streaming branch above: `is_native` and this
+                # isinstance test are the same check; we do it inline so
+                # mypy narrows for stream_anthropic (not on BaseAdapter).
+                if isinstance(adapter, AnthropicAdapter):
                     event_iter = adapter.stream_anthropic(effective_request, overrides=overrides)
                     first = await anext(event_iter)
                 elif downgrading:

@@ -252,3 +252,64 @@ def test_doctor_honors_config_path(
 
     cli.main(["doctor", "--check-model", "foo", "--config", "/tmp/custom.yaml"])
     assert captured["path"] == "/tmp/custom.yaml"
+
+
+# ---------------------------------------------------------------------------
+# v1.5-C: `coderouter stats` wiring tests.
+#
+# The data / render layer is tested in ``tests/test_cli_stats.py``. Here
+# we only validate that argparse plumbs through to ``cli_stats.main`` with
+# the right args and that the exit code is propagated.
+# ---------------------------------------------------------------------------
+
+
+def test_stats_dispatches_to_cli_stats_main(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``coderouter stats --once`` calls cli_stats.main with the parsed args."""
+    captured: dict[str, object] = {}
+
+    def _fake_stats_main(url: str, *, interval: float, once: bool) -> int:
+        captured["url"] = url
+        captured["interval"] = interval
+        captured["once"] = once
+        return 0
+
+    monkeypatch.setattr("coderouter.cli_stats.main", _fake_stats_main)
+
+    rc = cli.main(["stats", "--once", "--url", "http://example/metrics.json"])
+    assert rc == 0
+    assert captured["url"] == "http://example/metrics.json"
+    assert captured["once"] is True
+
+
+def test_stats_defaults_match_cli_stats_constants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitting flags should fall back to DEFAULT_URL / DEFAULT_INTERVAL_S."""
+    from coderouter.cli_stats import DEFAULT_INTERVAL_S, DEFAULT_URL
+
+    captured: dict[str, object] = {}
+
+    def _fake_stats_main(url: str, *, interval: float, once: bool) -> int:
+        captured["url"] = url
+        captured["interval"] = interval
+        captured["once"] = once
+        return 0
+
+    monkeypatch.setattr("coderouter.cli_stats.main", _fake_stats_main)
+
+    cli.main(["stats", "--once"])
+    assert captured["url"] == DEFAULT_URL
+    assert captured["interval"] == DEFAULT_INTERVAL_S
+
+
+def test_stats_propagates_nonzero_exit_code(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If the stats runner returns 2 (fetch failure), the CLI must too."""
+    monkeypatch.setattr(
+        "coderouter.cli_stats.main", lambda url, *, interval, once: 2
+    )
+    rc = cli.main(["stats", "--once"])
+    assert rc == 2

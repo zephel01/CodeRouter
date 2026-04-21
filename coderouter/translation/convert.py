@@ -189,6 +189,12 @@ def _convert_anthropic_message(
 def _convert_anthropic_tools(
     tools: list[Any] | None,
 ) -> list[dict[str, Any]] | None:
+    """Translate Anthropic ``tools`` array to OpenAI ``tools`` shape.
+
+    Accepts either :class:`AnthropicTool` models or plain dicts and
+    emits ``[{type: "function", function: {name, description, parameters}}]``
+    — the schema OpenAI-compat providers expect.
+    """
     if not tools:
         return None
     out: list[dict[str, Any]] = []

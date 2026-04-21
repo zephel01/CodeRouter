@@ -41,7 +41,7 @@ Quick decision rules:
 Known gaps:
 
 - `scripts/verify_v0_5.sh` and `scripts/verify_v1_0.sh` assume macOS `/bin/bash` 3.2+ (Linux bash 4+ is fine). They do not target Windows cmd/PowerShell.
-- No Docker image shipped yet — `plan.md §11` tracks this for v1.1.
+- No Docker image shipped yet — `plan.md §11` tracks this for v1.6 (originally planned as v1.1; re-scoped after v1.5 shipped ahead of the launcher block).
 
 ---
 

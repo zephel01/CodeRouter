@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>CodeRouter Dashboard — mockup</title>
+  <!--
+    Purpose: static preview of the v1.5 /dashboard screen for design review.
+    Real implementation will htmx-poll /metrics.json; this file hard-codes
+    representative mock data so the layout can be judged in a browser.
+    Runtime deps: tailwindcss CDN (stylesheet only). No JS frameworks.
+  -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* sparkline container uses SVG viewBox scaling, no d3 */
+    .spark { width: 100%; height: 60px; }
+    .dot { width: .5rem; height: .5rem; border-radius: 9999px; display: inline-block; }
+    .tabnum { font-variant-numeric: tabular-nums; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans">
+  <!-- Header strip -->
+  <header class="border-b border-slate-800 px-6 py-3">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center gap-x-6 gap-y-2 text-sm">
+      <span class="text-lg font-semibold tracking-tight">CodeRouter</span>
+      <span class="text-slate-400">profile: <span class="text-slate-100 font-mono">coding</span></span>
+      <span class="text-slate-400">uptime: <span class="text-slate-100 font-mono tabnum">1h 23m</span></span>
+      <span class="text-slate-400">requests: <span class="text-slate-100 font-mono tabnum">142</span></span>
+      <span class="ml-auto inline-flex items-center gap-2 text-green-400">
+        <span class="dot bg-green-500"></span> healthy
+      </span>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto p-4 md:p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
+
+    <!-- Panel 1: Providers -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Providers</h2>
+      <table class="w-full text-sm tabnum">
+        <thead class="text-slate-500">
+          <tr class="text-left">
+            <th class="font-medium pb-2">provider</th>
+            <th class="font-medium pb-2 text-right">att</th>
+            <th class="font-medium pb-2 text-right">ok%</th>
+            <th class="font-medium pb-2 text-right">p50 ms</th>
+            <th class="font-medium pb-2 text-right">tok/s</th>
+            <th class="font-medium pb-2">last error</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-800">
+          <tr>
+            <td class="py-2"><span class="dot bg-green-500 mr-2"></span>ollama-local</td>
+            <td class="text-right">98</td>
+            <td class="text-right text-green-400">98%</td>
+            <td class="text-right">420</td>
+            <td class="text-right">62.3</td>
+            <td class="text-slate-500">—</td>
+          </tr>
+          <tr>
+            <td class="py-2"><span class="dot bg-yellow-500 mr-2"></span>groq-free</td>
+            <td class="text-right">32</td>
+            <td class="text-right text-yellow-400">94%</td>
+            <td class="text-right">680</td>
+            <td class="text-right">145.1</td>
+            <td class="text-slate-400 truncate max-w-[8rem]">429 rate_limit</td>
+          </tr>
+          <tr>
+            <td class="py-2"><span class="dot bg-green-500 mr-2"></span>anthropic-sonnet</td>
+            <td class="text-right">12</td>
+            <td class="text-right text-green-400">100%</td>
+            <td class="text-right">1200</td>
+            <td class="text-right">41.8</td>
+            <td class="text-slate-500">—</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- Panel 2: Fallback & Gates -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Fallback &amp; Gates</h2>
+      <div class="grid grid-cols-2 gap-3">
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Fallback rate</div>
+          <div class="text-2xl font-semibold tabnum text-amber-400">4.2%</div>
+          <div class="text-xs text-slate-500 tabnum">6 / 142</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Paid-gate blocked</div>
+          <div class="text-2xl font-semibold tabnum">0</div>
+          <div class="text-xs text-slate-500">ALLOW_PAID=false</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Capability degraded</div>
+          <div class="text-2xl font-semibold tabnum">3</div>
+          <div class="text-xs text-slate-500">thinking:2, reasoning:1</div>
+        </div>
+        <div class="rounded-md bg-slate-800/50 p-3">
+          <div class="text-xs text-slate-400">Output-filter applied</div>
+          <div class="text-2xl font-semibold tabnum">12</div>
+          <div class="text-xs text-slate-500">strip_thinking:12</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Panel 3: Throughput sparkline -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">
+        Throughput (tok/s, last 60s)
+      </h2>
+      <div class="flex items-baseline gap-4 mb-2">
+        <span class="text-3xl font-semibold tabnum text-green-400">83</span>
+        <span class="text-xs text-slate-500 tabnum">avg 62.3 · peak 145</span>
+      </div>
+      <svg class="spark" viewBox="0 0 300 60" preserveAspectRatio="none" aria-hidden="true">
+        <defs>
+          <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="#22c55e" stop-opacity="0.35" />
+            <stop offset="100%" stop-color="#22c55e" stop-opacity="0" />
+          </linearGradient>
+        </defs>
+        <polygon
+          fill="url(#g)"
+          points="0,60 0,45 15,42 30,35 45,30 60,38 75,28 90,20 105,25 120,18 135,22 150,12 165,20 180,28 195,22 210,30 225,18 240,10 255,22 270,28 285,18 300,24 300,60" />
+        <polyline
+          fill="none"
+          stroke="#22c55e"
+          stroke-width="2"
+          points="0,45 15,42 30,35 45,30 60,38 75,28 90,20 105,25 120,18 135,22 150,12 165,20 180,28 195,22 210,30 225,18 240,10 255,22 270,28 285,18 300,24" />
+      </svg>
+    </section>
+
+    <!-- Panel 4: Recent requests -->
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Recent Requests</h2>
+      <ul class="text-xs font-mono space-y-1 tabnum">
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center">
+          <span class="text-slate-500">14:32:01</span>
+          <span class="text-slate-300">openai</span>
+          <span class="text-slate-400">coding</span>
+          <span>ollama-local</span>
+          <span class="text-green-400">ok</span>
+          <span class="text-slate-400">420 ms</span>
+        </li>
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center">
+          <span class="text-slate-500">14:31:58</span>
+          <span class="text-slate-300">anthropic</span>
+          <span class="text-slate-400">coding</span>
+          <span>ollama-local</span>
+          <span class="text-green-400">ok</span>
+          <span class="text-slate-400">390 ms</span>
+        </li>
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center bg-red-950/40 rounded px-1">
+          <span class="text-slate-500">14:31:45</span>
+          <span class="text-slate-300">openai</span>
+          <span class="text-slate-400">coding</span>
+          <span>groq-free</span>
+          <span class="text-red-400">FAIL (429)</span>
+          <span class="text-slate-400">—</span>
+        </li>
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center">
+          <span class="text-slate-500">14:31:45</span>
+          <span class="text-slate-300">openai</span>
+          <span class="text-slate-400">coding</span>
+          <span>ollama-local</span>
+          <span class="text-green-400">ok</span>
+          <span class="text-slate-400">510 ms</span>
+        </li>
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center">
+          <span class="text-slate-500">14:31:32</span>
+          <span class="text-slate-300">openai</span>
+          <span class="text-slate-400">general</span>
+          <span>ollama-local</span>
+          <span class="text-green-400">ok</span>
+          <span class="text-slate-400">380 ms</span>
+        </li>
+        <li class="grid grid-cols-[auto_auto_auto_auto_1fr_auto] gap-x-3 items-center">
+          <span class="text-slate-500">14:31:18</span>
+          <span class="text-slate-300">anthropic</span>
+          <span class="text-slate-400">coding</span>
+          <span>anthropic-sonnet</span>
+          <span class="text-green-400">ok</span>
+          <span class="text-slate-400">1,210 ms</span>
+        </li>
+      </ul>
+    </section>
+
+  </main>
+
+  <!-- Footer: usage mix (ローカル / 無料 / 有料) — 縦長バーで視覚化 -->
+  <footer class="max-w-7xl mx-auto px-4 md:px-6 pb-8">
+    <section class="bg-slate-900/60 border border-slate-800 rounded-lg p-4">
+      <h2 class="text-sm font-semibold uppercase tracking-wider text-slate-400 mb-3">Usage Mix</h2>
+      <div class="flex h-3 rounded-full overflow-hidden" role="img" aria-label="local 69%, free 23%, paid 8%">
+        <div class="bg-green-500" style="width: 69%"></div>
+        <div class="bg-sky-500" style="width: 23%"></div>
+        <div class="bg-amber-500" style="width: 8%"></div>
+      </div>
+      <div class="flex justify-between text-xs mt-2 text-slate-400 tabnum">
+        <span><span class="dot bg-green-500 mr-1"></span>local 69% (98)</span>
+        <span><span class="dot bg-sky-500 mr-1"></span>free 23% (32)</span>
+        <span><span class="dot bg-amber-500 mr-1"></span>paid 8% (12)</span>
+      </div>
+    </section>
+    <p class="text-xs text-slate-500 mt-3">
+      Static mockup · v1.5 design · data hard-coded · real page will
+      <code>hx-get="/metrics.json" hx-trigger="every 2s"</code>
+    </p>
+  </footer>
+</body>
+</html>

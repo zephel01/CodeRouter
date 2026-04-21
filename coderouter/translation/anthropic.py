@@ -20,6 +20,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnthropicTextBlock(BaseModel):
+    """Anthropic ``text`` content block — the common plain-prose case."""
+
     model_config = ConfigDict(extra="allow")
 
     type: Literal["text"] = "text"
@@ -152,6 +154,13 @@ class AnthropicRequest(BaseModel):
 
 
 class AnthropicUsage(BaseModel):
+    """Token accounting on an Anthropic response / ``message_delta`` event.
+
+    Cache-hit / cache-creation tokens aren't modeled explicitly —
+    ``extra="allow"`` lets them round-trip when present so the
+    Anthropic ⇄ OpenAI translation preserves them verbatim.
+    """
+
     model_config = ConfigDict(extra="allow")
 
     input_tokens: int = 0
