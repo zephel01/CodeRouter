@@ -6,6 +6,45 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.6.0] — 2026-04-22 (Umbrella tag — `auto_router`)
+
+**Theme: plan.md §11「task-aware auto routing」を 1 minor で受ける。** リクエスト本文を宣言的ルールで分類し profile を自動選択する `auto_router` を 3 sub-release で出荷: schema + classifier (v1.6-A) / ingress + metrics 配線 (v1.6-B) / examples + docs (v1.6-C)。初心者は `default_profile: auto` を書くだけで内蔵ルール (画像 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) が効き、中級者は `auto_router:` ブロックで独自ルールに差し替え、上級者は `body.profile` / `X-CodeRouter-Profile` / `X-CodeRouter-Mode` による per-request 上書き (v0.6-D 以来の経路) が引き続き最優先で効く — この 3 tier を 1 ファイルに収める。v0.6-D 互換は完全維持: `default_profile: auto` を書かない限り auto slot は一切発火せず、既存設定は verbatim で動き続ける。
+
+- Tests: 527 → **596** (+69, +13.1%)、v1.6-A 26 new auto_router tests (classifier matchers / regex 事前コンパイル / reserved `auto` 名 / bundled profile 要求 / fall-through / disabled) + v1.6-B ingress+metrics wiring tests + v1.6 validator tests
+- Runtime deps: 5 → 5 (据え置き 13 sub-release 連続、分類は純粋正規表現 + dict 走査、外部分類器を呼ばない)
+- Non-breaking: 新設 config field (`auto_router:`、任意) + 新設 sentinel (`default_profile: auto`、opt-in) + 新設 Prometheus counter (`auto_router_fallthrough_total`) のみで、既存 ingress / precedence chain / metrics schema は verbatim 維持
+
+### Added
+
+- **v1.6-A — schema + classifier** (coderouter/routing/auto_router.py 新設 +245 LOC / coderouter/config/schemas.py +170 LOC)
+  - `RuleMatcher` (Pydantic): `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` の 4 matcher variant をフィールドで表現、`_exactly_one` validator で「1 ルールに matcher は 1 つだけ」を load 時強制 (複数書くと `pydantic.ValidationError` で fail)。`content_regex` は `_compile_regex_eagerly` で起動時に `re.compile` され、typo は起動を落とす (毎リクエスト silent fail にしない)
+  - `AutoRouteRule` / `AutoRouterConfig`: ルールに `id` (ログの `auto-router-resolved` payload に乗る安定識別子、`builtin:` / `user:` prefix 慣習) / `profile` / `match`、トップに `disabled` (hard off-switch) / `rules` (ordered, first-match-wins) / `default_rule_profile` (fall-through 先) を持たせる
+  - `BUNDLED_RULES` (コード側で宣言、YAML に書かなくて済む): `image-attachment → multi`、`code-fence-dense (ratio ≥ 0.3) → coding`、fall-through = `writing`。`BUNDLED_REQUIRED_PROFILES = ("multi", "coding", "writing")` を `CodeRouterConfig._check_bundled_auto_router_requirements` が起動時検証 — `default_profile: auto` + `auto_router` 未定義で multi/coding/writing のいずれかが欠けると load が落ち、エラーメッセージに「(a) 3 profile 全て定義 / (b) 独自 `auto_router:` で上書き / (c) `default_profile` を別 profile 名に」の 3 択を明記
+  - `classify(body, config)`: 最新の `role: user` メッセージ 1 件だけを走査 (履歴全体は見ない、トークン消費を削る設計)、OpenAI / Anthropic 両形式の content list から `type: image_url` / `type: image` / `type: input_image` いずれも `has_image` 判定、text は string / multimodal list の両方から抽出。matcher ヒット時 `auto-router-resolved` / 空振り時 `auto-router-fallthrough` の 2 event を発火 (後述 metrics counter の source)
+  - `RESERVED_PROFILE_NAME = "auto"`: `CodeRouterConfig._check_auto_is_reserved` が `profiles[].name == "auto"` を起動時 reject。`default_profile: auto` sentinel と衝突するため
+  - +26 tests (tests/test_auto_router.py、各 matcher / reserved name / bundled 要求 / regex 事前コンパイル / disabled / fall-through / 3 matcher を併記した rule の reject)
+- **v1.6-B — ingress wiring + metrics** (coderouter/ingress/openai_routes.py + coderouter/ingress/anthropic_routes.py + coderouter/metrics/collector.py + coderouter/metrics/prometheus.py)
+  - OpenAI / Anthropic 両 ingress の precedence chain に auto router slot を 1 箇所ずつ挿入 (v0.6-D の body.profile > `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > `default_profile` の間、`default_profile` の直上): `if chat_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME: chat_req.profile = classify(payload, config)`。`default_profile != "auto"` では slot は not-taken、engine に渡る profile は pre-v1.6 と bit-identical (engine 側で default profile 埋め込みが従来どおり走る)
+  - `MetricsCollector._dispatch` に `auto-router-fallthrough` event を新 counter `_auto_router_fallthrough_total` に配線、snapshot の `counters` dict と `reset()` に同 key を追加。fall-through は「ユーザー定義ルールがどれもヒットしない率」のシグナルなので独立 counter として露出
+  - `format_prometheus()` に `coderouter_auto_router_fallthrough_total` を新規 export (HELP テキストに「no user/bundled rule matched, or auto_router.disabled=true」と併記)、`promtool check metrics` は round-trip clean
+  - precedence chain のドキュメント (ingress 両ファイルの module docstring) に「4. auto_router (v1.6-A, fires only when `default_profile == 'auto'`)」を追記、v1.6 で新旧どちらの経路がどこで効くか読者が 1 箇所で辿れるように
+- **v1.6-C — examples + quickstart 追記** (examples/providers.auto.yaml 新設 / examples/providers.auto-custom.yaml 新設 / docs/quickstart.ja.md +1 section)
+  - `examples/providers.auto.yaml`: zero-config 版。`allow_paid: false` / `default_profile: auto` / `display_timezone: Asia/Tokyo` + 3 Ollama provider (qwen2.5-coder:7b / qwen2.5:7b / qwen2.5vl:7b) + 3 profile (coding / writing / multi) のみで内蔵ルールが即発火。冒頭コメントに `ollama pull` 3 コマンドと、画像を送らないなら vl モデルは省略可 (画像リクエストだけ fast-fail) を明記
+  - `examples/providers.auto-custom.yaml`: 中級者向け copy-edit 起点。`auto.yaml` を親に `auto_router:` ブロックを挿入、4 matcher variant を 1 つずつ踏んだ 4 ルール (image → multi / 翻訳意図 regex → writing / "Review this PR" 部分文字列 → coding / fence ratio ≥ 0.15 → coding) + `default_rule_profile: writing` を例示。コメントで「rules は内蔵ルールと merge せず完全置換」「matcher は 1 rule に 1 つだけ」「rule 順序が first-match-wins」の 3 点を明示
+  - `docs/quickstart.ja.md` に「補足: プロファイル選択を CodeRouter に任せる」セクションを Pattern A/B の後に追加。C-1 pull → C-2 `cp auto.yaml` → C-3 カスタマイズの 3 ステップで、既存の Pattern A/B を書き換えずに合流経路を提示
+
+### Changed
+
+- **precedence chain 公式順序を v1.6 用に更新** — plan.md §11 / ingress docstring / quickstart の 3 箇所で `body.profile > X-CodeRouter-Profile > X-CodeRouter-Mode > auto_router (default_profile == "auto") > default_profile` の 5 段で統一。v0.6-D の 4 段表記から増えたのは 4 番目だけで、既存の 1-3 番と最終 default 解決は verbatim 維持
+
+### Non-breaking compatibility
+
+- `default_profile: "auto"` を書かない限り auto slot は dead code path (ingress で分岐が一切立たない)。v1.5.x までの providers.yaml は v1.6.0 で verbatim 動作
+- 新設の `auto_router:` field は Optional で default None、書かないなら `CodeRouterConfig.model_validate` の view から完全不可視
+- 新設 Prometheus counter `coderouter_auto_router_fallthrough_total` は既存 counter と並列の scalar で、Prometheus scraper の view は 1 行増えるだけ (削除 / rename なし)
+
+---
+
 ## [v1.5.0] — 2026-04-22 (Umbrella tag — Observability pillar)
 
 **Theme: plan.md §12「計測ダッシュボード」を丸ごと 1 minor で受ける。** 収集 (v1.5-A `MetricsCollector` + `/metrics.json`) / 配信 (v1.5-B Prometheus `/metrics` + `$CODEROUTER_EVENTS_PATH` JSONL mirror) / 可視化 CLI (v1.5-C `coderouter stats` curses TUI) / 可視化 HTML (v1.5-D `/dashboard` 1 ページ) / timezone 表示 (v1.5-E `display_timezone` config) / demo 同梱 (v1.5-F `scripts/demo_traffic.sh`) の 6 sub-release を横並びで出荷。READMEに live dashboard のスクショ (`docs/assets/dashboard-demo.png`) と「このダッシュボードを見ると何の問いに即答できるか」を明記するセクションを追加 ("モデルが動作してる / 利用されてる / 切り替わった" が読み取れること) — 数字の羅列ではなく運用上の問いを起点にした書き直し。**SemVer 番号について**: `v1.0.1 → v1.5.0` で旧 v1.1 (= 配布 / launcher / doctor、plan.md §11) を飛び越しているため、plan.md §11 ヘッダは **v1.6** にリラベル、`v1.1.0`-`v1.4.x` は欠番扱い。`v1.5.0` umbrella で plan.md §12 を受け、§11 (v1.6) が次の minor。

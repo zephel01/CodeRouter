@@ -1,0 +1,176 @@
+# ============================================================
+# CodeRouter providers.yaml — v1.6 auto_router customizer
+#
+# This is the "copy & edit" starter for users who've outgrown the
+# zero-config example (providers.auto.yaml) and want to override the
+# bundled ruleset with their own. Everything below the `auto_router:`
+# block is identical to providers.auto.yaml, so diffing the two files
+# shows exactly what customization adds.
+#
+# Key behavior differences vs providers.auto.yaml:
+#
+#   - providers.auto.yaml          → no auto_router: block → the bundled
+#                                    rules apply (image → multi /
+#                                    code-fence≥0.3 → coding / else
+#                                    → writing).
+#   - providers.auto-custom.yaml   → auto_router: block REPLACES the
+#                                    bundled rules (no merge). You own
+#                                    the whole list.
+#
+# Classifier contract (v1.6-A):
+#
+#   - Rules are consulted in order; first match wins.
+#   - Each rule's ``match:`` block has EXACTLY ONE matcher field set.
+#     Mixing matchers in one rule fails at startup — split them into
+#     separate rules so precedence stays obvious when reading the file.
+#   - Supported matchers (v1.6-A):
+#       has_image: true
+#       code_fence_ratio_min: 0.0..1.0
+#       content_contains: "substring"   (case-sensitive)
+#       content_regex: "python re"       (compiled at startup; bad
+#                                         pattern fails the load)
+#   - ``default_rule_profile`` is used when no rule matches. It must
+#     exist in profiles[] — startup validates this.
+#   - Profile names referenced by every rule must also exist in
+#     profiles[] — startup validates this too. Typos fail fast.
+#
+# Per-request overrides (body.profile / X-CodeRouter-Profile /
+# X-CodeRouter-Mode) still win over the classifier — the auto_router
+# slot sits BELOW explicit caller signals in the v0.6-D precedence chain.
+# ============================================================
+
+allow_paid: false
+default_profile: auto      # ← the sentinel that turns auto_router on
+display_timezone: Asia/Tokyo
+
+# ---------------------------------------------------------------------
+# auto_router: custom ruleset — replaces the bundled rules entirely.
+#
+# The five rules below walk through every matcher variant so you have a
+# working template for each. Reorder / prune / extend to match your
+# actual traffic. Rule IDs are free-form strings; ``user:`` prefixes
+# are a convention (bundled rules use ``builtin:``) that makes the
+# ``auto-router-resolved`` log lines self-descriptive.
+# ---------------------------------------------------------------------
+
+auto_router:
+  # Hard off-switch. Uncomment to bypass classification entirely — every
+  # request falls straight through to ``default_rule_profile``. Useful
+  # for narrowing down a routing misbehavior without editing rules.
+  # disabled: true
+
+  rules:
+    # 1) Image attachments must go to the VL model regardless of prose.
+    #    Keep this rule at (or near) the top — once a request has an
+    #    image it cannot be served by a text-only coder/writer without
+    #    failing downstream.
+    - id: user:image-attachment
+      profile: multi
+      match:
+        has_image: true
+
+    # 2) Translation / localization intent → writing. Regex matches
+    #    English and Japanese trigger words case-insensitively. Put
+    #    this above the code-fence rule so a translation request that
+    #    happens to quote code doesn't get pulled into the coding lane.
+    - id: user:translate-intent
+      profile: writing
+      match:
+        content_regex: "(?i)translate|翻訳|和訳|英訳"
+
+    # 3) "Review this PR" style intents → coding, even when the prose
+    #    dominates the body. Substring match is case-sensitive; add more
+    #    rules (or switch to content_regex) for spelling variants.
+    - id: user:pr-review-intent
+      profile: coding
+      match:
+        content_contains: "Review this PR"
+
+    # 4) Dense code blocks → coding. Threshold is looser (0.15) than the
+    #    bundled 0.3, so a short one-snippet + explanation message also
+    #    routes to the coder instead of the generalist. Tighten back to
+    #    0.3 if you're seeing false positives.
+    - id: user:code-fence-dense
+      profile: coding
+      match:
+        code_fence_ratio_min: 0.15
+
+  # Fall-through target when no rule above matches. Must exist in
+  # profiles[]. Same role as the bundled ruleset's ``writing`` default.
+  default_rule_profile: writing
+
+providers:
+  # Coding target — Qwen2.5-Coder 7B. Strip <think> leaks at the adapter
+  # boundary (same reasoning as the main examples/providers.yaml).
+  - name: ollama-qwen-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Writing target — general Qwen2.5 7B. No coder bias, better at prose,
+  # translation, and explanatory answers.
+  - name: ollama-qwen-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:7b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Multi target — Qwen2.5-VL 7B, the vision-language variant. Required
+  # whenever any rule resolves to the ``multi`` profile — with the
+  # image-attachment rule above it's mandatory.
+  - name: ollama-qwen-vl-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5vl:7b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false           # VL tool-calling is still rough on 7B
+
+  # Optional free-tier cloud escape hatch for all three profiles. Same
+  # shape as the main providers.yaml. Uncomment once your
+  # OPENROUTER_API_KEY env is set.
+  # - name: openrouter-free
+  #   kind: openai_compat
+  #   base_url: https://openrouter.ai/api/v1
+  #   model: qwen/qwen3-coder:free
+  #   api_key_env: OPENROUTER_API_KEY
+  #   paid: false
+  #   timeout_s: 60
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+
+profiles:
+  # These three profile names match what the custom ruleset above points
+  # to. If you add a new rule that targets a new profile (e.g. a
+  # ``writing-long`` profile for long-form tasks), remember to declare
+  # it here too — the startup validator will otherwise reject the load.
+  - name: coding
+    providers:
+      - ollama-qwen-coder-7b
+      # - openrouter-free
+
+  - name: writing
+    providers:
+      - ollama-qwen-7b
+      # - openrouter-free
+
+  - name: multi
+    providers:
+      - ollama-qwen-vl-7b

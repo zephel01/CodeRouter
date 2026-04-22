@@ -1,0 +1,110 @@
+# ============================================================
+# CodeRouter providers.yaml — v1.6 auto_router starter (zero-config)
+#
+# This is the beginner-first starter for v1.6's auto_router. Drop it in
+# as your ~/.coderouter/providers.yaml and every request is classified
+# by the request body and sent to the right profile automatically:
+#
+#   - image attached                    → profile "multi"   (VL model)
+#   - message is ~30%+ code fences      → profile "coding"  (coder model)
+#   - everything else                   → profile "writing" (general model)
+#
+# You do NOT need to write any auto_router: block — the three bundled
+# rules above are built in. The only contract is that `multi`, `coding`,
+# and `writing` all exist in `profiles:` below. Missing any of the three
+# makes CodeRouter fast-fail at startup with a clear error.
+#
+# Prerequisite — pull the three Ollama models referenced below:
+#
+#   ollama pull qwen2.5-coder:7b        # coding   (~4.7 GB)
+#   ollama pull qwen2.5:7b              # writing  (~4.7 GB)
+#   ollama pull qwen2.5vl:7b            # multi    (~6 GB, skip if you
+#                                       #   never send images — image
+#                                       #   requests will fail cleanly)
+#
+# Advanced users:
+#   - Add `auto_router:` to override the bundled rules — see
+#     providers.auto-custom.yaml for a copy-edit starting point.
+#   - Per-request overrides still work (body.profile /
+#     X-CodeRouter-Profile / X-CodeRouter-Mode) — auto only fires when
+#     none of those are set.
+# ============================================================
+
+allow_paid: false
+default_profile: auto      # ← the sentinel that turns auto_router on
+display_timezone: Asia/Tokyo
+
+providers:
+  # Coding target — Qwen2.5-Coder 7B. Strip <think> leaks at the adapter
+  # boundary (same reasoning as the main examples/providers.yaml).
+  - name: ollama-qwen-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Writing target — general Qwen2.5 7B. No coder bias, better at prose,
+  # translation, and explanatory answers.
+  - name: ollama-qwen-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:7b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Multi target — Qwen2.5-VL 7B, the vision-language variant. Required
+  # for the bundled image-attachment rule. Omit this stanza if you never
+  # send images and are OK with those specific requests failing fast.
+  - name: ollama-qwen-vl-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5vl:7b
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false           # VL tool-calling is still rough on 7B
+
+  # Optional free-tier cloud escape hatch for all three profiles. Same
+  # shape as the main providers.yaml. Uncomment once your
+  # OPENROUTER_API_KEY env is set.
+  # - name: openrouter-free
+  #   kind: openai_compat
+  #   base_url: https://openrouter.ai/api/v1
+  #   model: qwen/qwen3-coder:free
+  #   api_key_env: OPENROUTER_API_KEY
+  #   paid: false
+  #   timeout_s: 60
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+
+profiles:
+  # The three profile names the bundled auto_router ruleset requires.
+  # Renaming any of them without also supplying a custom `auto_router:`
+  # block will fail the startup validator.
+  - name: coding
+    providers:
+      - ollama-qwen-coder-7b
+      # - openrouter-free
+
+  - name: writing
+    providers:
+      - ollama-qwen-7b
+      # - openrouter-free
+
+  - name: multi
+    providers:
+      - ollama-qwen-vl-7b
