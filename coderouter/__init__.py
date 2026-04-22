@@ -1,7 +1,12 @@
 """CodeRouter — local-first, free-first, fallback-built-in LLM router."""
 
+from importlib.metadata import PackageNotFoundError, version as _pkg_version
+
 from coderouter.errors import CodeRouterError
 
-__version__ = "1.5.0"
+try:
+    __version__ = _pkg_version("coderouter")
+except PackageNotFoundError:  # pragma: no cover — package not installed (e.g. raw source checkout)
+    __version__ = "0.0.0+unknown"
 
 __all__ = ["CodeRouterError", "__version__"]
