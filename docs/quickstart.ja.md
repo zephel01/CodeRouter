@@ -117,8 +117,8 @@ curl http://localhost:8088/healthz
 # → {"status":"ok"}
 ```
 
-必要ならダッシュボードもブラウザで確認: http://localhost:4000/dashboard
-(デフォルトは 4000 番、`--port` で変えた場合は合わせる。`/healthz` と `/dashboard` は同一ポート上)
+必要ならダッシュボードもブラウザで確認: http://localhost:8088/dashboard
+(`/healthz` と `/dashboard` は同一ポート上。`--port` を変えた場合はその番号に合わせる)
 
 ### 6. `coderouter doctor` で設定が効いているか確認 (任意、推奨)
 
