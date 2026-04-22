@@ -13,9 +13,11 @@ Design notes (see plan.md §2 / §5.4):
 
 from __future__ import annotations
 
+import re
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from typing_extensions import Self
 
 
 class Capabilities(BaseModel):
@@ -174,6 +176,118 @@ class FallbackChain(BaseModel):
     )
 
 
+# ---------------------------------------------------------------------------
+# v1.6-A: auto_router — declarative request-body classifier
+# ---------------------------------------------------------------------------
+
+
+class RuleMatcher(BaseModel):
+    """One-of matcher for an :class:`AutoRouteRule`.
+
+    Exactly one of the matcher fields must be set; the ``_exactly_one``
+    validator enforces this at load. Adding a new matcher type means
+    adding a new optional field — the single-field invariant enforces
+    discriminated-union semantics without pydantic's tagged-union syntax.
+
+    Variants (v1.6-A):
+
+    - ``has_image: True`` — any ``image_url`` / ``image`` /
+      ``input_image`` content block in the latest user message.
+    - ``code_fence_ratio_min: 0.3`` — triple-backtick span chars ÷ total
+      chars of latest user message is ``>=`` this threshold.
+    - ``content_contains: "foo"`` — substring match (case-sensitive).
+    - ``content_regex: r"..."`` — Python ``re.search``; compiled at
+      model-construction time so typos fail startup.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    has_image: bool | None = None
+    code_fence_ratio_min: float | None = Field(default=None, ge=0.0, le=1.0)
+    content_contains: str | None = None
+    content_regex: str | None = None
+
+    _MATCHER_FIELDS: tuple[str, ...] = (
+        "has_image",
+        "code_fence_ratio_min",
+        "content_contains",
+        "content_regex",
+    )
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> Self:
+        set_fields = [
+            name for name in self._MATCHER_FIELDS if getattr(self, name) is not None
+        ]
+        if len(set_fields) != 1:
+            raise ValueError(
+                f"RuleMatcher must have exactly one matcher field set, "
+                f"got {len(set_fields)}: {set_fields}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _compile_regex_eagerly(self) -> Self:
+        """Compile ``content_regex`` at load so bad patterns fail startup."""
+        if self.content_regex is not None:
+            try:
+                re.compile(self.content_regex)
+            except re.error as exc:
+                raise ValueError(
+                    f"Invalid regex for content_regex {self.content_regex!r}: {exc}"
+                ) from exc
+        return self
+
+
+class AutoRouteRule(BaseModel):
+    """One rule in ``auto_router.rules``: matcher → profile."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(
+        description=(
+            "Stable identifier surfaced in the auto-router-resolved log "
+            "payload. Recommended prefixes: ``builtin:`` for bundled "
+            "rules, ``user:`` for YAML-defined rules."
+        ),
+    )
+    profile: str = Field(
+        description="Profile name to resolve to. Must exist in profiles[].",
+    )
+    match: RuleMatcher
+
+
+class AutoRouterConfig(BaseModel):
+    """The ``auto_router:`` block in providers.yaml.
+
+    When absent and ``default_profile == "auto"``, the bundled ruleset
+    (``BUNDLED_RULES`` in :mod:`coderouter.routing.auto_router`) applies.
+    When present, ``rules`` entirely **replaces** bundled rules (no
+    merge) — see ``docs/designs/v1.6-auto-router.md`` §7 for rationale.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    disabled: bool = Field(
+        default=False,
+        description=(
+            "Hard off-switch. When True, classification is skipped and "
+            "``default_rule_profile`` is used unconditionally."
+        ),
+    )
+    rules: list[AutoRouteRule] = Field(
+        default_factory=list,
+        description="Ordered rules; first match wins.",
+    )
+    default_rule_profile: str = Field(
+        default="writing",
+        description=(
+            "Profile used when no rule matches (or when ``disabled`` is "
+            "True). Must exist in profiles[]."
+        ),
+    )
+
+
 class CodeRouterConfig(BaseModel):
     """Top-level config loaded from providers.yaml."""
 
@@ -216,6 +330,19 @@ class CodeRouterConfig(BaseModel):
             "is display-only."
         ),
     )
+    # v1.6-A: optional auto-routing rules. When ``default_profile == "auto"``
+    # and this field is None, the bundled ruleset (image → multi /
+    # code-fence → coding / fallthrough → writing) applies. When set,
+    # ``rules`` is a complete replacement (no merge with bundled).
+    auto_router: AutoRouterConfig | None = Field(
+        default=None,
+        description=(
+            "v1.6-A: classifier rules consulted only when "
+            "``default_profile == 'auto'``. None + auto → bundled rules "
+            "apply (requires multi/coding/writing profiles to exist). "
+            "Set to override bundled behavior."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_default_profile_exists(self) -> CodeRouterConfig:
@@ -226,12 +353,95 @@ class CodeRouterConfig(BaseModel):
         converts a silent-until-used misconfig into a fast-fail at
         startup, which matches how ``--mode`` / ``CODEROUTER_MODE`` are
         validated in ``loader.py``.
+
+        v1.6-A: ``default_profile == "auto"`` is a reserved sentinel
+        that triggers the auto-router; it never maps to a declared
+        profile directly and is therefore exempt from this existence
+        check.
         """
+        if self.default_profile == "auto":
+            return self
         names = {p.name for p in self.profiles}
         if self.default_profile not in names:
             raise ValueError(
                 f"default_profile {self.default_profile!r} is not declared in "
                 f"profiles: known={sorted(names)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_auto_is_reserved(self) -> CodeRouterConfig:
+        """v1.6-A: ``auto`` is a reserved sentinel for the auto-router.
+
+        Users cannot define a profile named ``auto`` — it would collide
+        with the ``default_profile: auto`` trigger. Fast-fail at load
+        with a pointer to rename.
+        """
+        for prof in self.profiles:
+            if prof.name == "auto":
+                raise ValueError(
+                    "'auto' is reserved as a profile name in v1.6+ "
+                    "(it is the sentinel that activates auto_router). "
+                    "Rename this profile to something else, e.g. "
+                    "'auto-route' or 'smart'."
+                )
+        return self
+
+    @model_validator(mode="after")
+    def _check_auto_router_profiles_exist(self) -> CodeRouterConfig:
+        """v1.6-A: every ``auto_router.rules[*].profile`` must be declared.
+
+        Also validates ``default_rule_profile``. Same fast-fail
+        philosophy as :meth:`_check_default_profile_exists` and
+        :meth:`_check_mode_alias_targets_exist`.
+        """
+        if self.auto_router is None:
+            return self
+        names = {p.name for p in self.profiles}
+        bad = sorted(
+            {
+                r.profile
+                for r in self.auto_router.rules
+                if r.profile not in names
+            }
+        )
+        if bad:
+            raise ValueError(
+                f"auto_router.rules points to unknown profile(s): {bad}. "
+                f"known profiles={sorted(names)}"
+            )
+        if self.auto_router.default_rule_profile not in names:
+            raise ValueError(
+                f"auto_router.default_rule_profile "
+                f"{self.auto_router.default_rule_profile!r} is not declared "
+                f"in profiles: known={sorted(names)}"
+            )
+        return self
+
+    @model_validator(mode="after")
+    def _check_bundled_auto_router_requirements(self) -> CodeRouterConfig:
+        """v1.6-A: bundled ruleset needs multi/coding/writing to exist.
+
+        Only fires when the user opted into auto routing
+        (``default_profile == 'auto'``) without supplying a custom
+        ``auto_router`` block. In that path the classifier falls back to
+        the bundled rules (see
+        :mod:`coderouter.routing.auto_router`), which reference three
+        named profiles. Missing any of them would 500 on the first
+        request, so we surface it at load instead.
+        """
+        if self.default_profile != "auto" or self.auto_router is not None:
+            return self
+        names = {p.name for p in self.profiles}
+        required = ("multi", "coding", "writing")
+        missing = [r for r in required if r not in names]
+        if missing:
+            raise ValueError(
+                f"bundled auto_router requires profiles {list(required)} to "
+                f"exist, but missing: {missing}. "
+                f"Either (a) define all three profiles in providers.yaml, or "
+                f"(b) override with a custom ``auto_router:`` block, or "
+                f"(c) set ``default_profile`` to a non-auto profile name."
             )
         return self
 
