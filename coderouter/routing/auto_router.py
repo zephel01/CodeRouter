@@ -38,7 +38,7 @@ import logging
 import re
 from typing import TYPE_CHECKING, Any
 
-from coderouter.config.schemas import AutoRouteRule, AutoRouterConfig, RuleMatcher
+from coderouter.config.schemas import AutoRouterConfig, AutoRouteRule, RuleMatcher
 
 if TYPE_CHECKING:
     from coderouter.config.schemas import CodeRouterConfig

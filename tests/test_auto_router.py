@@ -33,18 +33,18 @@ pytest.importorskip(
     reason="v1.6-A: auto_router not yet implemented",
 )
 
-from coderouter.adapters.base import ChatRequest, ChatResponse, StreamChunk  # noqa: E402
-from coderouter.config.schemas import (  # noqa: E402
+from coderouter.adapters.base import ChatRequest, ChatResponse, StreamChunk
+from coderouter.config.schemas import (
     CodeRouterConfig,
     FallbackChain,
     ProviderConfig,
 )
-from coderouter.ingress.app import create_app  # noqa: E402
-from coderouter.metrics import uninstall_collector  # noqa: E402
-from coderouter.routing.auto_router import (  # noqa: E402
+from coderouter.ingress.app import create_app
+from coderouter.metrics import uninstall_collector
+from coderouter.routing.auto_router import (
     BUNDLED_RULES,
-    AutoRouteRule,
     AutoRouterConfig,
+    AutoRouteRule,
     RuleMatcher,
     classify,
 )
@@ -438,7 +438,7 @@ def test_startup_fails_when_bundled_needs_missing_profile() -> None:
     missing names. Same pattern as v0.6-A's ``default_profile`` and
     v0.6-D's ``mode_aliases`` validators.
     """
-    with pytest.raises(ValueError, match="bundled auto_router.*missing.*multi"):
+    with pytest.raises(ValueError, match=r"bundled auto_router.*missing.*multi"):
         CodeRouterConfig(
             default_profile="auto",
             providers=[_provider("p1")],
@@ -591,11 +591,13 @@ def test_default_profile_non_auto_never_invokes_classifier(
     engine = _RecordingEngine()
     app.state.engine = engine
     app.state.config = cfg
-    with TestClient(app) as client:
-        with caplog.at_level("INFO", logger="coderouter.routing.auto_router"):
-            # Image body would have triggered ``multi`` under auto, but
-            # ``default_profile: coding`` means auto isn't consulted.
-            client.post("/v1/chat/completions", json=_IMAGE_OPENAI_BODY)
+    with (
+        TestClient(app) as client,
+        caplog.at_level("INFO", logger="coderouter.routing.auto_router"),
+    ):
+        # Image body would have triggered ``multi`` under auto, but
+        # ``default_profile: coding`` means auto isn't consulted.
+        client.post("/v1/chat/completions", json=_IMAGE_OPENAI_BODY)
     # Ingress behaves exactly like v0.6-D: profile stays None through
     # ingress, the engine picks ``default_profile`` later.
     assert engine.seen_profiles == [None]

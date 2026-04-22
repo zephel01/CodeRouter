@@ -14,10 +14,9 @@ Design notes (see plan.md §2 / §5.4):
 from __future__ import annotations
 
 import re
-from typing import Literal
+from typing import Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
-from typing_extensions import Self
 
 
 class Capabilities(BaseModel):
