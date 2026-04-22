@@ -12,6 +12,7 @@ SSE streaming events follow the Anthropic wire protocol
 Profile selection mirrors the OpenAI route (see openai_routes.py):
     Body field `profile` > `X-CodeRouter-Profile` header >
     `X-CodeRouter-Mode` header (v0.6-D, via mode_aliases) >
+    auto_router (v1.6-A, when ``default_profile: auto``) >
     config default.
 
 `anthropic-version` header is accepted but not enforced — Claude Code and
@@ -33,6 +34,7 @@ from coderouter.routing import (
     MidStreamError,
     NoProvidersAvailableError,
 )
+from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
 from coderouter.translation import (
     AnthropicRequest,
     AnthropicStreamEvent,
@@ -108,6 +110,15 @@ async def messages(
             "mode-alias-resolved",
             extra={"mode": x_coderouter_mode, "profile": anth_req.profile},
         )
+
+    # v1.6-A: auto router slot. Symmetric with the OpenAI route — fires only
+    # when ``default_profile: auto`` is set and no explicit profile signal won
+    # above. When inactive the engine falls through to ``default_profile`` on
+    # its own. ``classify`` inspects the raw ``payload`` dict (not the
+    # AnthropicRequest), so both OpenAI and Anthropic ingress use the same
+    # classifier without a shared request shim.
+    if anth_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME:
+        anth_req.profile = classify(payload, config)
 
     if anth_req.profile is not None:
         try:

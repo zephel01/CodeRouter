@@ -34,6 +34,7 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
     ``output-filter-applied``    → ``output_filter_applied[filter]``
     ``chain-paid-gate-blocked``  → ``chain_paid_gate_blocked_total``
     ``chain-uniform-auth-failure``→ ``chain_uniform_auth_failure_total``
+    ``auto-router-fallthrough``  → ``auto_router_fallthrough_total``
     ``coderouter-startup``       → ``startup_info`` (stored for the UI header)
 
     Unrecognized events are ignored (forward-compat: adding a new log
@@ -108,6 +109,11 @@ class MetricsCollector(logging.Handler):
         self._output_filter_applied: Counter[str] = Counter()
         self._chain_paid_gate_blocked_total: int = 0
         self._chain_uniform_auth_failure_total: int = 0
+        # v1.6-B: classifier ran, no user rule matched, and the
+        # ``default_rule_profile`` was returned instead. Surfaced as its own
+        # Prometheus counter so operators can watch the fall-through rate as
+        # a stability signal on custom rulesets.
+        self._auto_router_fallthrough_total: int = 0
 
         # Last-error snapshot per provider (overwrites previous). Enables the
         # dashboard's "last error" column without scanning the ring.
@@ -188,6 +194,11 @@ class MetricsCollector(logging.Handler):
                 self._chain_paid_gate_blocked_total += 1
             elif event == "chain-uniform-auth-failure":
                 self._chain_uniform_auth_failure_total += 1
+            elif event == "auto-router-fallthrough":
+                # Every call into ``classify()`` that exits via the
+                # default-rule branch (no user/bundled rule matched, or
+                # ``auto_router.disabled: true``) bumps this counter.
+                self._auto_router_fallthrough_total += 1
             elif event == "coderouter-startup":
                 # Snapshot a subset — startup payload contains lists that are
                 # safe to surface to /metrics.json. Version / providers /
@@ -254,6 +265,7 @@ class MetricsCollector(logging.Handler):
                     "requests_total": self._requests_total,
                     "chain_paid_gate_blocked_total": self._chain_paid_gate_blocked_total,
                     "chain_uniform_auth_failure_total": self._chain_uniform_auth_failure_total,
+                    "auto_router_fallthrough_total": self._auto_router_fallthrough_total,
                     "provider_attempts": dict(self._provider_attempts),
                     "provider_outcomes": {
                         name: dict(counter)
@@ -289,6 +301,7 @@ class MetricsCollector(logging.Handler):
             self._output_filter_applied.clear()
             self._chain_paid_gate_blocked_total = 0
             self._chain_uniform_auth_failure_total = 0
+            self._auto_router_fallthrough_total = 0
             self._last_error.clear()
             self._recent.clear()
             self._startup_info.clear()

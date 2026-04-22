@@ -79,6 +79,16 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             samples=[((), counters.get("chain_uniform_auth_failure_total", 0))],
         )
     )
+    lines.extend(
+        _counter(
+            name="auto_router_fallthrough_total",
+            help_text=(
+                "v1.6-A auto_router calls that exited via ``default_rule_profile`` "
+                "(no user/bundled rule matched, or auto_router.disabled=true)."
+            ),
+            samples=[((), counters.get("auto_router_fallthrough_total", 0))],
+        )
+    )
 
     # ---- Counters (per-provider) ----------------------------------------
     lines.extend(

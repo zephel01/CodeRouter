@@ -4,13 +4,19 @@ Profile selection precedence (first hit wins):
     1. JSON body field:  {"profile": "fast", ...}
     2. HTTP header:       X-CodeRouter-Profile: fast
     3. HTTP header:       X-CodeRouter-Mode: coding  (v0.6-D, via mode_aliases)
-    4. config.default_profile
+    4. auto_router       (v1.6-A, fires only when default_profile == "auto")
+    5. config.default_profile
 
 Body wins over header so that a caller who can embed the field has final say
 (useful when a single client talks to multiple routers behind a proxy that
 rewrites headers). Mode sits below Profile because Mode is an INTENT
 (``coding`` / ``long`` / ``fast``) and Profile is the concrete
 implementation — when a caller specifies the concrete profile, respect it.
+
+The auto router slot is intentionally narrow: it only fires when the operator
+opts in via ``default_profile: auto`` (the reserved sentinel). For every other
+configuration the chain behaves exactly as in v0.6-D — unresolved requests fall
+through to the engine, which applies ``config.default_profile``.
 """
 
 from __future__ import annotations
@@ -26,6 +32,7 @@ from fastapi.responses import StreamingResponse
 from coderouter.adapters.base import ChatRequest
 from coderouter.logging import get_logger
 from coderouter.routing import FallbackEngine, NoProvidersAvailableError
+from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -97,6 +104,14 @@ async def chat_completions(
             "mode-alias-resolved",
             extra={"mode": x_coderouter_mode, "profile": chat_req.profile},
         )
+
+    # v1.6-A: auto router slot. Only fires when the operator opted in by
+    # setting ``default_profile: auto`` and no higher-priority caller signal
+    # (body / profile header / mode header) already nailed down a profile.
+    # When inactive, the engine still falls through to
+    # ``config.default_profile`` on its own — same semantics as pre-v1.6.
+    if chat_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME:
+        chat_req.profile = classify(payload, config)
 
     # Validate profile exists before we kick off any upstream call
     if chat_req.profile is not None:
