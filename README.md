@@ -1,8 +1,19 @@
 <h1 align="center">CodeRouter</h1>
 
 <p align="center">
-  <strong>ローカル優先、標準でゼロコストなコーディング用 AI ルーター。</strong><br>
-  ローカル → 無料クラウド → 有料クラウドへ自動フォールバック。Claude Code / OpenAI 互換。依存 5 個。
+  <strong>Claude Code でローカル LLM を使うと tool calling が壊れる問題、<br>ルーター側で直します。</strong>
+</p>
+
+<p align="center">
+  qwen2.5-coder:7B、phi-4、mistral-nemo など小型・量子化モデルがしばしばやる<br>
+  <strong>「<code>{"name":..., "arguments":...}</code> を plain text として吐いてしまう」</strong>現象を、<br>
+  CodeRouter の <strong>tool-call 修復パス</strong>が Claude Code に届く前に<br>
+  有効な <code>tool_use</code> ブロックへ復元します。
+</p>
+
+<p align="center">
+  <strong>「ローカル LLM にしたら agentic coding ができない」と諦めていた人へ。</strong><br>
+  これで本気で使える local-first agent が組めます。
 </p>
 
 <p align="center">
@@ -15,8 +26,21 @@
 </p>
 
 <p align="center">
-  <a href="./README.md">English</a> · <strong>日本語</strong> · <a href="./docs/usage-guide.ja.md">利用ガイド</a> · <a href="./docs/security.md">Security</a>
+  <a href="./README.en.md">English</a> · <strong>日本語</strong> · <a href="./docs/usage-guide.md">利用ガイド</a> · <a href="./docs/security.md">Security</a>
 </p>
+
+<!-- TODO: before/after GIF を docs/assets/before-after-toolcall.gif に配置予定。
+     暫定で ダッシュボードのスクショ だけリンク。 -->
+<!-- ![Before / After tool calling demo](./docs/assets/before-after-toolcall.gif) -->
+
+**CodeRouter が他に何をやってくれるか**
+
+- `coderouter doctor --check-model <provider>` でそのモデルが tool call / streaming / thinking に対応しているかを**実プローブで即診断**し、足りない宣言をコピペ可能な YAML パッチで教えてくれる
+- reasoning leak（`<think>...</think>` タグや `<|turn|>` など 6 種の stop マーカー漏れ）を SSE チャンク境界を跨いで自動スクラブ
+- ローカル → 無料クラウド（OpenRouter free / NVIDIA NIM 40 req/min 無料枠）→ 有料 API の自動フォールバック。既定で `ALLOW_PAID=false` なので課金はオプトイン制
+- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 601 本緑
+
+→ **Claude Code / gemini-cli / codex + Ollama / llama.cpp / NVIDIA NIM で、破綻しない local-first agent が組める**
 
 ## CodeRouter で何が楽になるか
 
@@ -56,7 +80,7 @@ CodeRouter は、コーディングエージェント（Claude Code / gemini-cli
 
 ## CodeRouter は自分に必要か？
 
-CodeRouter は wire 翻訳 + 絆創膏の層です。エージェントが既に OpenAI を喋り、モデルがお行儀良く動くなら、多くの場合不要です。下の 2 つの表が短縮版で、フルの判断ガイドは [`docs/when-do-i-need-coderouter.ja.md`](./docs/when-do-i-need-coderouter.ja.md) にあります。
+CodeRouter は wire 翻訳 + 絆創膏の層です。エージェントが既に OpenAI を喋り、モデルがお行儀良く動くなら、多くの場合不要です。下の 2 つの表が短縮版で、フルの判断ガイドは [`docs/when-do-i-need-coderouter.md`](./docs/when-do-i-need-coderouter.md) にあります。
 
 **エージェント別** — Ollama に直接向けられるか:
 
@@ -113,7 +137,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 `model` フィールドは現状プレースホルダです — ルーティングは `profile` フィールド（`providers.yaml` の `default` がデフォルト）で決まります。
 
-はじめての方は [利用ガイド](./docs/usage-guide.ja.md) を参照してください。ハードウェア別のモデル選定、チューニング既定値、OS ごとの起動フロー、OpenRouter 無料枠とのペア方針を一通り解説しています。(English: [usage guide](./docs/usage-guide.md))
+はじめての方は [利用ガイド](./docs/usage-guide.md) を参照してください。ハードウェア別のモデル選定、チューニング既定値、OS ごとの起動フロー、OpenRouter 無料枠とのペア方針を一通り解説しています。(English: [usage guide](./docs/usage-guide.en.md))
 
 ## OS 対応
 
@@ -128,7 +152,7 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 | Windows — WSL2 (Ubuntu) | ✅ | ✅ | **Windows ではこの経路を推奨** |
 | Windows — native | ⚠️ 一部 | ✅ CUDA | `scripts/verify_*.sh` は bash 必須 (Git Bash/WSL2) |
 
-注意点や「ローカル GPU なし」向けレシピを含むフル版マトリクス: [利用ガイド §1](./docs/usage-guide.ja.md#1-os-互換性)
+注意点や「ローカル GPU なし」向けレシピを含むフル版マトリクス: [利用ガイド §1](./docs/usage-guide.md#1-os-互換性)
 
 ## ステータス — v1.0 安定版 (2026-04)
 

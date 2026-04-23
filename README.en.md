@@ -1,8 +1,20 @@
 <h1 align="center">CodeRouter</h1>
 
 <p align="center">
-  <strong>Local-first coding AI with ZERO cost by default.</strong><br>
-  Local → free cloud → paid cloud, automatic fallback. Claude Code / OpenAI compatible. 5 dependencies.
+  <strong>The router that fixes the "tool calling breaks on local LLMs"<br>problem Claude Code users keep hitting.</strong>
+</p>
+
+<p align="center">
+  Small quantized models (qwen2.5-coder:7B, phi-4, mistral-nemo, etc.) often<br>
+  emit <strong>malformed <code>{"name":..., "arguments":...}</code> as plain text</strong>.<br>
+  CodeRouter's <strong>tool-call repair pass</strong> recovers them into valid
+  <code>tool_use</code> blocks<br>
+  before they reach Claude Code.
+</p>
+
+<p align="center">
+  <strong>For everyone who gave up on local models because "agentic coding just didn't work".</strong><br>
+  Now you can actually run a local-first agent that holds together.
 </p>
 
 <p align="center">
@@ -15,8 +27,20 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./docs/usage-guide.md">Usage guide</a> · <a href="./docs/security.md">Security</a>
+  <strong>English</strong> · <a href="./README.md">日本語</a> · <a href="./docs/usage-guide.en.md">Usage guide</a> · <a href="./docs/security.en.md">Security</a>
 </p>
+
+<!-- TODO: before/after GIF will live at docs/assets/before-after-toolcall.gif. -->
+<!-- ![Before / After tool calling demo](./docs/assets/before-after-toolcall.gif) -->
+
+**What else CodeRouter does for you**
+
+- `coderouter doctor --check-model <provider>` runs live probes against the provider and tells you whether it actually supports tool_calls / streaming / thinking — with a copy-paste YAML patch when declarations and behavior disagree
+- Scrubs reasoning leaks (`<think>...</think>` tags and six variants of `<|turn|>` / `<|eot_id|>` / `<|im_end|>` stop markers) across SSE chunk boundaries
+- Automatic fallback from local → free cloud (OpenRouter free / NVIDIA NIM 40 req/min free tier) → paid APIs, with `ALLOW_PAID=false` as the default so billing is opt-in
+- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 601 tests green
+
+→ **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
 
 ## What gets easier with CodeRouter
 
@@ -56,7 +80,7 @@ The snapshot above was taken while `scripts/demo_traffic.sh` drove mixed traffic
 
 ## Do you need CodeRouter?
 
-CodeRouter is a wire-translation + band-aid layer. If your agent already speaks OpenAI and your model behaves well, you probably don't need it. The two tables below are the short version; the full decision guide is in [`docs/when-do-i-need-coderouter.md`](./docs/when-do-i-need-coderouter.md).
+CodeRouter is a wire-translation + band-aid layer. If your agent already speaks OpenAI and your model behaves well, you probably don't need it. The two tables below are the short version; the full decision guide is in [`docs/when-do-i-need-coderouter.en.md`](./docs/when-do-i-need-coderouter.en.md).
 
 **By agent** — what can reach Ollama directly:
 
@@ -113,7 +137,7 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
 
-New to CodeRouter? The [usage guide](./docs/usage-guide.md) walks through hardware-tier model picks, tuning defaults, per-OS launch flow, and OpenRouter free pairing. (日本語版: [利用ガイド](./docs/usage-guide.ja.md))
+New to CodeRouter? The [usage guide](./docs/usage-guide.en.md) walks through hardware-tier model picks, tuning defaults, per-OS launch flow, and OpenRouter free pairing. (日本語版: [利用ガイド](./docs/usage-guide.md))
 
 ## OS support
 
@@ -128,7 +152,7 @@ CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, olla
 | Windows — WSL2 (Ubuntu) | ✅ | ✅ | **Recommended Windows path** |
 | Windows — native | ⚠️ partial | ✅ CUDA | `scripts/verify_*.sh` need bash (Git Bash/WSL2) |
 
-Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs/usage-guide.md#1-os-compatibility).
+Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs/usage-guide.en.md#1-os-compatibility).
 
 ## Status — v1.0 stable (2026-04)
 
@@ -504,7 +528,7 @@ The leaves stay in their original modules — `AdapterError` in `coderouter.adap
 Secrets live in env vars, not config files. CI enforces secret
 scanning (`gitleaks`), multi-source dependency CVE audit (`pip-audit`
 + OSV-Scanner), and lockfile-frozen installs — see
-[`docs/security.md`](./docs/security.md) for the full posture and
+[`docs/security.en.md`](./docs/security.en.md) for the full posture and
 reporting instructions.
 
 ## License
