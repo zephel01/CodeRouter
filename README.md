@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.5.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.6.1-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -53,7 +53,7 @@ CodeRouter は、コーディングエージェント（Claude Code / gemini-cli
 - **うっかり課金しない。** `ALLOW_PAID=false` が既定。有料プロバイダをチェーンから外したときは理由を 1 行ログに出すので、なぜ使われなかったかが後で grep できます。
 - **ローカル Ollama の上で Claude Code / gemini-cli / codex が動く。** Claude Code は Anthropic のワイアフォーマット、Ollama / llama.cpp / LM Studio は OpenAI。CodeRouter が双方向に変換し、小さいローカルモデルがテキストで吐いてしまう `{"name":..., "arguments":...}` を tool_use ブロックへ復元してからエージェントに渡します。
 - **「なぜか動かない」の原因を教えてくれる。** `coderouter doctor --check-model <provider>` が 6 種類の典型的な失敗モード（コンテキスト切り詰め / ストリーム早期終了 / ツール呼び出し欠落 / reasoning フィールド漏れ / 認証 / Anthropic `thinking`）を実地プローブし、コピペ可能な YAML パッチを出します。
-- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 453 本緑。
+- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 601 本緑。
 
 ```
 クライアント (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -139,6 +139,8 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 はじめての方は [利用ガイド](./docs/usage-guide.md) を参照してください。ハードウェア別のモデル選定、チューニング既定値、OS ごとの起動フロー、OpenRouter 無料枠とのペア方針を一通り解説しています。(English: [usage guide](./docs/usage-guide.en.md))
 
+**NVIDIA NIM 無料枠（40 req/min）と OpenRouter 無料枠をどう重ねるか**は [無料枠ガイド](./docs/free-tier-guide.md) にまとめてあります。live 検証済みのモデル一覧、`claude-code-nim` プロファイルの設計意図、よくあるハマり所 5 点 込み。(English: [free-tier guide](./docs/free-tier-guide.en.md))
+
 ## OS 対応
 
 CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(coderouter, ollama, claude-code)` です。
@@ -156,7 +158,7 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 ## ステータス — v1.0 安定版 (2026-04)
 
-**テスト 453 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
+**テスト 601 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
 
 今日の CodeRouter が届ける価値:
 

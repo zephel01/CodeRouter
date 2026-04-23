@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.5.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.6.1-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -53,7 +53,7 @@ Concretely, it takes care of things most beginners hit the hard way:
 - **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
 - **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
 - **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
-- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 453 tests passing.
+- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 601 tests passing.
 
 ```
 Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -139,6 +139,8 @@ The `model` field is currently a placeholder — routing is decided by the `prof
 
 New to CodeRouter? The [usage guide](./docs/usage-guide.en.md) walks through hardware-tier model picks, tuning defaults, per-OS launch flow, and OpenRouter free pairing. (日本語版: [利用ガイド](./docs/usage-guide.md))
 
+**Stacking NVIDIA NIM's free tier (40 req/min) with OpenRouter free** for zero-cost agentic use is covered in the [free-tier guide](./docs/free-tier-guide.en.md) — live-verified model roster, design intent behind the `claude-code-nim` profile, and five common footguns. (日本語版: [無料枠ガイド](./docs/free-tier-guide.md))
+
 ## OS support
 
 CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, ollama, claude-code)`.
@@ -156,7 +158,7 @@ Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs
 
 ## Status — v1.0 stable (2026-04)
 
-**453 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+**601 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
 
 What CodeRouter can do for you today:
 

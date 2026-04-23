@@ -308,6 +308,8 @@ uv run coderouter serve --port 8088
 
 これがまさに `examples/providers.yaml` の `claude-code` プロファイルです。
 
+NVIDIA NIM の開発者枠（40 req/min）を無料層の上に重ねると、ローカルが落ちた際の退避先として OpenRouter より 2 倍広い rate cap と 70B〜480B 級モデルが使えます。設定サンプル `examples/providers.nvidia-nim.yaml` の `claude-code-nim` プロファイルが local → NIM → OpenRouter free → paid の 8 段チェーンを組んであり、詳細は [`free-tier-guide.md`](./free-tier-guide.md) に別建てでまとめています（live 検証済みモデル一覧・よくあるハマり所 5 点込み）。
+
 ---
 
 ## 7. 動作確認 (`doctor` + `verify`)

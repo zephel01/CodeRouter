@@ -6,6 +6,69 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.6.1] — 2026-04-23 (NIM free-tier + doc hygiene)
+
+**Theme: v1.6.0 `auto_router` 出荷直後の patch-level。** NVIDIA NIM 開発者枠 (40 req/min) を 1 級市民として local-first fallback チェーンに組み込み、併せて README / docs の言語優先度を「日本語 main / 英語 sub」にスワップ (ターゲット層の reality に合わせる)、README ヒーローを「Claude Code × ローカル LLM で tool calling が破綻する問題を CodeRouter の修復パスで直す」という最強のピッチに書き換え、`coderouter/__init__.py` の `__version__` hardcode を `importlib.metadata.version("coderouter")` 経由に切替 (`pyproject.toml` の `version` を single source of truth に)。全て non-breaking — 既存 YAML / 既存 API / 既存 ingress 契約は verbatim 維持、新規ファイル追加 + 既存 docs のリネーム + README hero の入替のみ。
+
+- Tests: 596 → **601** (+5, +0.8%)、`tests/test_examples_yaml.py` 新設 (example YAML 全件ロード + NIM 固有 invariants)
+- Runtime deps: 5 → 5 (14 sub-release 連続据え置き)
+- Non-breaking: 新設 example YAML + 新設 reference doc + ファイルリネーム (`git mv` で blame 保全) + README hero 入替のみで、Python コード側の public API / ingress 契約は完全に変更なし
+
+### Added
+
+- **`examples/providers.nvidia-nim.yaml`** — NVIDIA NIM 開発者枠 (40 req/min 無料、クレカ不要) 向けの完成形サンプル。4 プロファイル (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) で `local (Ollama 7B/14B) → NIM 3 段 (Meta/Qwen/Moonshot 異ベンダー) → OpenRouter free 2 段 → paid` の 8 段チェーンを既定。live 検証 (2026-04-23、`integrate.api.nvidia.com/v1`) で採用判定:
+  - `meta/llama-3.3-70b-instruct` — chat 540ms、tool_calls OK、streaming 260ms / 12 SSE chunks / usage 返却 ✓
+  - `qwen/qwen3-coder-480b-a35b-instruct` — chat 634ms、tool_calls OK (480B MoE、agentic coding 特化)
+  - `moonshotai/kimi-k2-instruct` — chat 2.8s、tool_calls OK (NIM レーン内でのベンダー diversity)
+  - `qwen/qwen2.5-coder-32b-instruct` — chat は 160ms で正常、tool-laden リクエストに対しては NIM が HTTP 400 `"Tool use has not been enabled, because it is unsupported by qwen/qwen2.5-coder-32b-instruct"` を返すため、capability gate で tool-laden traffic を回避する `tools: false` stanza として組み込み
+  - `moonshotai/kimi-k2-thinking` — `reasoning_content` に `<think>...</think>` で答えを返す variant、`nim-reasoning` プロファイル専用。`output_filters: [strip_thinking]` を safety net として併記
+  - 不採用例 (`nvidia/llama-3.1-nemotron-70b-instruct` → 404、`deepseek-ai/deepseek-r1` → 410 EOL 2026-01-26、`nvidia/llama-3.3-nemotron-super-49b-v1.5` → 200 OK だが content null、`deepseek-ai/deepseek-v3.2` / `z-ai/glm4.7` → timeout) を YAML コメントに記載して再試行を防ぐ
+- **`tests/test_examples_yaml.py`** — 新設の +5 tests で `examples/providers*.yaml` 全件ロード検証 + NIM 固有 invariants の CI 時強制:
+  - 全 example YAML がロードでき `default_profile` / profile 参照整合性が保たれる (parametrized over 4 ファイル)
+  - NIM 3 tool-capable provider (`nim-llama-3.3-70b` / `nim-qwen3-coder-480b` / `nim-kimi-k2`) が存在する
+  - 全 `nim-*` stanza が `api_key_env=NVIDIA_NIM_API_KEY` / `base_url=https://integrate.api.nvidia.com/v1` / `paid=False` を満たす (prefix-exact で base_url を pin、`/v2` typo 等を reject)
+  - `nim-qwen-coder-32b-chat` が `tools: false` を宣言する (HTTP 400 回避の capability gate 契約)
+  - `nim-kimi-k2-thinking` がプライマリ `claude-code-nim` チェーンに含まれない (高 latency + `reasoning_content` 出力形状が Claude Code に不向きなため、`nim-reasoning` プロファイルでのみ引ける)
+- **`docs/free-tier-guide.md` / `docs/free-tier-guide.en.md`** — 新規 reference doc。NIM + OpenRouter 無料枠の使い分けだけに絞った 250+ 行の運用ガイド:
+  - 3 層比較表 (local / NIM 40 req/min / OpenRouter free 20 req/min + 200 req/day)
+  - `claude-code-nim` プロファイルの 8 段チェーン設計意図
+  - セットアップ手順 (3 コマンド) + `.env` に置く 2 つの API キー取得先
+  - live 検証済みモデル一覧 (採用 / chat-only / 不採用の 3 段)
+  - 5 common footguns (NIM の "無料" はクレジット消費型、一部モデルが非標準 `reasoning` フィールドを吐く、Qwen2.5-Coder-32B の tools 無効、OpenRouter の 200 req/day、NIM model ID の case-sensitive drift)
+  - `coderouter doctor --check-model` の実出力例 + 読み方
+- `README.md` + `README.en.md` の "Usage guide" 案内のすぐ下に free-tier guide への双方向リンクを追加
+- `docs/usage-guide.md` / `docs/usage-guide.en.md` の §6 OpenRouter pairing セクションに NIM レイヤ追加と free-tier guide への参照を追加
+
+### Changed
+
+- **ドキュメント言語優先度のスワップ** — `git mv` で 5 ペアを日本語 main / 英語 sub に入替:
+  - `README.ja.md` → `README.md` / `README.md` → `README.en.md`
+  - `docs/usage-guide.ja.md` → `docs/usage-guide.md` / `docs/usage-guide.md` → `docs/usage-guide.en.md`
+  - `docs/security.ja.md` → `docs/security.md` / `docs/security.md` → `docs/security.en.md`
+  - `docs/quickstart.ja.md` → `docs/quickstart.md` / `docs/quickstart.md` → `docs/quickstart.en.md`
+  - `docs/when-do-i-need-coderouter.ja.md` → `docs/when-do-i-need-coderouter.md` / `docs/when-do-i-need-coderouter.md` → `docs/when-do-i-need-coderouter.en.md`
+- `pyproject.toml readme = "README.md"` は維持したため PyPI 側の readme 表示も日本語に切替 (ターゲット層と整合)
+- クロスリファレンス 20+ 箇所を同時更新 — 両 README の言語スイッチャー、docs 内部の sibling-language 相互参照、docs 内部の anchor slug 整合 (日本語 README の anchor は日本語スラグ、英語側は英語スラグ)、`docs/articles/note-*.md` / `zenn-*.md` の GitHub blob URL (`blob/main/docs/quickstart.ja.md` → `blob/main/docs/quickstart.md` 等)、`docs/designs/v1.6-auto-router.md` の内部リンク
+- **README ヒーロー書き換え** (両言語):
+  - 旧: "Local-first coding AI with ZERO cost by default" 型の汎用タグライン
+  - 新: "Claude Code でローカル LLM を使うと tool calling が壊れる問題、ルーター側で直します" — `qwen2.5-coder:7B` / `phi-4` / `mistral-nemo` などの量子化モデルが `{"name":..., "arguments":...}` を plain text で吐く症状を CodeRouter の tool-call 修復パスが有効な `tool_use` ブロックへ復元、という最強のピッチを最前面に。"さらに CodeRouter が他にやってくれること" ブロック (doctor / reasoning-leak scrub / local → NIM 40 req/min → OpenRouter free → paid fallback / 5 deps / 601 tests) を言語スイッチャーと既存 "What gets easier" セクションの間に挿入
+  - `docs/assets/before-after-toolcall.gif` の HTML comment placeholder を予約 (撮影できたらコメントアウト外すだけ)
+  - バージョンバッジを 1.5.0 → 1.6.1 に、テスト数 453 → 601 に同期
+
+### Fixed
+
+- **`coderouter/__init__.py`** (`009b2b1`) — `__version__` の実装を hardcode (`"1.5.0"`) から `importlib.metadata.version("coderouter")` 経由に切替。以降 `pyproject.toml` の `version` 1 行が single source of truth で、`coderouter --version` と `/healthz` の両方が正しく 1.6.x 系を報告する。v1.6.0 の known quirk として `docs/designs/v1.6-auto-router-verification.md` に記録された issue の修復
+- CI fix (`d0de1a9`)
+
+### Non-breaking compatibility
+
+- YAML schema に変更なし — 既存の `providers.yaml` / `providers.auto.yaml` / `providers.auto-custom.yaml` は verbatim で動作
+- Python public API に変更なし — `coderouter/__init__.py` の `__version__` 取得経路だけが変わった (値は同じフィールドで同じ型)
+- Ingress 契約に変更なし — `/v1/messages` / `/v1/chat/completions` / `/metrics` / `/metrics.json` / `/dashboard` 全て verbatim
+- ファイルリネームは `git mv` で実施したため blame 履歴保全。pyproject は `readme = "README.md"` のまま (PyPI 側は新しい日本語 readme を自動追随)
+
+---
+
 ## [v1.6.0] — 2026-04-22 (Umbrella tag — `auto_router`)
 
 **Theme: plan.md §11「task-aware auto routing」を 1 minor で受ける。** リクエスト本文を宣言的ルールで分類し profile を自動選択する `auto_router` を 3 sub-release で出荷: schema + classifier (v1.6-A) / ingress + metrics 配線 (v1.6-B) / examples + docs (v1.6-C)。初心者は `default_profile: auto` を書くだけで内蔵ルール (画像 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) が効き、中級者は `auto_router:` ブロックで独自ルールに差し替え、上級者は `body.profile` / `X-CodeRouter-Profile` / `X-CodeRouter-Mode` による per-request 上書き (v0.6-D 以来の経路) が引き続き最優先で効く — この 3 tier を 1 ファイルに収める。v0.6-D 互換は完全維持: `default_profile: auto` を書かない限り auto slot は一切発火せず、既存設定は verbatim で動き続ける。

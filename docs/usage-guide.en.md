@@ -307,6 +307,8 @@ Pairing strategy that works in practice:
 
 That's exactly the `claude-code` profile in `examples/providers.yaml`.
 
+Layering NVIDIA NIM's developer tier (40 req/min) on top of the free lane gives you 2× the rate cap of OpenRouter free and access to 70B–480B-class models when local falls over. The sample `examples/providers.nvidia-nim.yaml` wires an 8-step local → NIM → OpenRouter free → paid chain as the `claude-code-nim` profile; [`free-tier-guide.en.md`](./free-tier-guide.en.md) covers the live-verified model roster and the five common footguns in detail.
+
 ---
 
 ## 7. Verify it works (`doctor` + `verify`)
