@@ -1,8 +1,8 @@
 <h1 align="center">CodeRouter</h1>
 
 <p align="center">
-  <strong>Local-first coding AI with ZERO cost by default.</strong><br>
-  Local → free cloud → paid cloud, automatic fallback. Claude Code / OpenAI compatible. 5 dependencies.
+  <strong>ローカル優先、標準でゼロコストなコーディング用 AI ルーター。</strong><br>
+  ローカル → 無料クラウド → 有料クラウドへ自動フォールバック。Claude Code / OpenAI 互換。依存 5 個。
 </p>
 
 <p align="center">
@@ -15,92 +15,92 @@
 </p>
 
 <p align="center">
-  <strong>English</strong> · <a href="./README.ja.md">日本語</a> · <a href="./docs/usage-guide.md">Usage guide</a> · <a href="./docs/security.md">Security</a>
+  <a href="./README.md">English</a> · <strong>日本語</strong> · <a href="./docs/usage-guide.ja.md">利用ガイド</a> · <a href="./docs/security.md">Security</a>
 </p>
 
-## What gets easier with CodeRouter
+## CodeRouter で何が楽になるか
 
-CodeRouter is a small router that sits between your coding agent (Claude Code / gemini-cli / codex / plain OpenAI SDK) and the LLMs behind it. Point your tool at one endpoint and CodeRouter picks the provider — starting with your local Ollama / llama.cpp, falling back to free cloud (OpenRouter free), and only touching paid APIs when you explicitly opt in.
+CodeRouter は、コーディングエージェント（Claude Code / gemini-cli / codex / 素の OpenAI SDK）と、その裏の LLM の間に挟まる小さなルーターです。ツールの向き先を 1 本のエンドポイントにまとめておけば、CodeRouter がプロバイダを順に選びます — まずローカル Ollama / llama.cpp、次に無料クラウド (OpenRouter free)、有料 API は明示的に opt-in したときだけ。
 
-Concretely, it takes care of things most beginners hit the hard way:
+初心者が普通に使うとぶつかる「地雷」を、CodeRouter がまとめて面倒見てくれます:
 
-- **Keep running Claude Code even with no API key and no Anthropic subscription.** Your local model (or OpenRouter's free tier) answers. Paid providers only get called if you set `ALLOW_PAID=true`.
-- **Don't lose the reply mid-stream.** When one provider dies mid-answer you get one clean error — not a Frankenstein reply spliced from two models.
-- **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
-- **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
-- **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
-- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 453 tests passing.
+- **API キー無し・Anthropic 課金無しのまま Claude Code を回せる。** ローカルモデル（または OpenRouter 無料枠）が答えます。有料プロバイダは `ALLOW_PAID=true` を明示したときだけ呼ばれます。
+- **返答が途中で消えない。** 1 プロバイダが途中で落ちてもクライアントには綺麗な `event: error` が 1 本届くだけ — 2 モデルを継ぎ接ぎしたフランケン応答にはなりません。
+- **うっかり課金しない。** `ALLOW_PAID=false` が既定。有料プロバイダをチェーンから外したときは理由を 1 行ログに出すので、なぜ使われなかったかが後で grep できます。
+- **ローカル Ollama の上で Claude Code / gemini-cli / codex が動く。** Claude Code は Anthropic のワイアフォーマット、Ollama / llama.cpp / LM Studio は OpenAI。CodeRouter が双方向に変換し、小さいローカルモデルがテキストで吐いてしまう `{"name":..., "arguments":...}` を tool_use ブロックへ復元してからエージェントに渡します。
+- **「なぜか動かない」の原因を教えてくれる。** `coderouter doctor --check-model <provider>` が 6 種類の典型的な失敗モード（コンテキスト切り詰め / ストリーム早期終了 / ツール呼び出し欠落 / reasoning フィールド漏れ / 認証 / Anthropic `thinking`）を実地プローブし、コピペ可能な YAML パッチを出します。
+- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 453 本緑。
 
 ```
-Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
+クライアント (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
         │
         ▼
-  CodeRouter  ──►  ① local model (Ollama / llama.cpp — free, top priority)
-                   ② free cloud (OpenRouter qwen3-coder:free, gpt-oss-120b:free, …)
-                   ③ paid cloud (Claude / GPT — only if ALLOW_PAID=true)
+  CodeRouter  ──►  ① ローカルモデル (Ollama / llama.cpp — 無料・最優先)
+                   ② 無料クラウド (OpenRouter qwen3-coder:free, gpt-oss-120b:free, …)
+                   ③ 有料クラウド (Claude / GPT — ALLOW_PAID=true のときだけ)
 ```
 
-### Live dashboard
+### ライブダッシュボード
 
-`coderouter dashboard` answers the questions you actually ask mid-incident, without grepping logs:
+`coderouter dashboard` は、障害調査中に実際に知りたい「いま何が起きているか」に、ログを grep せずに即答するための画面です:
 
-- Which providers are alive right now, and which one is currently answering?
-- Has a fallback fired recently, and why?
-- Is the paid gate still closed (i.e. am I still on the free path)?
-- What's the request volume over the last few minutes?
-- What just happened — the last N events, in order?
+- どのプロバイダが生きていて、いま応答しているのは誰か
+- フォールバックは直近で発火したか、発火したなら何が理由か
+- 有料ゲートは閉じたままか（= まだ無料経路で走っているか）
+- 直近数分のリクエスト流量はどうか
+- ついさっき何が起きたか — 直近 N 件のイベントが時系列で
 
-![CodeRouter dashboard — provider health, fallback gates, requests/min sparkline, recent events, usage mix](./docs/assets/dashboard-demo.png)
+![CodeRouter ダッシュボード — プロバイダ状態 / フォールバック & ゲート / requests/min スパークライン / 直近イベント / usage mix](./docs/assets/dashboard-demo.png)
 
-The snapshot above was taken while `scripts/demo_traffic.sh` drove mixed traffic (normal / stream / burst / fallback / paid-gate) against a local mock. Panels left-to-right, top-to-bottom: provider status, fallback & gate state, requests/min sparkline, recent events (most recent on top), and usage mix.
+上のスクリーンショットは `scripts/demo_traffic.sh` で混合トラフィック（normal / stream / burst / fallback / paid-gate）をローカルのモックに流している最中のものです。左上から: プロバイダ状態、フォールバック & ゲート状態、requests/min スパークライン、直近イベント（新しい順）、usage mix。
 
-## Do you need CodeRouter?
+## CodeRouter は自分に必要か？
 
-CodeRouter is a wire-translation + band-aid layer. If your agent already speaks OpenAI and your model behaves well, you probably don't need it. The two tables below are the short version; the full decision guide is in [`docs/when-do-i-need-coderouter.md`](./docs/when-do-i-need-coderouter.md).
+CodeRouter は wire 翻訳 + 絆創膏の層です。エージェントが既に OpenAI を喋り、モデルがお行儀良く動くなら、多くの場合不要です。下の 2 つの表が短縮版で、フルの判断ガイドは [`docs/when-do-i-need-coderouter.ja.md`](./docs/when-do-i-need-coderouter.ja.md) にあります。
 
-**By agent** — what can reach Ollama directly:
+**エージェント別** — Ollama に直接向けられるか:
 
-| Agent | Wire | Direct-to-Ollama | Need CodeRouter? |
+| エージェント | wire | Ollama 直続き | CodeRouter 必要？ |
 |---|---|---|---|
-| Claude Code | Anthropic | No | **Yes** — wire translation |
-| Codex CLI / plain OpenAI SDK | OpenAI | Yes, via `OPENAI_BASE_URL` | Optional |
-| gemini-cli | Gemini | No | Yes (adapter) |
-| GitHub Copilot CLI | GitHub-proprietary | **No (locked backend)** | N/A — can't be redirected |
+| Claude Code | Anthropic | ✕ | **必須** — wire 翻訳 |
+| Codex CLI / 素の OpenAI SDK | OpenAI | ◯（`OPENAI_BASE_URL`） | オプション |
+| gemini-cli | Gemini | ✕ | 必要（アダプタ） |
+| GitHub Copilot CLI | GitHub 独自 | **✕（バックエンド固定）** | 無力 — 差し替え不可 |
 
-**By model** — what misbehaves on direct path:
+**モデル別** — 直続きで崩れるか:
 
-| Model | Clean output? | CodeRouter filter that helps |
+| モデル | 出力綺麗？ | 効く CodeRouter フィルタ |
 |---|---|---|
-| `llama3.1` / `mistral-nemo` / `phi-4` / `qwen2.5` (non-coder) | Yes | — |
-| `qwen2.5-coder` | No — leaks `<think>` | `strip_thinking` |
-| `gpt-oss` / `deepseek-r1` / `qwq` | No — reasoning leaks | `strip_thinking` |
-| Small quants (Q2 / Q3) or Modelfiles with wrong template | Often no — bad tool JSON or stop markers | `repair_tool_call` / `strip_stop_markers` |
+| `llama3.1` / `mistral-nemo` / `phi-4` / `qwen2.5`（`-coder` でない） | ◯ | — |
+| `qwen2.5-coder` | ✕ — `<think>` 漏れ | `strip_thinking` |
+| `gpt-oss` / `deepseek-r1` / `qwq` | ✕ — 推論過程漏れ | `strip_thinking` |
+| 小さい量子化（Q2 / Q3）、テンプレ不整合 Modelfile | ✕ — tool JSON 壊れ / stop marker 漏れ | `repair_tool_call` / `strip_stop_markers` |
 
-If you're on an OpenAI-compatible agent with a well-behaved model and don't need fallback, `OPENAI_BASE_URL=http://localhost:11434/v1` is the simpler answer. Anything else — especially Claude Code, reasoning models, or multi-tier fallback with mid-stream safety — is where CodeRouter is doing real work.
+OpenAI 互換エージェント + お行儀の良いモデル + フォールバック不要、の構成なら `OPENAI_BASE_URL=http://localhost:11434/v1` の一行で済みます。それ以外 — 特に Claude Code、reasoning 系モデル、mid-stream ガード付きの多段フォールバック — が CodeRouter の仕事どころです。
 
-## Why not just use X directly?
+## 直接つなげばいいのでは？
 
-- **Ollama / llama.cpp / LM Studio directly.** Fast and free, but Claude Code (and most agents targeting `/v1/messages`) speak Anthropic wire format — these servers only speak OpenAI chat. You either hit "unsupported endpoint" or tool-use silently breaks because the model emits tool JSON as plain text. CodeRouter translates both directions and repairs the JSON before your agent sees it.
-- **LiteLLM.** Excellent project, but heavy — 100+ transitive dependencies — and doesn't natively expose `/v1/messages` for Claude Code.
-- **OpenRouter alone.** Free tier is rate-limited and occasionally down; paid-only is unfriendly to newcomers and to CI pipelines.
+- **Ollama / llama.cpp / LM Studio を直接叩く。** 確かに速くて無料ですが、Claude Code（および `/v1/messages` を前提にした多くのエージェント）は Anthropic 形式で話します — 上記サーバは OpenAI 形式だけ。結果、"unsupported endpoint" で弾かれるか、モデルが tool 呼び出しを素のテキストで吐いて tool-use が静かに壊れるかのどちらかです。CodeRouter は双方向に変換し、エージェントに渡る前に JSON を修復します。
+- **LiteLLM。** 良いプロダクトですが依存が重く（推移的依存 100+）、`/v1/messages` をネイティブに出しません。
+- **OpenRouter 単独。** 無料枠はレート制限があり、たまに落ちます。有料オンリーは新規ユーザーや CI には敷居が高い。
 
-Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friendly articles on *why the same local model sometimes works and sometimes doesn't* are published separately on Zenn / Note.
+設計不変項と今後のロードマップは [`plan.md`](./plan.md) を参照。初心者向けに「同じローカルモデルでも、なぜ人によって動く/動かないが分かれるのか」を解説する記事は Zenn / Note で別途公開しています。
 
-## Quickstart (3 commands)
+## クイックスタート（3 コマンド）
 
 ```bash
-# 1. Install (uses uv — fast, lockfile-friendly)
+# 1. インストール (uv を利用 — 高速・lockfile フレンドリー)
 uv sync
 
-# 2. Drop a sample config
+# 2. サンプル設定を置く
 mkdir -p ~/.coderouter
 cp examples/providers.yaml ~/.coderouter/providers.yaml
 
-# 3. Run
+# 3. 起動
 uv run coderouter serve
 ```
 
-Then point any OpenAI client at `http://127.0.0.1:4000`:
+あとは任意の OpenAI クライアントを `http://127.0.0.1:4000` に向けるだけです:
 
 ```bash
 curl http://127.0.0.1:4000/v1/chat/completions \
@@ -111,116 +111,115 @@ curl http://127.0.0.1:4000/v1/chat/completions \
   }'
 ```
 
-The `model` field is currently a placeholder — routing is decided by the `profile` field (defaults to `default` from `providers.yaml`).
+`model` フィールドは現状プレースホルダです — ルーティングは `profile` フィールド（`providers.yaml` の `default` がデフォルト）で決まります。
 
-New to CodeRouter? The [usage guide](./docs/usage-guide.md) walks through hardware-tier model picks, tuning defaults, per-OS launch flow, and OpenRouter free pairing. (日本語版: [利用ガイド](./docs/usage-guide.ja.md))
+はじめての方は [利用ガイド](./docs/usage-guide.ja.md) を参照してください。ハードウェア別のモデル選定、チューニング既定値、OS ごとの起動フロー、OpenRouter 無料枠とのペア方針を一通り解説しています。(English: [usage guide](./docs/usage-guide.md))
 
-## OS support
+## OS 対応
 
-CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, ollama, claude-code)`.
+CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(coderouter, ollama, claude-code)` です。
 
-| OS | Server | Local inference | Notes |
+| OS | サーバー | ローカル推論 | メモ |
 |---|---|---|---|
-| macOS — Apple Silicon (M1–M5) | ✅ | ✅ Metal (native) | **Primary dev target** |
-| macOS — Intel | ✅ | ⚠️ CPU only | Cloud fallback only is practical |
-| Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ CUDA or CPU | Fully supported |
-| Linux — ARM64 (Pi 5 / Graviton) | ✅ | ⚠️ CPU on Pi | Usable as a route-to-cloud proxy |
-| Windows — WSL2 (Ubuntu) | ✅ | ✅ | **Recommended Windows path** |
-| Windows — native | ⚠️ partial | ✅ CUDA | `scripts/verify_*.sh` need bash (Git Bash/WSL2) |
+| macOS — Apple Silicon (M1–M5) | ✅ | ✅ Metal ネイティブ | **主要開発ターゲット** |
+| macOS — Intel | ✅ | ⚠️ CPU のみ | 実用はクラウドフォールバックのみ |
+| Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ CUDA または CPU | フル対応 |
+| Linux — ARM64 (Pi 5 / Graviton) | ✅ | ⚠️ Pi では CPU | クラウド中継プロキシとして使える |
+| Windows — WSL2 (Ubuntu) | ✅ | ✅ | **Windows ではこの経路を推奨** |
+| Windows — native | ⚠️ 一部 | ✅ CUDA | `scripts/verify_*.sh` は bash 必須 (Git Bash/WSL2) |
 
-Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs/usage-guide.md#1-os-compatibility).
+注意点や「ローカル GPU なし」向けレシピを含むフル版マトリクス: [利用ガイド §1](./docs/usage-guide.ja.md#1-os-互換性)
 
-## Status — v1.0 stable (2026-04)
+## ステータス — v1.0 安定版 (2026-04)
 
-**453 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+**テスト 453 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
 
-What CodeRouter can do for you today:
+今日の CodeRouter が届ける価値:
 
-- **Bridge any client to any provider.** Accept requests from any OpenAI-compatible client **and** from Claude Code (via `/v1/messages`). Route them — streaming or non-streaming — to a local Ollama, OpenRouter free, Anthropic, or any mix of those in a single fallback chain.
-- **Fall back safely without leaking partial responses.** If the first provider fails before the first byte, the next one tries. If it fails *after* the first byte, the client sees one clean `event: error` — not a spliced Frankenstein reply.
-- **Pay only when you opt in.** `ALLOW_PAID=false` (the default) keeps paid providers out of every chain, and emits one clear log line when it does block.
-- **Repair what small local models break.** Qwen/DeepSeek-style models that emit `{"name":..., "arguments":...}` as plain text get lifted back into valid `tool_use` blocks before Claude Code sees them.
-- **Tell you what's wrong.** `coderouter doctor --check-model <provider>` runs six probes — auth, context-window truncation, streaming cutoff, tool-call capability, reasoning-field leaks, Anthropic `thinking` support — and prints copy-paste YAML patches when your declarations don't match reality.
-- **Scrub reasoning leakage.** `output_filters: [strip_thinking, strip_stop_markers]` on any provider removes `<think>…</think>` blocks and six stop-marker variants from the response stream, stably across SSE chunk boundaries.
-- **Preserve Anthropic-native features when the chain reaches Anthropic.** `cache_control`, `thinking`, and `anthropic-beta` header-gated body fields pass through verbatim on `kind: anthropic` providers; lossy translation down to OpenAI shape is logged, not silent.
+- **どのクライアントもどのプロバイダに橋渡し。** OpenAI 互換クライアントからのリクエストと Claude Code（`/v1/messages` 経由）両方を受け入れ、ストリーミング/非ストリーミングを問わず、ローカル Ollama / OpenRouter 無料 / Anthropic / それらの混在にルーティングします。
+- **部分レスポンスを垂れ流さず安全にフォールバック。** 最初のバイト前にプロバイダが失敗したら次を試す。**最初のバイト以降**に失敗したら、クライアントには綺麗な `event: error` が 1 本届くだけ — 2 つのプロバイダを継ぎ接ぎしたフランケン応答は起きません。
+- **明示的にオプトインしたときだけ課金。** `ALLOW_PAID=false`（既定）がチェーンから有料プロバイダを外し、ブロック時は 1 行の明確なログを出します。
+- **小さいローカルモデルが壊すものを修復。** Qwen / DeepSeek 系がテキストとして吐いた `{"name":..., "arguments":...}` は、Claude Code に届く前に有効な `tool_use` ブロックへ復元されます。
+- **何がおかしいかを教えてくれる。** `coderouter doctor --check-model <provider>` が 6 プローブ（認証 / コンテキスト切り詰め / ストリーム中断 / ツール呼び出し能力 / reasoning フィールド漏れ / Anthropic `thinking` 対応）を回し、宣言と実挙動が食い違えばコピペ可能な YAML パッチを出します。
+- **reasoning 漏れをスクラブ。** プロバイダに `output_filters: [strip_thinking, strip_stop_markers]` を付ければ `<think>…</think>` と 6 種の stop マーカー variants が SSE チャンク境界を跨いでも安定して剥がれます。
+- **Anthropic ネイティブ機能は Anthropic に届いたら保持。** `cache_control` / `thinking` / `anthropic-beta` ヘッダでゲートされる body フィールドは `kind: anthropic` プロバイダでそのまま通り、OpenAI 形状へ落ちる場合のロッシー変換は（沈黙ではなく）ログで可視化されます。
 
-**Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
+**リリース単位の詳細が欲しい？** v0.x と v1.0-A/B/C の各スライス — 何が入り、何本のテストが増え、なぜ必要だったのか — は [CHANGELOG.md](./CHANGELOG.md) に揃っています。設計の不変項と今後のロードマップは [plan.md](./plan.md)。
 
-**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ — metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh` (shipped). v1.6 — `coderouter doctor --network` for CI, plus launcher scripts (originally slated for v1.1; re-scoped after v1.5).
+**次の予定**（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）: v1.5 ✅ — メトリクス / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh` (出荷済み)。v1.6 — CI 向け `coderouter doctor --network` とランチャースクリプト（当初は v1.1 に予定されていたが、v1.5 が先行出荷されたため v1.6 に繰り下げ）。
 
-### Use it with Claude Code
+### Claude Code と一緒に使う
 
 ```bash
-# Terminal 1: start CodeRouter with a Claude Code-tuned profile
+# ターミナル 1: Claude Code 向けにチューニングしたプロファイルで CodeRouter を起動
 uv run coderouter serve --port 8088
 
-# Terminal 2: point Claude Code at it, selecting the tuned profile via header
+# ターミナル 2: Claude Code を CodeRouter に向け、ヘッダでチューニング済みプロファイルを選ぶ
 ANTHROPIC_BASE_URL=http://localhost:8088 \
 ANTHROPIC_AUTH_TOKEN=dummy \
 claude
 ```
 
-To use the `claude-code` profile from `examples/providers.yaml` (7b first, 14b as quality fallback, 14b timeout bumped to 300s), set it as the default in your config:
+`examples/providers.yaml` の `claude-code` プロファイル（7b を先頭、14b を品質フォールバック、14b のタイムアウトを 300s に拡大）を使うには、設定で既定にします:
 
 ```yaml
 # ~/.coderouter/providers.yaml
 default_profile: claude-code
 ```
 
-Or pick the profile at server-launch time with the `--mode` flag (v0.6-A):
+もしくは起動時に `--mode` フラグで選択 (v0.6-A):
 
 ```bash
 uv run coderouter serve --port 8088 --mode claude-code
-# equivalent to: CODEROUTER_MODE=claude-code uv run coderouter serve --port 8088
+# 同等: CODEROUTER_MODE=claude-code uv run coderouter serve --port 8088
 ```
 
-`--mode` overrides the YAML `default_profile` for this process only. Per-request overrides (`X-CodeRouter-Profile` header, or `profile` field in the body) still win, so `--mode` is the right knob when you want to try a different chain without editing the config file. Unknown profile names fail fast at startup rather than on the first request.
+`--mode` はこのプロセス限定で YAML の `default_profile` を上書きします。リクエスト単位の上書き (`X-CodeRouter-Profile` ヘッダ、または body の `profile` フィールド) は依然勝つので、`--mode` は「設定ファイルを編集せずに別のチェーンを試したい」ときのつまみです。未知のプロファイル名は初回リクエストではなく起動時 fast-fail です。
 
-The profile itself looks like this in `examples/providers.yaml` — copy it verbatim, then edit the `base_url` / `model` of each `providers:` entry to match your local stack:
+`examples/providers.yaml` 側のプロファイルはこのような形です — そのままコピーし、各 `providers:` エントリの `base_url` / `model` をあなたのローカルスタックに合わせて書き換えてください:
 
 ```yaml
-# Tuned for ANTHROPIC_BASE_URL=http://localhost:8088 claude.
-# Claude Code declares all its tools (Bash/Glob/Read/Write/...) every turn,
-# so the router always uses the v0.3-D tool-downgrade path; user-felt latency
-# ≈ upstream total response time. Put the fastest tool-capable model first,
-# 14b second as a quality fallback, 2 free clouds for rate-limit escape,
-# and Claude as paid last resort.
+# ANTHROPIC_BASE_URL=http://localhost:8088 claude 用にチューニング。
+# Claude Code は毎ターン全ツール (Bash/Glob/Read/Write/...) を宣言するので、
+# ルーターは常に v0.3-D の tool-downgrade 経路を使う。ユーザー体感レイテンシ
+# ≒ 上流のトータル応答時間。先頭に最速の tool 対応モデル、2 番手に 14b を品質
+# フォールバックに、レート制限脱出に無料クラウド 2 種、最後の砦に Claude。
 profiles:
   - name: claude-code
     providers:
-      - ollama-qwen-coder-7b         # ~30–60s/turn on M-series, tool-capable
-      - ollama-qwen-coder-14b        # quality fallback (timeout_s: 300)
-      - openrouter-free              # qwen/qwen3-coder:free (262K context)
-      - openrouter-gpt-oss-free      # openai/gpt-oss-120b:free (different vendor = rate-limit escape)
-      - openrouter-claude            # paid, requires ALLOW_PAID=true
+      - ollama-qwen-coder-7b         # M 系で ~30–60s/ターン、tool 対応
+      - ollama-qwen-coder-14b        # 品質フォールバック (timeout_s: 300)
+      - openrouter-free              # qwen/qwen3-coder:free (262K コンテキスト)
+      - openrouter-gpt-oss-free      # openai/gpt-oss-120b:free (別ベンダー = レート制限脱出)
+      - openrouter-claude            # 有料、ALLOW_PAID=true が必要
 ```
 
-If you'd rather have the paid tier go through Anthropic's native API (so `cache_control` / `thinking` blocks survive when reached via the Anthropic ingress), swap `openrouter-claude` for `anthropic-direct` — the `claude-code-direct` profile in `examples/providers.yaml` does exactly that.
+有料ティアを Anthropic のネイティブ API にしたい場合（Anthropic ingress 経由での `cache_control` / `thinking` ブロック生存が目的なら）、`openrouter-claude` を `anthropic-direct` に差し替えます — `examples/providers.yaml` の `claude-code-direct` プロファイルがまさにそれです。
 
-#### Profile-level parameter overrides (v0.6-B)
+#### プロファイル単位のパラメータ上書き (v0.6-B)
 
-A profile can override two per-call provider parameters for every attempt in its chain — handy when the same provider list should behave differently under different profiles (e.g. a long-context `/no_think` mode vs. a short chat mode):
+プロファイルはチェーン中の全試行に対し 2 つのパラメータを上書き可能で、同じプロバイダ一覧を別プロファイルで違った挙動にしたいとき（例: 長文 `/no_think` モード vs 短文チャットモード）に便利です:
 
 ```yaml
 profiles:
   - name: claude-code-long
-    timeout_s: 600             # replaces ProviderConfig.timeout_s for this profile
-    append_system_prompt: ""   # empty string = explicitly clear the provider's directive
+    timeout_s: 600             # このプロファイルでは ProviderConfig.timeout_s を置換
+    append_system_prompt: ""   # 空文字 = プロバイダ指示を明示的にクリア
     providers:
       - ollama-qwen-coder-14b
       - openrouter-free
 ```
 
-Semantics: the profile value **replaces** the provider's value when set (not appended), keeping parity with how scalar fields like `timeout_s` naturally behave. `append_system_prompt: ""` explicitly clears the provider directive for this profile (distinguished from "unset", which means "fall back to the provider's default"). Unset fields leave every provider's defaults intact. `retry_max` is deferred to a later minor since adapter-level retry is still unpiloted — the fallback chain itself is currently the retry mechanism.
+セマンティクス: プロファイル値は設定されていればプロバイダ値を**置き換え**ます（append ではない）。`timeout_s` のようなスカラでの素直な挙動と一致。`append_system_prompt: ""` はこのプロファイル限定でプロバイダ指示を明示消去します（「未設定」= プロバイダ既定にフォールバック、と区別）。未設定フィールドはプロバイダ既定をそのまま残します。`retry_max` はアダプタレイヤのリトライが未実装のため後続マイナーに持ち越し — 現状はフォールバックチェーン自体がリトライ機構です。
 
-#### Mode aliases — `X-CodeRouter-Mode` (v0.6-D)
+#### Mode エイリアス — `X-CodeRouter-Mode` (v0.6-D)
 
-Clients that want to express **intent** rather than a concrete profile name can send an `X-CodeRouter-Mode` header, and CodeRouter resolves it against a YAML `mode_aliases:` block:
+具体プロファイル名ではなく**意図**を表現したいクライアントは `X-CodeRouter-Mode` ヘッダを送れます。CodeRouter は YAML `mode_aliases:` ブロックで解決します:
 
 ```yaml
 # providers.yaml
 mode_aliases:
-  coding: claude-code          # client sends Mode: coding → profile claude-code
+  coding: claude-code          # クライアントが Mode: coding → プロファイル claude-code
   long:   claude-code-long
   fast:   ollama-only
 ```
@@ -232,49 +231,48 @@ curl http://localhost:8088/v1/chat/completions \
   -d '{ "messages": [{"role":"user","content":"hi"}] }'
 ```
 
-Precedence (first hit wins): body `profile` > `X-CodeRouter-Profile` header > `X-CodeRouter-Mode` header > `default_profile`. Mode sits below Profile because **Profile is the implementation, Mode is the intent** — when a caller specifies the concrete profile, respect it verbatim. This matters when a proxy in front of CodeRouter auto-injects a Mode header: an explicit body/header `profile` from the caller still wins.
+優先度（先着勝ち）: body `profile` > `X-CodeRouter-Profile` ヘッダ > `X-CodeRouter-Mode` ヘッダ > `default_profile`。Mode が Profile より下なのは **Profile は実装、Mode は意図** であるため — 呼び出し側が具体プロファイルを指定したときはそのまま尊重します。CodeRouter の前段プロキシが Mode を自動付与する構成でも、呼び出し側の明示 body/ヘッダ `profile` が勝つ、これが大事な理由です。
 
-Guardrails: broken alias targets fast-fail at startup (same philosophy as `default_profile` validation), unknown Mode values return 400 with the list of declared aliases, and every resolution logs a `mode-alias-resolved` INFO line so operators can grep the mapping after the fact.
+ガードレール: 壊れたエイリアス対象は起動時 fast-fail（`default_profile` バリデーションと同じ哲学）、未知 Mode は宣言済エイリアス一覧付き 400、解決ごとに `mode-alias-resolved` INFO を出すので運用者はマッピングを後で grep できます。
 
-#### Model capabilities registry — `model-capabilities.yaml` (v0.7-A)
+#### モデルケイパビリティレジストリ — `model-capabilities.yaml` (v0.7-A)
 
-The "which Anthropic families accept `thinking: {type: enabled}`" knowledge used to live as a regex literal inside `coderouter/routing/capability.py`. From v0.7-A it lives in `coderouter/data/model-capabilities.yaml` (shipped with the package) with an optional override at `~/.coderouter/model-capabilities.yaml`. Adding a new family when Anthropic releases one is a one-line YAML edit — no code change, no release cycle.
+「どの Anthropic ファミリが `thinking: {type: enabled}` を受け付けるか」の知識は、以前は `coderouter/routing/capability.py` 内の正規表現リテラルでした。v0.7-A からは `coderouter/data/model-capabilities.yaml`（パッケージ同梱）に移行し、任意で `~/.coderouter/model-capabilities.yaml` によるユーザー上書きが可能です。Anthropic が新ファミリを出したら YAML 1 行で追加 — コード変更もリリースサイクルも不要。
 
 ```yaml
-# ~/.coderouter/model-capabilities.yaml — optional user override
+# ~/.coderouter/model-capabilities.yaml — 任意のユーザー上書き
 version: 1
 rules:
-  # A hypothetical new family Anthropic just shipped; you want to use
-  # it before the CodeRouter bundled defaults are updated.
+  # 仮に Anthropic が新ファミリを出し、CodeRouter の同梱既定更新前に使いたい場合。
   - match: "claude-sonnet-5-*"
     kind: anthropic
     capabilities:
       thinking: true
 
-  # Your local Ollama reliably calls tools on this tag — declare it so
-  # the doctor probe (v0.7-B) agrees and future glob consumers can
-  # see it as an opinionated default.
+  # このタグのローカル Ollama では確実にツール呼び出しできるので宣言。
+  # v0.7-B doctor の判定と合わせ、将来の glob 消費者からも
+  # 方針のある既定として参照されるようにする。
   - match: "qwen3-coder:*"
     kind: openai_compat
     capabilities:
       tools: true
 ```
 
-Schema: each rule has `match` (fnmatch glob against `provider.model`, case-sensitive), optional `kind` filter (`"anthropic"` / `"openai_compat"` / `"any"`, default `"any"`), and a `capabilities:` map that can declare `thinking` / `reasoning_passthrough` / `tools` / `max_context_tokens`. Rules are walked top-to-bottom and the **first rule that declares each flag** wins for that flag — a rule can override one capability while leaving others to fall through.
+スキーマ: 各ルールは `match` (`provider.model` に対する fnmatch glob、大小区別)、任意の `kind` フィルタ (`"anthropic"` / `"openai_compat"` / `"any"`、既定 `"any"`)、`capabilities:` マップ（`thinking` / `reasoning_passthrough` / `tools` / `max_context_tokens` を宣言可能）。ルールは上から順に評価され、**各フラグごとに最初に宣言したルール**が勝ちます。ルールは 1 つのケイパビリティだけ上書きし、他はフォールスルーさせる使い方も可能。
 
-Precedence across the layers is `providers.yaml` `capabilities.*` per-provider (explicit opt-in) > user `model-capabilities.yaml` > bundled `model-capabilities.yaml` > unset (treated as False). This means a user never loses the ability to override — an explicit `capabilities.thinking: true` on a provider in `providers.yaml` still wins over the registry, same as v0.5-A.
+レイヤ間の優先度は `providers.yaml` `capabilities.*`（プロバイダ単位の明示 opt-in）> ユーザー `model-capabilities.yaml` > 同梱 `model-capabilities.yaml` > 未設定（False 扱い）。ユーザーは常に上書き権限を失いません — `providers.yaml` のプロバイダで明示的に `capabilities.thinking: true` を付ければレジストリに勝つ点は v0.5-A から変わりません。
 
-Typos are caught at load time: unknown top-level fields, unknown flag names, and invalid `kind` values raise `ValidationError` before the server accepts traffic. The same fast-fail stance as `default_profile` / `mode_aliases` validation.
+タイポはロード時に検出: 未知のトップレベルフィールド、未知のフラグ名、不正な `kind` はいずれも `ValidationError` を上げてサーバーがトラフィックを受け付ける前に停止します。`default_profile` / `mode_aliases` バリデーションと同じ fast-fail 姿勢です。
 
 #### Doctor — `coderouter doctor --check-model <provider>` (v0.7-B)
 
-"I set up Ollama and pointed the router at it, but something's off" is the most common onboarding failure. The v0.7-B `doctor` subcommand makes that a one-liner to diagnose:
+「Ollama を立ててルーターを向けたけど、どうも何かがおかしい」は最多の onboarding 失敗です。v0.7-B の `doctor` サブコマンドはこれを一行診断に変えます:
 
 ```bash
 coderouter doctor --check-model ollama-qwen-coder-14b
 ```
 
-It runs four small probes (≤100 tokens each) against that one provider — **not** the whole fallback chain — and prints a verdict table plus copy-paste YAML patches if the observed behavior doesn't match what `providers.yaml` + `model-capabilities.yaml` currently declare:
+フォールバックチェーン全体ではなく、**指定したプロバイダ単体**に対し小さな 4 プローブ（各 ≤100 トークン）を走らせ、観測挙動が `providers.yaml` + `model-capabilities.yaml` の現宣言と食い違えば判定表とコピペ可能な YAML パッチを出力します:
 
 ```
 provider: ollama-qwen-coder-14b  (kind=openai_compat, model=qwen2.5-coder:14b)
@@ -292,106 +290,106 @@ suggested patch for ~/.coderouter/providers.yaml:
         tools: true        # observed: model returned a well-formed tool_use block
 ```
 
-The four probes and why they exist:
+4 プローブとその存在意義:
 
-- **auth+basic-chat** — one trivial turn. Catches the "API key not set" / "wrong base_url" / "provider unreachable" class of failures up front. If this probe fails, the remaining three are marked `SKIP` so you don't waste time (or tokens) chasing symptoms.
-- **tool_calls** — sends a fake `echo(text: string)` tool spec and a prompt that should trigger it. Non-destructive on purpose — no real side effects upstream. Verdict is `NEEDS_TUNING` when the model emits a valid `tool_use` but the registry says `tools: false` (or vice versa).
-- **thinking** — Anthropic-only; sends `thinking: {type: enabled, budget_tokens: 16}` natively (bypassing the OpenAI-shape adapter) and checks whether the upstream accepts the field. Emits a registry patch (not a `providers.yaml` patch) when the family isn't yet in `model-capabilities.yaml`.
-- **reasoning-leak** — issues a chat turn and inspects the raw upstream body **before** the v0.5-C strip runs, so it can distinguish "model returns `reasoning`" from "adapter already scrubbed it". Relevant to OpenRouter free models like `openai/gpt-oss-120b:free`.
+- **auth+basic-chat** — 些細な 1 ターン。「API キー未設定」「`base_url` 違い」「プロバイダ到達不能」のクラスを先に捕まえる。失敗した場合、残り 3 プローブは `SKIP` となり症状追いで時間（とトークン）を浪費しない。
+- **tool_calls** — ダミー `echo(text: string)` ツール仕様と、それを発火させるはずのプロンプトを送る。意図的に非破壊（上流への副作用なし）。モデルが有効な `tool_use` を吐いたがレジストリが `tools: false` と言っている（あるいは逆）とき `NEEDS_TUNING`。
+- **thinking** — Anthropic 限定。`thinking: {type: enabled, budget_tokens: 16}` をネイティブ送出（OpenAI 形状アダプタをバイパス）し、上流がフィールドを受け付けるか確認。ファミリが `model-capabilities.yaml` に未登録ならレジストリパッチ（`providers.yaml` パッチではない）を出す。
+- **reasoning-leak** — chat ターンを発行し、v0.5-C strip が走る**前**の上流生ボディを検査。「モデルが `reasoning` を返した」と「アダプタが既に除去済」を区別できる。OpenRouter 無料モデル（`openai/gpt-oss-120b:free` など）で意味がある。
 
-Exit codes (designed to drop into CI):
+終了コード（CI 投入想定で設計）:
 
-| Code | Meaning |
+| コード | 意味 |
 |------|---------|
-| `0`  | All probes match declared capabilities; nothing to patch |
-| `2`  | At least one `NEEDS_TUNING` verdict; YAML patches are in the output |
-| `1`  | A probe couldn't run — auth failed, provider unreachable, or unknown provider name. Fix the precondition and re-run |
+| `0`  | 全プローブが宣言ケイパビリティと一致、パッチ不要 |
+| `2`  | 1 つ以上の `NEEDS_TUNING`、YAML パッチは出力内 |
+| `1`  | プローブ実行不能 — auth 失敗、プロバイダ到達不能、または未知プロバイダ名。前提条件を直して再実行 |
 
-Precedence when multiple signals fire: `1` (blocker) > `2` (tuning) > `0` (clean). That matches the Unix lint convention where `2` means "auto-fixable" and `1` means "give up". One probe failure doesn't suppress the others — each verdict line is emitted for transparency, even under auth short-circuit where the skipped probes are shown with `SKIP: upstream auth failed`.
+複数シグナル同時発火時の優先度は `1`（ブロッカ）> `2`（チューニング）> `0`（クリーン）。Unix lint 規約（`2` = 自動修復可、`1` = 諦め）と揃えています。1 プローブの失敗で他が抑制されることはなく、auth 短絡時でもスキップされたプローブは `SKIP: upstream auth failed` と明記して透明性を維持します。
 
-The subcommand targets **one** provider per invocation by design: a doctor probe shouldn't suggest registry-glob changes that affect other providers sharing the same family. Re-run with a different `--check-model` name for each provider in your chain.
+このサブコマンドは**プロバイダ 1 つ**を対象とする設計です: doctor のプローブが、同ファミリを共有する他プロバイダに波及するレジストリ glob 変更を提案すべきではないからです。チェーン内の各プロバイダについて `--check-model` を変えて再実行してください。
 
-#### What to expect
+#### 体感の目安
 
-- **First byte latency**: Claude Code declares all its tools (Bash/Glob/Read/Write/…) every turn, so CodeRouter always uses the v0.3-D tool-downgrade path (internal non-streaming + SSE replay). User-felt latency ≈ upstream total response time.
-- **On M-series macOS**, qwen2.5-coder:7b returns in ~30–60s per turn, 14b in ~2 min. That's dominated by prompt prefill of the 15–20K-token system prompt Claude Code sends every turn — **not** a CodeRouter overhead.
-- **Tool selection quality** is a model limitation, not a wire issue. CodeRouter repairs the wire (text JSON → `tool_use` block); whether the model chose the *right* tool is on the model. qwen2.5-coder:14b sometimes picks `Glob` where `Bash` would be correct — the remedy is a stronger local model or falling through to Claude via `ALLOW_PAID=true`.
-- **Mid-stream failure** (Ollama dies after first chunk) surfaces as a single `event: error` to the client, no retry — the partial response is preserved and the stream closes cleanly.
+- **初バイトレイテンシ**: Claude Code は毎ターン全ツール (Bash/Glob/Read/Write/…) を宣言するので、CodeRouter は常に v0.3-D の tool-downgrade 経路（内部非ストリーミング + SSE リプレイ）を使います。体感レイテンシ ≒ 上流のトータル応答時間。
+- **M 系 macOS では** qwen2.5-coder:7b が ~30–60s/ターン、14b が ~2 分。主因は Claude Code が毎ターン送る 15–20K トークンのシステムプロンプト prefill で、**CodeRouter のオーバーヘッドではありません**。
+- **ツール選択の品質**はモデル側の限界で、ワイア層の問題ではありません。CodeRouter はワイア（テキスト JSON → `tool_use` ブロック）を修復しますが、モデルが**正しいツール**を選んだかは別問題。qwen2.5-coder:14b は `Bash` が正解の場面で `Glob` を選ぶことがあり — 対策はより強いローカルモデル、あるいは `ALLOW_PAID=true` で Claude にフォールスルーさせることです。
+- **ミッドストリーム失敗**（Ollama が最初のチャンク後に落ちる等）は単発の `event: error` としてクライアントに届き、リトライはありません — 部分レスポンスは保持され、ストリームはクリーンに閉じます。
 
-Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
+予定（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）:
 
-- v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
-- v1.5 — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
-- v1.6 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers (originally scoped as v1.1; re-labelled to v1.6 after v1.5 shipped ahead of the launcher block)
+- v1.0 — 14 ケースのリグレッションスイート、Code Mode (スリム版 Claude Code ハーネス); 出力クリーニングは **v1.0-A** で `output_filters` チェーンとして完了
+- v1.5 — **メトリクスダッシュボード（出荷済み）** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML 1 ページ) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` トラフィックジェネレータ + `display_timezone` 設定
+- v1.6 — `coderouter doctor --network` (CI 用の明示的ネット許可ラン)、ランチャー（当初 v1.1 に予定されていたが、v1.5 が先行出荷されたため v1.6 に繰り下げ）
 
-## Choosing `kind: openai_compat` vs `kind: anthropic`
+## `kind: openai_compat` と `kind: anthropic` の選び方
 
-Every provider in `providers.yaml` has a `kind`. You have two options. The choice affects which wire-level features survive the hop and which clients can reach it.
+`providers.yaml` の各プロバイダに `kind` があります。2 択です。どちらを選ぶかでホップを超えて生存するワイアレベル機能と、到達可能なクライアントが変わります。
 
-| Dimension | `kind: openai_compat` | `kind: anthropic` |
+| 観点 | `kind: openai_compat` | `kind: anthropic` |
 |---|---|---|
-| Reachable from `/v1/chat/completions` | ✅ native — no translation | ✅ via v0.4-A reverse translation |
-| Reachable from `/v1/messages` | ✅ via translation + tool-call repair | ✅ native passthrough |
-| Targets | llama.cpp, Ollama, OpenRouter, LM Studio, Together, Groq, ... | `api.anthropic.com`, Bedrock's Anthropic shim, any server speaking the Messages wire |
-| `cache_control` blocks | ❌ lost (no OpenAI equivalent) | ✅ preserved end-to-end when reached via `/v1/messages` |
-| `thinking` blocks | ❌ lost | ✅ preserved when reached via `/v1/messages` |
-| Structured `tool_use` SSE events | synthesized from repair (v0.3-D downgrade) | passthrough from upstream |
-| Tool-call repair (plain-text JSON → `tool_use`) | ✅ needed for local models that emit broken JSON | n/a (Anthropic never emits broken JSON) |
-| `anthropic-beta` header forwarding (v0.4-D) | n/a | ✅ verbatim |
+| `/v1/chat/completions` から到達 | ✅ 変換不要 | ✅ v0.4-A 逆変換経由 |
+| `/v1/messages` から到達 | ✅ 変換 + tool-call 修復経由 | ✅ ネイティブパススルー |
+| 対象 | llama.cpp, Ollama, OpenRouter, LM Studio, Together, Groq, ... | `api.anthropic.com`、Bedrock の Anthropic シム、Messages ワイアを話す任意サーバー |
+| `cache_control` ブロック | ❌ ロスト（OpenAI 側に等価物なし） | ✅ `/v1/messages` 経由で end-to-end 保持 |
+| `thinking` ブロック | ❌ ロスト | ✅ `/v1/messages` 経由で保持 |
+| 構造化 `tool_use` SSE イベント | 修復から合成 (v0.3-D downgrade) | 上流からパススルー |
+| tool-call 修復 (素テキスト JSON → `tool_use`) | ✅ 壊れた JSON を吐くローカルモデル向けに必要 | n/a (Anthropic は壊れた JSON を出さない) |
+| `anthropic-beta` ヘッダ転送 (v0.4-D) | n/a | ✅ そのまま |
 
-**Rules of thumb:**
+**判断の目安:**
 
-- **Local model or OpenRouter free tier** → `kind: openai_compat`. The reverse path exists, but there's no reason to pay translation cost for providers that speak OpenAI wire natively.
-- **Claude via the official API, and you want `cache_control` / `thinking` to work** → `kind: anthropic`, reached via `/v1/messages` (i.e. `ANTHROPIC_BASE_URL=http://localhost:8088` from Claude Code). The `claude-code-direct` profile in `examples/providers.yaml` is pre-wired for this case.
-- **Claude reached from an OpenAI client** (`openai` SDK / curl against `/v1/chat/completions`) → `kind: anthropic` still works — basic chat / tools / vision survive the v0.4-A reverse path. But `cache_control` / `thinking` cannot be sent because OpenAI has no equivalent shape.
-- **Mixed chain** (local first, Claude as paid last resort) → list both kinds in the same profile. The engine's polymorphic dispatch handles the hop at each provider boundary.
+- **ローカルモデルまたは OpenRouter 無料枠** → `kind: openai_compat`。逆経路は存在しますが、OpenAI ワイアをネイティブに話すプロバイダに対し変換コストを払う理由はありません。
+- **公式 API 経由の Claude で、`cache_control` / `thinking` を効かせたい** → `kind: anthropic`、`/v1/messages` 経由（= Claude Code から `ANTHROPIC_BASE_URL=http://localhost:8088`）。`examples/providers.yaml` の `claude-code-direct` プロファイルがこのケース用に事前配線されています。
+- **OpenAI クライアントから Claude に到達**（`openai` SDK / curl → `/v1/chat/completions`）→ `kind: anthropic` は引き続き動きます — 基本 chat / tools / vision は v0.4-A 逆経路で生き残ります。ただし OpenAI に等価形状が無いため `cache_control` / `thinking` は送れません。
+- **混在チェーン**（ローカル先頭、Claude を有料最終砦に）→ 同プロファイルに両 `kind` を並べます。エンジンの多態ディスパッチが各境界のホップを扱います。
 
-## Troubleshooting
+## トラブルシューティング
 
-First pass: **run [`coderouter doctor --check-model <provider>`](#doctor--coderouter-doctor---check-model-provider-v07-b)** against the failing provider. It runs four small probes and prints copy-paste YAML patches for any declaration mismatch. If `doctor` comes back clean and the issue is still reproducing, fall through to the log-reading workflow below.
+まず第一に: 失敗中のプロバイダに対して **[`coderouter doctor --check-model <provider>`](#doctor--coderouter-doctor---check-model-provider-v07-b)** を走らせてください。4 プローブを回し、宣言と観測の不一致があればコピペ YAML パッチを出します。`doctor` がクリーンを返すのに問題が続くなら、下のログ読みワークフローにフォールスルー。
 
-Thanks to v0.4-D, failed upstream requests now appear in the server log with the **exact upstream response body** attached. When a request fails, look for:
+v0.4-D 以降、失敗した上流リクエストはサーバーログに**上流レスポンスボディそのもの**を添えて現れます。リクエストが失敗したときは次のような行を探します:
 
 ```
 {"level": "WARNING", "msg": "provider-failed", "provider": "...",
  "status": 4xx, "retryable": true|false, "error": "[provider status=4xx] 4xx from upstream: {...}"}
 ```
 
-Common patterns and what they mean:
+よくあるパターンと意味:
 
-- **`"Extra inputs are not permitted"` on a body field** — the upstream model (usually Anthropic) rejected a field it doesn't know. If the field is gated behind an `anthropic-beta` header (`context_management`, newer `cache_control` / `thinking` variants), check that the client actually set the header. CodeRouter forwards it verbatim as of v0.4-D, but if the client never sent one, no header will reach upstream.
-- **`"adaptive thinking is not supported on this model"`** — as of v0.5-A this should no longer reach the user. The capability gate routes `thinking: {type: enabled}` requests to providers whose model accepts the field (heuristic: `claude-opus-4-*` / `claude-sonnet-4-6` / `claude-sonnet-4-7` / `claude-haiku-4-*`), and strips the block when the chain only has incapable providers. If you still see this error, either (a) your chain has a newer Anthropic family that isn't in the heuristic yet — set `capabilities.thinking: true` on that provider to opt in explicitly, or (b) file an issue with the model slug so the heuristic can be updated. Check the server log for `capability-degraded` lines to confirm the gate is firing.
-- **`capability-degraded` log with `reason: "non-standard-field"` and `dropped: ["reasoning"]`** (v0.5-C) — the upstream model returned an OpenAI-spec-non-compliant `reasoning` field on a choice's `message` / `delta`. Some OpenRouter free models (notably `openai/gpt-oss-120b:free`) do this. The adapter strips the field before handing the response downstream, so this log is purely observational — nothing is broken. If you actually want the reasoning text passed through (e.g. you're fronting a reasoning-aware client), set `capabilities.reasoning_passthrough: true` on that provider and the strip turns off. Streaming: the log fires at most once per stream regardless of how many chunks carried the field.
-- **`capability-degraded` log with `reason: "translation-lossy"` and `dropped: ["cache_control"]`** (v0.5-B) — your request carried a `cache_control` marker but the chosen provider is `kind: openai_compat`, so the marker was dropped during Anthropic → OpenAI translation. This is not an error (the request still succeeds), but Anthropic prompt caching will not kick in on that provider. Fix by either (a) putting a `kind: anthropic` provider earlier in the chain, or (b) if a future `openai_compat` upstream preserves cache markers, set `capabilities.prompt_cache: true` on that provider to opt out of the log. Note also the Anthropic-side 1024-token minimum: system prompts shorter than that report `cached_tokens: 0` even on supported providers — that's an upstream constraint, not a CodeRouter bug.
-- **`rate_limit_error` / 429** — Anthropic org-level TPM cap. This is retryable (the engine will try the next provider); adjust profile order or lower Claude Code's context with `/compact`.
-- **`unknown profile 'xxx'` (400)** — the `profile` field in the request body or `X-CodeRouter-Profile` header doesn't match any `profiles[].name` in your config. The response body shows the valid names.
-- **`502 Bad Gateway: all providers failed`** — every provider in the chain returned a retryable error. Inspect the `provider-failed` log lines in order; the last `error` field shows why the chain bottomed out.
+- **`"Extra inputs are not permitted"` が body フィールドに対して** — 上流（通常 Anthropic）が知らないフィールドを拒否。`anthropic-beta` ヘッダでゲートされているフィールド（`context_management`、新しい `cache_control` / `thinking` variant）なら、クライアントが実際にヘッダを付けたか確認。v0.4-D 以降 CodeRouter はそのまま転送しますが、クライアントが送っていなければ上流に届きません。
+- **`"adaptive thinking is not supported on this model"`** — v0.5-A 以降ユーザーには届かないはず。ケイパビリティゲートが `thinking: {type: enabled}` リクエストをそのフィールドを受け付けるモデルに流し（ヒューリスティクス: `claude-opus-4-*` / `claude-sonnet-4-6` / `claude-sonnet-4-7` / `claude-haiku-4-*`）、対応なしチェーンではブロックを剥がします。まだこのエラーを見るなら、(a) チェーンにヒューリスティクス未収載の新 Anthropic ファミリがいる — 当該プロバイダに `capabilities.thinking: true` を明示、あるいは (b) モデル slug を添えて issue を立て、ヒューリスティクスを更新。サーバーログの `capability-degraded` 行でゲート発火を確認。
+- **`capability-degraded` ログで `reason: "non-standard-field"` かつ `dropped: ["reasoning"]`** (v0.5-C) — 上流が OpenAI spec 非準拠の `reasoning` フィールドを `message` / `delta` に返した。OpenRouter 無料モデル（特に `openai/gpt-oss-120b:free`）で発生。アダプタが下流に渡す前に剥がすのでこのログは純粋に観測用 — 何も壊れていません。本当に reasoning テキストを素通ししたい（reasoning-aware クライアントを前立てている等）場合は当該プロバイダに `capabilities.reasoning_passthrough: true` を付けると strip が止まります。ストリーミング: いくつチャンクに跨ろうとログは 1 ストリーム最大 1 回。
+- **`capability-degraded` ログで `reason: "translation-lossy"` かつ `dropped: ["cache_control"]`** (v0.5-B) — リクエストが `cache_control` マーカー付きだったが、選ばれたプロバイダが `kind: openai_compat` なので Anthropic → OpenAI 変換で消失。エラーではなく（リクエストは成功）、ただ Anthropic のプロンプトキャッシングはそのプロバイダでは効きません。対策は (a) `kind: anthropic` プロバイダをチェーンの前に置く、または (b) 将来 `openai_compat` 上流が cache マーカーを保持するなら `capabilities.prompt_cache: true` で当該ログをオプトアウト。なお Anthropic 側の 1024 トークン最小も注意: これを下回るシステムプロンプトは対応プロバイダでも `cached_tokens: 0` を報告します — 上流の制約で CodeRouter のバグではありません。
+- **`rate_limit_error` / 429** — Anthropic 組織レベルの TPM 上限。リトライ可能（エンジンが次プロバイダを試す）。プロファイル順を調整するか、Claude Code のコンテキストを `/compact` で減らす。
+- **`unknown profile 'xxx'` (400)** — リクエスト body の `profile` フィールドあるいは `X-CodeRouter-Profile` ヘッダが設定のどの `profiles[].name` とも一致しない。有効名はレスポンス body に。
+- **`502 Bad Gateway: all providers failed`** — チェーン全プロバイダがリトライ可能エラーを返した。`provider-failed` ログ行を順に読む。末尾の `error` フィールドがチェーン終端の理由。
 
-Mid-stream failures surface as a single `event: error` with `type: api_error` inside the SSE stream (no 5xx HTTP status — headers have already shipped). This is distinct from "no provider could start" which emits `type: overloaded_error`.
+ミッドストリーム失敗は SSE ストリーム内で単発の `event: error` / `type: api_error` として出ます（ヘッダは既送出なので 5xx HTTP ステータスは返らない）。これは「どのプロバイダも開始できなかった」（`type: overloaded_error`）とは区別されます。
 
-### Ollama beginner — 5 silent-fail symptoms (v0.7-C)
+### Ollama 初心者 — サイレント失敗 5 症状 (v0.7-C)
 
-"I pointed the router at a fresh Ollama install and something is off" is by far the most common onboarding failure. The symptoms almost never look like errors — they look like the model shrugged. Here are the five we've collected in practice, with the one-liner that diagnoses each and the YAML patch that fixes it. `<provider>` below is the provider name from `providers.yaml`, e.g. `ollama-qwen-coder-7b`.
+「新規 Ollama をインストールし、ルーターを向けたらどうもおかしい」は最多の onboarding 失敗です。症状はエラーに見えないことがほとんど — モデルが肩をすくめたように見える。これまで現場で集めた 5 種、各症状の一行診断と修正 YAML を添えます。下の `<provider>` は `providers.yaml` のプロバイダ名（例: `ollama-qwen-coder-7b`）。
 
-**1. Blank / gibberish reply even though the provider returned 200.** Ollama's default `num_ctx` is 2048 tokens. Claude Code's system prompt alone is 15–20K tokens per turn, so everything after the first 2048 gets silently dropped from the **front** of the prompt — tool definitions, task description, everything. The model replies from the leftover tail.
+**1. 200 を返しているのに返信が空/意味不明。** Ollama の既定 `num_ctx` は 2048 トークン。Claude Code のシステムプロンプトだけで毎ターン 15–20 K トークンあり、2048 以降はプロンプトの**先頭**から黙って落ちます — ツール定義、タスク記述、全部。モデルは残された末尾から答えています。
 
 ```bash
 coderouter doctor --check-model <provider>
-# → num_ctx: NEEDS_TUNING — canary missing from reply; upstream truncated
-#   (no `extra_body.options.num_ctx` declared, Ollama default is 2048)
+# → num_ctx: NEEDS_TUNING — canary が返信に欠落; 上流が切り詰め
+#   (`extra_body.options.num_ctx` 宣言なし、Ollama 既定は 2048)
 ```
 
 ```yaml
-# providers.yaml — patch suggested by doctor:
+# providers.yaml — doctor 提案パッチ:
 - name: <provider>
   extra_body:
     options:
-      num_ctx: 32768    # or 16384 if you need to save VRAM
+      num_ctx: 32768    # VRAM 節約なら 16384 でも可
 ```
 
-As of **v1.0-B** the doctor probe detects this directly — it sends a canary token at the front of a ~5K-token prompt and asks the model to echo it back. If the canary is missing, Ollama truncated the front of the prompt. The probe fires only for Ollama-shape providers (port 11434 in the base URL, or a declared `extra_body.options.num_ctx`), so other `kind: openai_compat` upstreams SKIP it silently.
+**v1.0-B** 以降 doctor プローブがこれを直接検出します — 約 5K トークンプロンプトの先頭に canary トークンを埋め込み、エコーを求める。canary が返ってこなければ Ollama が先頭を落とした証拠。プローブは Ollama 形状プロバイダ（base URL にポート 11434、または `extra_body.options.num_ctx` 宣言あり）のみ発火するため、他 `kind: openai_compat` 上流は静かに SKIP。
 
-**2. Claude Code keeps saying "I can't read files".** The model received the `tools` parameter, got confused, and returned an empty assistant message. Small quantized models (≤ 7B, Q4) frequently can't handle tool specs at all. CodeRouter's v0.3-A tool-call repair can recover *malformed* tool JSON, but this case is "model never attempted a tool call" — nothing to repair.
+**2. Claude Code が「ファイルが読めません」と繰り返す。** モデルは `tools` パラメータを受け取ったが混乱し、空のアシスタントメッセージを返した。小さな量子化モデル（≤ 7B、Q4）はツール仕様自体を扱えないことが多い。CodeRouter v0.3-A の tool-call 修復は**壊れた**ツール JSON を復元できますが、このケースは「モデルがそもそもツール呼び出しを試みなかった」 — 修復対象がありません。
 
 ```bash
 coderouter doctor --check-model <provider>
@@ -399,15 +397,15 @@ coderouter doctor --check-model <provider>
 ```
 
 ```yaml
-# providers.yaml — patch suggested by doctor:
+# providers.yaml — doctor 提案パッチ:
 - name: <provider>
   capabilities:
     tools: false    # observed: model returned no tool_use block
 ```
 
-With `tools: false` the chain moves on to the next provider when a tool-heavy request arrives. Pair this with a stronger model later in the chain (e.g. qwen2.5-coder:14b or a cloud fallback).
+`tools: false` にすると、ツール要求リクエスト到来時にチェーンは次のプロバイダに進みます。強いモデル（qwen2.5-coder:14b やクラウドフォールバック）と組み合わせて使ってください。
 
-**3. `<think>...</think>` tags leak into the UI.** Qwen3-distilled models, DeepSeek-R1 distills, and some HF GGUF variants emit chain-of-thought inside the regular content channel (not an Anthropic `thinking` block). The tags land in Claude Code's terminal verbatim.
+**3. UI に `<think>...</think>` タグが漏れる。** Qwen3 蒸留モデル、DeepSeek-R1 蒸留、一部の HF GGUF 変種は chain-of-thought を Anthropic の `thinking` ブロックではなく通常のコンテンツチャネルに吐きます。タグが Claude Code のターミナルにそのまま出ます。
 
 ```bash
 coderouter doctor --check-model <provider>
@@ -415,25 +413,25 @@ coderouter doctor --check-model <provider>
 #   provider has no `output_filters` declared
 ```
 
-As of **v1.0-A** the doctor probe emits a ready-to-apply filter patch. Two independent remediations — pick either or both:
+**v1.0-A** 以降 doctor プローブは適用可能なフィルタパッチを出します。独立した 2 つの対処 — どちらでも、両方でも:
 
 ```yaml
-# providers.yaml — output-side scrub (v1.0-A, always works, recommended):
+# providers.yaml — 出力側スクラブ (v1.0-A、常時機能・推奨):
 - name: <provider>
   output_filters: [strip_thinking]
-  # Add `strip_stop_markers` too if you also see <|turn|> / <|channel>thought / ...
+  # <|turn|> / <|channel>thought / ... も出るなら strip_stop_markers も追加
 ```
 
 ```yaml
-# providers.yaml — source-side opt-out (cheap when the model honors it;
-# Qwen3 / R1-distill families respect `/no_think`):
+# providers.yaml — 入力側オプトアウト（モデルが従うときは安価;
+# Qwen3 / R1-distill 系は `/no_think` を尊重する）:
 - name: <provider>
   append_system_prompt: "/no_think"
 ```
 
-`output_filters` operates on the byte stream at the adapter boundary, so it works on every model — at the cost of one pass over the content. The two can be layered; the sample `ollama-qwen-coder-*` profiles in `examples/providers.yaml` ship with `output_filters: [strip_thinking]` enabled.
+`output_filters` はアダプタ境界のバイトストリームに作用するのでどのモデル・どのプロバイダ・どのクライアントでも動作します — コンテンツを 1 回余計に舐める分のコストと引き換え。2 つは重ね掛け可能で、`examples/providers.yaml` のサンプル `ollama-qwen-coder-*` は `output_filters: [strip_thinking]` が有効な状態で出荷されています。
 
-**4. First request to the chain always fails, then recovers.** The `model` field in `providers.yaml` has a typo or you forgot `ollama pull <tag>`. Ollama returns `404 model not found`, which is classified as retryable (bug fix from v0.2-x), so the chain falls through — but you lose the local-tier latency advantage on every turn.
+**4. チェーンへの初リクエストが毎回失敗して回復する。** `providers.yaml` の `model` フィールドにタイポがある、または `ollama pull <tag>` を忘れている。Ollama は `404 model not found` を返し、これは retryable 分類（v0.2-x のバグ修正）なのでチェーンはフォールスルーしますが、毎ターン、ローカルティアのレイテンシ優位を失います。
 
 ```bash
 coderouter doctor --check-model <provider>
@@ -441,9 +439,9 @@ coderouter doctor --check-model <provider>
 # → (remaining probes SKIP — no point running them until the model exists)
 ```
 
-Fix: either `ollama pull <the-tag-in-your-YAML>` or correct the typo. The 404 is Ollama's way of saying "I have no GGUF with that tag loaded". Note that HF-on-Ollama model names are required to include the `:Q4_K_M`-style quant suffix — omitting it yields the same 404.
+対処: `ollama pull <your-yaml-tag>` またはタイポ修正。404 は Ollama が「そのタグの GGUF は載せていない」と言っている。HF-on-Ollama モデル名は `:Q4_K_M` 形式の量子化サフィックス必須で、省略すると同じ 404 になります。
 
-**5. Every provider in the chain fails uniformly.** Your `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` isn't set (or is expired), and every cloud provider in the chain 401s in turn. As of v0.5.1 A-3 there's a `chain-uniform-auth-failure` WARN that identifies this pattern after the fact, but it's easier to catch before traffic starts.
+**5. チェーン全プロバイダが一様に失敗する。** `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` が未設定（または期限切れ）で、チェーンの全クラウドプロバイダが順に 401。v0.5.1 A-3 以降 `chain-uniform-auth-failure` WARN が事後的にこのパターンを識別しますが、トラフィック開始前に捕まえるほうが楽です。
 
 ```bash
 coderouter doctor --check-model <the-cloud-provider>
@@ -451,9 +449,9 @@ coderouter doctor --check-model <the-cloud-provider>
 # → (remaining probes SKIP — auth dominates)
 ```
 
-Fix: set the env var, or add it to the `.env` loaded at server start (`cp examples/.env.example .env`). `coderouter doctor` reads the same env the running server would, so a successful probe from your shell is a reliable signal that the server will work too.
+対処: 環境変数を設定、あるいはサーバー起動時にロードされる `.env` に追加 (`cp examples/.env.example .env`)。`coderouter doctor` は動作中のサーバーと同じ env を読むので、シェルからのプローブ成功はサーバーも動くという信頼できるシグナルです。
 
-**Running the full set** is one `doctor` per provider:
+**全部まとめて走らせる**にはプロバイダごとに `doctor`:
 
 ```bash
 for p in ollama-qwen-coder-7b ollama-qwen-coder-14b openrouter-free openrouter-gpt-oss-free; do
@@ -461,31 +459,31 @@ for p in ollama-qwen-coder-7b ollama-qwen-coder-14b openrouter-free openrouter-g
 done
 ```
 
-Exit codes collapse into three buckets (0 clean / 2 patchable / 1 blocker) so the loop above can be wired into CI — see the [Doctor subsection](#doctor--coderouter-doctor---check-model-provider-v07-b) for the full table.
+終了コードは 3 バケット（0 クリーン / 2 パッチ可能 / 1 ブロッカ）に集約されるので、上のループは CI に繋げられます — 完全な表は [Doctor サブセクション](#doctor--coderouter-doctor---check-model-provider-v07-b)。
 
-If you run both CodeRouter (router layer) and [lunacode](https://github.com/zephel01/lunacode) (editor harness) against the same local Ollama, lunacode's [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) is the sister reference — it covers the same 5 symptoms at the editor/harness layer (per-model settings, chat template overrides, `/no_think` variants) where CodeRouter's provider-granularity declarations stop.
+同じローカル Ollama に対して CodeRouter（ルーター層）と [lunacode](https://github.com/zephel01/lunacode)（エディタハーネス）を両方走らせている場合、lunacode の [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) が姉妹リファレンスです — 同じ 5 症状を、CodeRouter のプロバイダ粒度宣言が届かないエディタ/ハーネス層（モデル別設定、チャットテンプレート上書き、`/no_think` バリアント）でカバーします。
 
-#### HF-on-Ollama reference profile
+#### HF-on-Ollama リファレンスプロファイル
 
-Running any HF-hosted GGUF through Ollama's `hf.co/<user>/<repo>:<quant>` loader amplifies all 5 symptoms — HF GGUFs often ship without chat templates, inherit the leaky `<think>` tag from distillation, and require the `:<quant>` suffix that catches symptom 4. `examples/providers.yaml` includes a commented-out `ollama-hf-example` stanza that exercises every knob (`extra_body.options.num_ctx`, `append_system_prompt: "/no_think"`, `capabilities.tools: false`, `reasoning_passthrough`) with inline comments mapping each to its symptom. Copy it, set `model:` to the HF tag you pulled, and run `coderouter doctor --check-model ollama-hf-example` to verify.
+Ollama の `hf.co/<user>/<repo>:<quant>` ローダ経由で HF ホスト GGUF を動かすと、5 症状がすべて増幅されます — HF GGUF はチャットテンプレートなしで出荷されることが多く、蒸留元の `<think>` タグを引き継ぎ、症状 4 を踏む `:<quant>` サフィックスが必須です。`examples/providers.yaml` にはコメントアウトされた `ollama-hf-example` スタンザがあり、各つまみ（`extra_body.options.num_ctx`、`append_system_prompt: "/no_think"`、`capabilities.tools: false`、`reasoning_passthrough`）を例示し、インラインコメントで各対応症状を示しています。コピーし、`model:` を pull した HF タグに書き換え、`coderouter doctor --check-model ollama-hf-example` で検証してください。
 
-## Dependency policy
+## 依存ポリシー
 
-Strict — see [`plan.md` §5.4](./plan.md). Runtime deps:
+厳密 — [`plan.md` §5.4](./plan.md) 参照。ランタイム依存:
 
-| Package | Why |
+| パッケージ | 目的 |
 |---------|-----|
 | `fastapi` | HTTP ingress |
-| `uvicorn` | ASGI server |
-| `httpx` | Outbound HTTP (no Anthropic/OpenAI SDK on purpose) |
-| `pydantic` | Schema validation |
-| `pyyaml` | Config parsing |
+| `uvicorn` | ASGI サーバー |
+| `httpx` | アウトバウンド HTTP（あえて Anthropic/OpenAI SDK を使わない） |
+| `pydantic` | スキーマ検証 |
+| `pyyaml` | 設定パース |
 
-That's it. No `litellm`, no `langchain`, no `openai`/`anthropic` SDKs.
+以上。`litellm` なし、`langchain` なし、`openai`/`anthropic` SDK なし。
 
-## Catching errors programmatically (v1.0.1)
+## プログラムから例外をキャッチする (v1.0.1)
 
-If you're embedding CodeRouter (calling the engine directly, or wrapping `coderouter serve` in a harness), every failure CodeRouter raises internally inherits from `CodeRouterError`. One `except` clause catches the lot:
+CodeRouter を組み込んで使う場合 (engine を直接呼ぶ / `coderouter serve` を harness でラップする等)、CodeRouter が内部で raise する全例外は `CodeRouterError` を継承しています。1 つの `except` で全部拾えます：
 
 ```python
 from coderouter import CodeRouterError
@@ -493,19 +491,19 @@ from coderouter import CodeRouterError
 try:
     response = await engine.generate(chat_request)
 except CodeRouterError as exc:
-    # Covers AdapterError, NoProvidersAvailableError, MidStreamError
+    # AdapterError / NoProvidersAvailableError / MidStreamError の全てに該当
     logger.error("coderouter-failed", extra={"reason": str(exc)})
 ```
 
-The leaves stay in their original modules — `AdapterError` in `coderouter.adapters.base`, `NoProvidersAvailableError` and `MidStreamError` in `coderouter.routing.fallback` — and keep working when imported directly, so existing catch blocks don't need to change. The root class exists specifically so downstream code doesn't have to enumerate (and re-import) the leaves as the hierarchy grows.
+leaf 例外は従来の場所 (`AdapterError` は `coderouter.adapters.base`、`NoProvidersAvailableError` と `MidStreamError` は `coderouter.routing.fallback`) に残っているので、既存の `except AdapterError:` のような catch はそのまま動きます。root class は downstream が leaf を個別 import して enumerate しなくて済むよう public API surface を固定するためだけに存在し、今後 leaf が増えても呼び出し側のコードを触る必要がありません。
 
 ## Security
 
-Secrets live in env vars, not config files. CI enforces secret
-scanning (`gitleaks`), multi-source dependency CVE audit (`pip-audit`
-+ OSV-Scanner), and lockfile-frozen installs — see
-[`docs/security.md`](./docs/security.md) for the full posture and
-reporting instructions.
+シークレットは設定ファイルではなく環境変数に置きます。CI はシークレット
+スキャン (`gitleaks`)、多重ソースの依存 CVE 監査 (`pip-audit` +
+OSV-Scanner)、lockfile 固定インストールを強制します —
+[`docs/security.md`](./docs/security.md) に完全な方針と
+報告手順があります。
 
 ## License
 

@@ -1,261 +1,258 @@
-# Quickstart — get it running in one sitting
+# Quickstart — 最短で動かす
 
-> This guide is intentionally minimum-effort. Background on *why* each setting exists lives in [usage-guide.md](./usage-guide.md).
+> この手順書は「最低限の作業で動かす」ことだけを目的にしています。設定の理由や背景は [usage-guide.ja.md](./usage-guide.ja.md) に寄せてあります。
 
-You'll have Claude Code or the codex CLI talking to a local Ollama stack for **$0** in about 10–15 minutes. The fallback chain is shared between the two patterns; only the last step differs per agent.
+Claude Code または codex CLI を、ローカルの Ollama で **$0** で回せる状態までを 10〜15 分で作ります。チェーンは共通で、最後のステップだけエージェント別に分かれます。
 
-**Topology**
+**構成**
 
 ```
 Claude Code / codex  →  CodeRouter (localhost:8088)
-                            ├─ ① ollama qwen2.5-coder:7b   (local, primary)
-                            ├─ ② ollama qwen2.5-coder:1.5b (local, lightweight fallback)
-                            └─ ③ OpenRouter qwen3-coder:free (free cloud, last resort)
+                            ├─ ① ollama qwen2.5-coder:7b   (ローカル、主)
+                            ├─ ② ollama qwen2.5-coder:1.5b (ローカル、軽量フォールバック)
+                            └─ ③ OpenRouter qwen3-coder:free (無料クラウド、最後の砦)
 ```
 
-Paid APIs are **never** called unless you explicitly set `ALLOW_PAID`. Both macOS and Linux follow the same steps.
+有料 API は `ALLOW_PAID` 環境変数を設定しない限り**絶対に呼ばれません**。macOS / Linux どちらでも同じ手順で動きます。
 
 ---
 
-## Prerequisites
+## 前提
 
-- Python 3.12+ (`python3 --version` to check)
+- Python 3.12 以上 (`python3 --version` で確認)
 - `git`
-- ~6 GB free disk (7b ≈ 4.7 GB, 1.5b ≈ 1 GB)
-- Ollama installed, or use the command in step 1 below
+- 空きディスク 6 GB 程度 (7b が約 4.7GB、1.5b が約 1GB)
+- Ollama がインストール済み、または以下の手順でインストール
 
-If you want the free-tier cloud escape hatch, create a free account at [openrouter.ai](https://openrouter.ai/) and issue one API key (optional — you can skip and stay fully local).
+OpenRouter の無料枠を使う場合は [openrouter.ai](https://openrouter.ai/) で無料アカウントを作って API キーを 1 本発行しておく (任意、飛ばしてもローカルだけで動きます)。
 
 ---
 
-## Common setup (6 steps shared by Pattern A/B)
+## 共通セットアップ (Pattern A/B で使う 6 ステップ)
 
-### 1. Install Ollama and pull two models
+### 1. Ollama をインストール + モデル 2 本を pull
 
 ```bash
-# Same command on macOS / Linux
+# macOS / Linux どちらも同じ
 curl -fsSL https://ollama.com/install.sh | sh
 
-# Pull the models (~6 GB total, 5–15 min depending on your bandwidth)
+# モデルを pull (合計 ~6GB、ネット速度によるが 5〜15 分)
 ollama pull qwen2.5-coder:7b
 ollama pull qwen2.5-coder:1.5b
 
-# Start the Ollama service (auto-starts on macOS, systemd on Linux)
-ollama serve &   # skip if it's already running
+# Ollama サービスを起動 (macOS は自動起動、Linux は systemd)
+ollama serve &   # すでに動いていれば不要
 ```
 
-### 2. Install CodeRouter
+### 2. CodeRouter をインストール
 
-Two paths depending on how you plan to use it. If you **just want to put CodeRouter in front of Claude Code / codex**, path (a) — `uv tool install` — is shortest. Pick path (b) — clone + venv — if you want to read the source or edit `auto_router:` rules locally.
+用途別に 2 経路あります。**Claude Code / codex の前に立てて使うだけ**なら (a) の `uv tool install` 1 発が最短です。`providers.yaml` を書き換えて遊んだり、ソースを読みたい場合は (b) の clone + venv に進んでください。
 
-> On 2026-era macOS (Homebrew Python), Ubuntu 23+, and Debian bookworm+, PEP 668 blocks bare `pip install` into the system Python. Paths (a) and (b) both sidestep that.
+> 2026 年の Python は macOS (Homebrew) / Ubuntu 23+ / Debian bookworm+ で PEP 668 が効いており、システム Python への素の `pip install` はエラーになります。(a) / (b) どちらも、その問題を踏まない形になっています。
 
-**(a) Just want to use it — one-shot `uv tool install`**
+**(a) とりあえず使いたい場合 — `uv tool install` 1 発**
 
 ```bash
-# Install uv if you don't have it yet
+# uv をインストール (既に入っていれば飛ばす)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install CodeRouter into an isolated tool env (puts `coderouter` on PATH)
+# CodeRouter を隔離された tool 環境に入れる (`coderouter` コマンドが PATH に乗る)
 uv tool install --from git+https://github.com/zephel01/CodeRouter.git coderouter
 ```
 
-`pipx` works too: `pipx install git+https://github.com/zephel01/CodeRouter.git`. If you took path (a), grab the example config separately in step 3:
+`pipx` 派なら同等の `pipx install git+https://github.com/zephel01/CodeRouter.git` でも構いません。(a) を選んだ場合は、後の手順 3 で置く `providers.auto.yaml` / `providers.auto-custom.yaml` だけ別途取得しておきます:
 
 ```bash
-# Fetch just the example you need
+# examples だけ拾う
 curl -fsSL -o ~/.coderouter/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 ```
 
-**(b) Want to read source / tweak `auto_router:` rules — clone + venv**
+**(b) ソースを読む / `auto_router:` ルールを手元でいじる場合 — clone + venv**
 
 ```bash
 git clone https://github.com/zephel01/CodeRouter.git
 cd CodeRouter
 python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+source .venv/bin/activate        # Windows は .venv\Scripts\activate
 pip install -e .
 ```
 
-Every terminal that runs `coderouter serve` needs `source .venv/bin/activate` first (direnv or a shell-init hook works too if you want it automatic).
+`coderouter serve` を実行するターミナルでは毎回 `source .venv/bin/activate` が必要です (direnv や shell 起動フックを使うのも一案)。
 
-### 3. Drop in a `providers.yaml`
+### 3. `providers.yaml` を配置
 
-Copying the sample is enough — its contents match the topology diagram above.
+サンプル設定をコピーするだけで OK です (中身は本手順書の構成と一致しています)。
 
 ```bash
 mkdir -p ~/.coderouter
-# Path (b) = you cloned the repo
+# 経路 (b) = clone 済みの場合
 cp examples/providers.yaml ~/.coderouter/providers.yaml
 
-# Path (a) = uv tool install — fetch the sample directly
+# 経路 (a) = uv tool install で入れた場合は直接ダウンロード
 # curl -fsSL -o ~/.coderouter/providers.yaml \
 #   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 ```
 
-### 4. (Optional) Set an OpenRouter API key
+### 4. (任意) OpenRouter API キーを設定
 
-Skip this if the two local models are enough. Only needed when you want the free cloud escape hatch:
+ローカル 2 モデルで十分なら飛ばして OK。無料クラウドを最終砦として使いたい場合のみ:
 
 ```bash
 export OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxx"
 ```
 
-Add the same line to `~/.zshrc` / `~/.bashrc` if you want it to persist.
+永続化したい場合は `~/.zshrc` / `~/.bashrc` に同じ行を追記してください。
 
-### 5. Start CodeRouter
+### 5. CodeRouter を起動
 
 ```bash
 coderouter serve --port 8088
 ```
 
-From a second terminal, confirm it's up:
+別ターミナルで、起動確認:
 
 ```bash
 curl http://localhost:8088/healthz
 # → {"status":"ok"}
 ```
 
-Optional browser check: http://localhost:8088/dashboard
-(`/healthz` and `/dashboard` live on the same port. If you changed `--port`, match it.)
+必要ならダッシュボードもブラウザで確認: http://localhost:8088/dashboard
+(`/healthz` と `/dashboard` は同一ポート上。`--port` を変えた場合はその番号に合わせる)
 
-### 6. `coderouter doctor` sanity check (optional but recommended)
+### 6. `coderouter doctor` で設定が効いているか確認 (任意、推奨)
 
 ```bash
 coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-An `OK` means the common gotchas for Claude Code / codex are already clear.
+`OK` が出れば Claude Code / codex の実利用時に躓く典型パターンはクリア済みです。
 
 ---
 
-## Pattern A: use it with Claude Code
+## Pattern A: Claude Code で使う
 
-### A-1. Install Claude Code
+### A-1. Claude Code をインストール
 
 ```bash
 npm install -g @anthropic-ai/claude-code
 ```
 
-### A-2. Point Claude Code at CodeRouter
+### A-2. 環境変数で CodeRouter に向ける
 
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:8088"
-export ANTHROPIC_AUTH_TOKEN="dummy"   # CodeRouter ignores auth; any placeholder works
+export ANTHROPIC_AUTH_TOKEN="dummy"   # CodeRouter は認証を見ない、ダミーで OK
 ```
 
-### A-3. Start it
+### A-3. 起動
 
 ```bash
 claude
 ```
 
-The `claude-code` profile (local 2-tier + free cloud) is selected automatically. To confirm Ollama is actually answering, run `coderouter stats --once` from another terminal, or watch the Providers panel on the dashboard — `ollama-qwen-coder-7b` should stay green.
+profile は自動で `claude-code` (ローカル 2 段 + 無料クラウド) が選ばれます。最初のプロンプトで Ollama が答えているかは、別ターミナルで `coderouter stats --once` を叩くか、ダッシュボードの Providers パネルで `ollama-qwen-coder-7b` が緑になっていることで確認できます。
 
 ---
 
-## Pattern B: use it with the codex CLI
+## Pattern B: codex CLI で使う
 
-### B-1. Install codex
+### B-1. codex をインストール
 
 ```bash
 npm install -g @openai/codex
 ```
 
-### B-2. Point codex at CodeRouter
+### B-2. 環境変数で CodeRouter に向ける
 
 ```bash
 export OPENAI_BASE_URL="http://localhost:8088/v1"
-export OPENAI_API_KEY="dummy"   # placeholder is fine (same as above)
+export OPENAI_API_KEY="dummy"   # ダミーで OK (同上)
 ```
 
-### B-3. Run it
+### B-3. 実行
 
 ```bash
 codex "write a python function that reverses a string"
 ```
 
-Same backend chain, just spoken to in OpenAI shape. The `default` profile (local 7b + free cloud) is selected.
+同じバックエンドチェーンに対して OpenAI 形式で話しかけているだけです。profile は `default` (ローカル 7b + 無料クラウド) が選ばれます。
 
 ---
 
-## Troubleshooting (the three you'll hit)
+## うまく動かない時 (よくある 3 つ)
 
-### (1) `coderouter serve` fails with `address already in use`
+### (1) `coderouter serve` が `address already in use` で落ちる
 
-Something else is holding port 8088. Either free it or pick a different port:
+別プロセスが 8088 を掴んでいます。別ポートで起動するか、該当プロセスを落とす:
 
 ```bash
-lsof -i :8088        # see who's holding it
-coderouter serve --port 8089   # sidestep it
+lsof -i :8088        # 占有プロセスを確認
+coderouter serve --port 8089   # ポート変更で逃げる
 ```
 
-If you change ports, update `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` to match.
+ポートを変えたら `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` も合わせて変更。
 
-### (2) Claude Code / codex hangs with no reply
+### (2) Claude Code / codex が応答を返さない
 
-Usually Ollama itself isn't running:
+Ollama 自体が起動していない可能性が高いです。
 
 ```bash
 curl http://localhost:11434/api/version
 # → {"version":"0.x.x"}
 ```
 
-If that doesn't connect, restart `ollama serve`. If it *does* connect, `coderouter doctor --check-model ollama-qwen-coder-7b` will pinpoint the issue.
+これが繋がらない場合は `ollama serve` を再起動してください。繋がるなら `coderouter doctor --check-model ollama-qwen-coder-7b` で詳細診断。
 
-### (3) Responses contain stray `<think>...</think>` blocks
+### (3) 応答に `<think>...</think>` が混入する
 
-Check that `providers.yaml` has `output_filters: [strip_thinking]` set on the model entry. The sample ships with it enabled.
+`providers.yaml` の `output_filters: [strip_thinking]` が有効になっているか確認してください。サンプル配布版では最初から有効です。
 
-### (4) `pip install` errors with `externally-managed-environment`
+### (4) `pip install` が `externally-managed-environment` で落ちる
 
-This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to either path (a) (`uv tool install`) or path (b) (venv then `pip install -e .`) from step 2. Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
+macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uv tool install`) または経路 (b) (venv を作ってから `pip install -e .`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
 
 ---
 
-## Bonus: let CodeRouter pick the profile (v1.6 `auto_router`)
+## 補足: プロファイル選択を CodeRouter に任せる (v1.6 `auto_router`)
 
-In Pattern A/B each client is pinned to a fixed profile (`claude-code` or `default`). Starting in v1.6 you can instead have CodeRouter read the request body — image attached / code-fence-heavy / plain prose — and pick a profile per request. This is the shortest path if you **just want it to work without thinking about profile names**.
+Pattern A/B では「Claude Code は `claude-code` profile、codex は `default` profile」のようにクライアントごとに profile が固定されていました。v1.6 から、リクエスト本文の中身 (画像が付いているか / コード濃度が高いか / それ以外) を見て profile を自動で選ぶ `auto_router` が使えます。**まず動かして、profile を意識せずに使いたい** 人向けのショートカットです。
 
-### C-1. Pull three models
+### C-1. モデルを 3 本 pull する
 
-The default `auto_router` ruleset assumes three profiles (`multi` / `coding` / `writing`). The coder model is already in place from step 1; add the general and vision variants:
+`auto_router` が既定で想定している 3 profile (`multi` / `coding` / `writing`) 用にモデルを揃えます。コード用・文章用はすでに入っているはずなので、画像対応の VL モデルを追加するだけです。
 
 ```bash
 ollama pull qwen2.5:7b           # writing  (~4.7 GB)
-ollama pull qwen2.5vl:7b         # multi    (~6 GB — skip if you never send images)
-# qwen2.5-coder:7b was pulled in common-setup step 1
+ollama pull qwen2.5vl:7b         # multi    (~6 GB、画像を送らないなら省略可)
+# qwen2.5-coder:7b は共通セットアップ #1 で pull 済み
 ```
 
-Skipping `qwen2.5vl:7b` is fine if you never send images. Image requests will then fail cleanly (fast-fail), and text requests keep working.
+画像を一切送らないなら `qwen2.5vl:7b` は省略して構いません。画像リクエストだけが明示的にエラーで落ちる (fast-fail) だけで、テキストリクエストは動き続けます。
 
-### C-2. Swap `providers.yaml` for `providers.auto.yaml`
+### C-2. `providers.yaml` を `providers.auto.yaml` に差し替える
 
 ```bash
 cp examples/providers.auto.yaml ~/.coderouter/providers.yaml
 ```
 
-The load-bearing bits are just two lines:
+中身の肝は 2 行だけです:
 
 ```yaml
-default_profile: auto   # ← this sentinel turns auto_router on
-# profiles: must declare multi / coding / writing
+default_profile: auto   # ← この sentinel が auto_router を有効化する
+# profiles: には multi / coding / writing の 3 本を用意しておく
 ```
 
-Restart `coderouter serve` and every subsequent request is classified by the bundled ruleset (image attached → `multi` / code-fence ratio ≥ 0.3 → `coding` / else → `writing`). Per-request overrides (`X-CodeRouter-Profile` header or `body.profile`) still win, so you can mix "let it decide normally, but pin this one request" freely.
+この状態で `coderouter serve` を再起動すると、以降のリクエストは内蔵ルール (画像添付 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) で自動振り分けされます。`X-CodeRouter-Profile` ヘッダや `body.profile` で都度上書きする道は残っているので、「普段は任せて、特定のリクエストだけ手動指定」という使い方も可能です。
 
-### C-3. Customizing the rules
+### C-3. ルールをカスタマイズしたい場合
 
-When you want your own rules ("translate requests go to writing", "anything containing 'Review this PR' goes to coding", …), copy `examples/providers.auto-custom.yaml` and edit the `auto_router:` block. Two things to keep in mind:
-
-- When `auto_router:` is present, the bundled rules are **not** merged — your list replaces them entirely (first match wins).
-- Each `match:` block must declare exactly one matcher (`has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex`). Mixing matchers in one rule fails at startup.
+「翻訳依頼は文章モデル」「"Review this PR" が含まれるリクエストはコードモデル」のように、独自ルールを足したくなったら `examples/providers.auto-custom.yaml` をベースに `auto_router:` ブロックを書き足します。このブロックが存在する場合、内蔵ルールは一切マージされず丸ごと上書き (first match wins) になります。ルール間で順序が重要なことと、`match:` には matcher を 1 種類だけ書く (複数書くと起動時に fail) の 2 点に注意してください。
 
 ---
 
-## What to read next
+## 次に読むもの
 
-- [usage-guide.md](./usage-guide.md) — per-setting meaning, multi-provider tuning, full doctor diagnostic catalog
-- [security.md](./security.md) — caveats when opting into paid APIs
-- [README.md](../README.md) § "Do I actually need CodeRouter?" — decision flow for whether this fits your use case
+- [usage-guide.ja.md](./usage-guide.ja.md) — 各設定項目の意味、複数プロバイダの詳細チューニング、doctor の全診断内容
+- [security.md](./security.md) — 有料 API を opt-in する時の注意
+- [README.ja.md](../README.ja.md) §「CodeRouter は自分に必要か？」 — そもそも自分の用途に要るかの判断フロー

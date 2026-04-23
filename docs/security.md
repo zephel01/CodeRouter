@@ -1,158 +1,101 @@
-# Security posture
+# セキュリティ方針
 
-CodeRouter is a local-first router. It sits between a coding agent
-(Claude Code, etc.) and one or more LLM endpoints — some of which are
-remote paid APIs that hold state, cost money, and are authenticated
-with long-lived secrets. That threat model shapes every policy below.
+CodeRouter は、ローカルファーストのルーターです。コーディングエージェント (Claude Code など) と、1 つ以上の LLM エンドポイントの間に立ちます。エンドポイントの中には**状態を持ち、課金が発生し、長命のシークレットで認証される**リモート有料 API も含まれます。以下のポリシーはすべて、このスレットモデルから派生しています。
 
-This document describes two things:
+このドキュメントは 2 つのことを扱います。
 
-1. **What CodeRouter itself does to stay safe** — design invariants,
-   CI gates, and policies that are enforced by code or process.
-2. **What an operator should do when running CodeRouter** — choices
-   that CodeRouter can't make for you (where keys live, which
-   providers to trust, how the machine is networked).
+1. **CodeRouter 自体が安全を保つためにしていること** — コードまたはプロセスで強制される設計上の不変項・CI ゲート・方針
+2. **運用者が CodeRouter を走らせるときにすべきこと** — CodeRouter 側では決められない選択 (鍵をどこに置くか、どのプロバイダを信頼するか、マシンをどうネットワークに繋ぐか)
 
-The v1.0 baseline is "defense in depth, minimal attack surface."
-Nothing here is absolute; this is a deliberately small project that
-a single person can audit end-to-end, and the safety properties
-come from keeping it that way.
+v1.0 時点のベースラインは「**多層防御、最小限のアタックサーフェス**」です。ここに書かれていることはどれも絶対ではありません。このプロジェクトは**1 人で端から端まで監査できるサイズに保つ**ことを意図していて、その小ささの維持から安全特性が生まれています。
 
 ---
 
-## 1. Secrets and credentials
+## 1. シークレットと資格情報
 
-**Policy.** API keys never live in config files. `providers.yaml`
-references them by env-var name (`api_key_env: OPENROUTER_API_KEY`),
-and the loader resolves them at startup. If the named var is absent
-the provider is skipped, not stubbed; callers see an explicit error
-rather than silently falling through to a different tier.
+**方針**: API キーは設定ファイルに書きません。`providers.yaml` は環境変数名で参照し (`api_key_env: OPENROUTER_API_KEY`)、ローダが起動時に解決します。指定された環境変数が存在しなければ、該当プロバイダは**スタブ化せずにスキップ**されます。呼び出し側には明示的なエラーが返り、別階層に静かにフォールスルーすることはありません。
 
-**Why.** Config files get checked in by accident. Env vars get
-`echo`-ed to the shell, not to `git`. The separation is mechanical,
-not a convention — `ProviderConfig` has no field for a raw key, so
-there is no place in a committed file for one to land.
+**根拠**: 設定ファイルは事故でコミットされます。環境変数は `echo` ではシェルに出てきても `git` には乗りません。この分離は慣習ではなく**機構**で担保されています。`ProviderConfig` 型には生の API キーを受ける欄がそもそも無いので、コミット対象のファイルに鍵を書き込む場所が物理的に存在しません。
 
-**CI enforcement.** The `secret-scan` job runs `gitleaks` against the
-full commit history on every push and pull request. A finding fails
-the build.
+**CI での強制**: `secret-scan` ジョブが push / PR の都度、全コミット履歴に対して `gitleaks` を走らせます。検出されたらビルド失敗。
 
-**Operator checklist.**
+**運用者のチェックリスト**:
 
-- Put keys in `~/.zshenv` / `~/.bashrc` / `launchctl setenv`, or a
-  secret manager (1Password CLI, `op run --env-file=...`, macOS
-  Keychain). Not in `.env` files inside the repo.
-- Rotate provider keys periodically; the router has no state tying
-  a key to any ongoing request.
-- Never paste a key into an issue or PR comment.
+- 鍵は `~/.zshenv` / `~/.bashrc` / `launchctl setenv`、あるいはシークレットマネージャ (1Password CLI `op run --env-file=...`、macOS Keychain など) に置く。リポジトリ内の `.env` には置かない
+- プロバイダ鍵は定期的にローテート。ルーターは鍵と進行中のリクエストを紐付けるような状態を一切持ちません
+- Issue や PR のコメントに鍵を貼らない
 
 ---
 
-## 2. Supply-chain hygiene
+## 2. サプライチェーン衛生
 
-The 2023–2025 era has normalized supply-chain attacks in the Python
-and GitHub Actions ecosystems: package hijacks (`ctx`), typosquats,
-tag re-pointing (`tj-actions/changed-files`), and compromised
-maintainer accounts. CodeRouter's policy is layered so no single
-compromise upstream can land unnoticed.
+2023〜2025 年にかけて、Python と GitHub Actions のエコシステムでサプライチェーン攻撃が日常化しました。パッケージハイジャック (`ctx`)、タイポスクワット、タグの指し替え (`tj-actions/changed-files`)、メンテナアカウントの乗っ取りなど。CodeRouter の方針は**どの上流の単発侵害も黙って通さない**よう、多層化してあります。
 
-### 2.1 Minimal runtime surface
+### 2.1 最小限のランタイム依存
 
-Runtime dependencies are deliberately restricted to five packages:
-`fastapi`, `uvicorn[standard]`, `httpx`, `pydantic`, and `pyyaml`.
-Provider SDKs (`anthropic`, `openai`, `litellm`, `langchain`) are
-**forbidden at the code level**: the CI job `test` greps the source
-for `import anthropic|openai|litellm|langchain` and fails on any
-match. The router speaks each wire protocol directly via `httpx`.
+ランタイム依存は意図的に **5 パッケージ**に絞っています: `fastapi`、`uvicorn[standard]`、`httpx`、`pydantic`、`pyyaml`。
 
-This is both a design invariant (plan.md §5.4) and an attack-surface
-choice — five well-known packages with a lot of eyes on them are
-easier to trust than a transitive graph pulled in by a convenience
-SDK.
+プロバイダ SDK (`anthropic`、`openai`、`litellm`、`langchain`) は**コードレベルで禁止**されています。CI の `test` ジョブがソースに対して `import anthropic|openai|litellm|langchain` を grep し、一致すればビルド失敗。ルーターは `httpx` で各 wire プロトコルを直接喋ります。
 
-### 2.2 Lockfile-frozen installs
+これは設計上の不変項 (plan.md §5.4) であると同時に、**アタックサーフェスの選択**でもあります。よく監査されている 5 つの著名パッケージは、便利 SDK 経由で引き込まれる膨大な推移的依存グラフより信頼できるからです。
 
-`uv.lock` pins every direct and transitive dependency to an exact
-version + hash. CI runs `uv sync --frozen --extra dev`, which refuses
-to install anything if `pyproject.toml` or the lockfile has drifted.
-A new transitive cannot appear on `main` without an explicit
-lockfile update that someone reviewed.
+### 2.2 Lockfile による固定インストール
 
-### 2.3 Multi-source CVE audit
+`uv.lock` はすべての直接・推移依存をバージョンとハッシュで厳密にピン留めしています。CI では `uv sync --frozen --extra dev` を使っていて、`pyproject.toml` と lockfile にドリフトがあれば install 自体を拒否します。新しい推移依存が `main` に現れるには、**誰かがレビューした明示的な lockfile 更新**が必要です。
 
-Two scanners run on every push because their advisory databases
-don't fully overlap:
+### 2.3 複数ソースの CVE 監査
 
-| Scanner | Data source | Catches |
+アドバイザリ DB の対応範囲が完全には重ならないので、push 時に 2 つのスキャナを走らせています:
+
+| スキャナ | データソース | カバー範囲 |
 |---|---|---|
-| `pip-audit` | PyPA Advisory Database (primary Python feed) | PyPA-mirrored CVEs |
-| OSV-Scanner | Google OSV (GHSA + language-agnostic) | GHSA entries not yet mirrored to PyPA, cross-ecosystem advisories |
+| `pip-audit` | PyPA Advisory Database (Python の一次フィード) | PyPA にミラーされた CVE |
+| OSV-Scanner | Google OSV (GHSA + 言語横断) | PyPA 未反映の GHSA、エコシステム横断のアドバイザリ |
 
-A non-empty finding fails the build. The advisory latency difference
-between the two feeds is real — an advisory typically appears in OSV
-hours to a day before it lands in PyPA — so the belt-and-braces
-wiring is worth the extra minute of CI time.
+検出が 1 件でもあればビルド失敗。両フィードにはアドバイザリ反映のタイムラグが実在していて、**典型的に OSV の方が PyPA より数時間〜1 日早い**ため、CI が 1 分余分に走る価値はあります。
 
-### 2.4 Dependency review on PRs
+### 2.4 PR 時の依存レビュー
 
-`actions/dependency-review-action` runs only on pull requests and
-fails the build if the PR introduces a **new** dependency with a
-known High/Critical severity advisory. This catches the regression
-at PR time rather than after it's merged.
+`actions/dependency-review-action` は**プルリクエストのときだけ**走り、その PR が High / Critical のアドバイザリが付いた**新規依存**を導入していたらビルド失敗にします。マージ後に気づくのではなく、PR 時点で止めるのが狙い。
 
-### 2.5 GitHub Actions are dependencies too
+### 2.5 GitHub Actions も依存である
 
-The `dependabot.yml` file configures two ecosystems: `pip` for the
-Python graph, and `github-actions` for the action versions referenced
-in `.github/workflows/*.yml`. Actions are weekly-bumped just like
-runtime libraries.
+`dependabot.yml` では 2 つのエコシステムを設定しています: `pip` (Python グラフ) と `github-actions` (`.github/workflows/*.yml` で参照しているアクションのバージョン)。Actions はランタイムライブラリと同じく週次で bump されます。
 
-Action versions are currently referenced by major tag (`@v4`,
-`@v3`, `@v2`). For a stricter pinning pass, each tag can be replaced
-with a commit SHA (`@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4`).
-Dependabot keeps SHA-pinned entries up to date as well.
+Action のバージョンは現状、メジャータグ (`@v4`、`@v3`、`@v2`) で参照しています。より厳しくピン留めしたい場合は、各タグをコミット SHA に置き換えます (`@3df4ab11eba7bda6032a0b82a6bb43b11571feac # v4` の形式)。Dependabot は SHA ピン留めされたエントリも追従して更新します。
 
 ---
 
-## 3. Network posture
+## 3. ネットワーク姿勢
 
-CodeRouter binds to `127.0.0.1` by default (`coderouter serve --host`).
-It does not expose itself on `0.0.0.0` unless the operator explicitly
-opts in. There is no authentication on the HTTP ingress — the trust
-boundary is "loopback only."
+CodeRouter は既定で `127.0.0.1` にバインドします (`coderouter serve --host`)。運用者が明示的にオプトインしない限り `0.0.0.0` には出ません。HTTP 入口に認証は**ありません**。信頼境界は「**ループバックのみ**」と定義されています。
 
-**Operator checklist.**
+**運用者のチェックリスト**:
 
-- Do not bind to `0.0.0.0` on a multi-user host without a separate
-  reverse proxy that enforces auth.
-- If exposing over the network (e.g. remote dev), tunnel over SSH
-  or a VPN rather than opening a port.
-- Upstream provider URLs are checked at config-load time; a typo
-  in `base_url` fails fast rather than silently reaching the wrong
-  endpoint.
+- マルチユーザホストで `0.0.0.0` にバインドするのは、認証を強制するリバースプロキシを別途挟まない限り避ける
+- ネットワーク越しに公開する必要がある (リモート開発など) 場合は、ポートを開くのではなく SSH や VPN 越しにトンネルする
+- 上流プロバイダの URL は config ロード時にチェックされます。`base_url` のタイポは即座に失敗するので、間違ったエンドポイントに静かに到達することはありません
 
 ---
 
-## 4. What CI does (and does not) enforce
+## 4. CI が強制すること・しないこと
 
-| Gate | Enforced in CI? | Rationale |
+| ゲート | CI で強制? | 根拠 |
 |---|---|---|
-| `pytest` (453 tests) | Yes | Core regression surface |
-| `ruff check` | Yes | Catches real bugs cheaply |
-| Forbidden-SDK grep | Yes | Architectural invariant (§2.1) |
-| `uv sync --frozen` | Yes | Lockfile drift = fail (§2.2) |
-| `gitleaks` | Yes | Secret leak detection (§1) |
-| `pip-audit` | Yes | PyPA CVE feed (§2.3) |
-| OSV-Scanner | Yes | OSV CVE feed (§2.3) |
-| `dependency-review-action` | PR only | Blocks new vulnerable deps at PR time (§2.4) |
-| `ruff format --check` | **No** | Cosmetic; run locally |
-| `mypy --strict` | **No** | Run locally if you want it; `pytest` is the functional source of truth |
+| `pytest` (453 テスト) | はい | コアの回帰サーフェス |
+| `ruff check` | はい | 実バグを低コストで検出 |
+| 禁止 SDK の grep | はい | アーキテクチャ不変項 (§2.1) |
+| `uv sync --frozen` | はい | Lockfile ドリフト = 失敗 (§2.2) |
+| `gitleaks` | はい | シークレット漏洩検出 (§1) |
+| `pip-audit` | はい | PyPA の CVE フィード (§2.3) |
+| OSV-Scanner | はい | OSV の CVE フィード (§2.3) |
+| `dependency-review-action` | PR 時のみ | PR 時点で新規の脆弱依存をブロック (§2.4) |
+| `ruff format --check` | **いいえ** | 体裁のみ。ローカルで走らせる |
+| `mypy --strict` | **いいえ** | 必要ならローカルで。機能上の基準は `pytest` |
 
-Style and strict typing matter during development, but in CI they
-compete for attention with the security gates. For a one-person
-project, the explicit choice is to let them be local concerns.
+開発中はスタイルと strict 型付けに価値があります。ただし CI 上ではセキュリティゲートと注意のリソースを取り合う関係になるため、**1 人プロジェクトでの明示的な判断**として、これらはローカル関心事に留めています。
 
-### Run all CI gates locally
+### ローカルですべての CI ゲートを走らせる
 
 ```bash
 uv sync --frozen --extra dev
@@ -165,26 +108,18 @@ grep -RnE "^\s*(import|from)\s+(anthropic|openai|litellm|langchain)" coderouter/
 
 ---
 
-## 5. Reporting a vulnerability
+## 5. 脆弱性の報告
 
-If you find an issue that could compromise a user's keys, leak
-request content, or let an attacker pivot from the router to an
-upstream provider account, do not open a public issue.
+ユーザの鍵を侵害しうる、リクエスト内容を漏洩しうる、またはルーターから上流プロバイダアカウントに pivot できるような問題を見つけた場合は、**公開 Issue を立てない**でください。
 
-1. Open a GitHub Security Advisory:
-   `https://github.com/zephel01/CodeRouter/security/advisories/new`
-2. Include a reproducer if possible.
-3. Expect acknowledgment within a few days — this is a personal
-   project, not a 24×7 service.
+1. GitHub Security Advisory を開く: `https://github.com/zephel01/CodeRouter/security/advisories/new`
+2. 可能であれば再現手順を含める
+3. 数日以内の acknowledgment を想定してください。これは個人プロジェクトであり、24×7 のサービスではありません
 
-Non-security bugs go in the normal issue tracker.
+セキュリティに該当しないバグは通常の Issue トラッカへ。
 
 ---
 
-## 6. Policy update log
+## 6. 方針の更新履歴
 
-- **v1.0 (2026-04)** — Initial security.md. CI re-scoped to
-  regression + supply-chain after the v1.0.0 umbrella. Dependabot
-  enabled for both `pip` and `github-actions`. OSV-Scanner and
-  dependency-review-action added; `mypy --strict` and
-  `ruff format --check` dropped from CI.
+- **v1.0 (2026-04)** — 初版の security.md。v1.0.0 アンブレラ後、CI を回帰 + サプライチェーンに再スコープ。`pip` と `github-actions` の両方で Dependabot を有効化。OSV-Scanner と dependency-review-action を追加。`mypy --strict` と `ruff format --check` を CI から外す

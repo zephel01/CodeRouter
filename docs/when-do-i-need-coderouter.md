@@ -1,150 +1,113 @@
-# Do you need CodeRouter?
+# CodeRouter は自分に必要か？
 
-Short answer: CodeRouter is a **wire-translation + band-aid layer**.
-If your agent already talks the same wire as your model, and your
-model behaves well out of the box, you do not need it. If either
-of those fails, CodeRouter earns its keep. This page gives you two
-small matrices — agent × model — so you can decide in about a
-minute.
+短く答えると、CodeRouter は **wire 翻訳 + 絆創膏の層** です。エージェントとモデルが同じ wire を喋り、モデルが素直に動いてくれるなら、CodeRouter はいりません。どちらかが崩れた瞬間に仕事が発生します。このページでは「エージェント × モデル」の 2 つのマトリクスで、1 分で判断できるようにします。
 
 ---
 
-## 1. Agent compatibility
+## 1. エージェント対応マトリクス
 
-Not every agent can be pointed at a local `/v1` endpoint. The
-constraint is whether the agent exposes a base-URL / endpoint
-knob, and what wire format it speaks.
+すべてのエージェントが `/v1` を任意のローカルエンドポイントに差し替えられるわけではありません。判断軸は「base-URL / endpoint の差し替え口があるか」と「どの wire を喋るか」の 2 つ。
 
-| Agent | Wire format | Can point at Ollama directly? | Need CodeRouter? |
+| エージェント | wire 形式 | Ollama に直接向けられる？ | CodeRouter 必要？ |
 |---|---|---|---|
-| **Claude Code** | Anthropic `/v1/messages` | No — Ollama speaks OpenAI | **Yes** — wire translation is the whole point |
-| **Codex CLI** (`@openai/codex`) | OpenAI | Yes, via `OPENAI_BASE_URL` | Optional — only if you need filters / fallback |
-| **Plain OpenAI SDK / `curl`** | OpenAI | Yes, via `base_url` | Optional — same as above |
-| **gemini-cli** | Gemini | No — different wire | Yes, once a Gemini adapter is added |
-| **GitHub Copilot CLI** (`gh copilot`) | GitHub-proprietary | **No — backend is locked** | **N/A** — Copilot cannot be redirected at all |
+| **Claude Code** | Anthropic `/v1/messages` | ✕ — Ollama は OpenAI しか喋らない | **必須** — 翻訳こそが本題 |
+| **Codex CLI** (`@openai/codex`) | OpenAI | ◯ — `OPENAI_BASE_URL` で | オプション — フィルタ / フォールバックが欲しいときだけ |
+| **素の OpenAI SDK / `curl`** | OpenAI | ◯ — `base_url` で | オプション — 同上 |
+| **gemini-cli** | Gemini | ✕ — 別 wire | 必要（Gemini アダプタ追加時） |
+| **GitHub Copilot CLI** (`gh copilot`) | GitHub 独自 | **✕ — バックエンド固定** | **無力** — Copilot 側が差し替え不可 |
 
-Takeaway: **Claude Code users need a bridge** (CodeRouter or
-equivalent) to ever reach a local model. **OpenAI-compatible
-CLIs can hit Ollama directly**, so for them the decision shifts
-to the model.
+要点: **Claude Code ユーザはブリッジ**（CodeRouter か相当品）**がないとローカルに到達できない**。**OpenAI 互換 CLI は Ollama に直接当てられる**ので、判断はモデル側に寄ります。
 
 ---
 
-## 2. Model behavior
+## 2. モデルの振る舞いマトリクス
 
-CodeRouter's output filters and repair logic are band-aids for
-specific model misbehaviors. If your model is well-behaved,
-those filters sit idle.
+CodeRouter の出力フィルタと修復ロジックは、**特定のモデル個性に対する絆創膏**です。お行儀の良いモデルでは、これらは静かに座っているだけです。
 
-| Model family | Typical issue | Filter that fixes it |
+| モデルファミリ | 典型的な問題 | 効く対策 |
 |---|---|---|
-| `llama3.1` / `llama3.2` instruct (Q5+) | None usual | — |
-| `mistral-nemo` / `mistral-small` | None usual | — |
-| `phi-3` / `phi-4` | None usual | — |
-| `qwen2.5` (non-coder) | None usual | — |
-| **`qwen2.5-coder`** (any size) | Emits `<think>…</think>` in output | `strip_thinking` |
-| **`gpt-oss-120b` / `gpt-oss-20b`** | Emits `<think>…</think>` | `strip_thinking` |
-| **`deepseek-r1` / `qwq`** (reasoning models) | Full reasoning leaks into user-visible output | `strip_thinking` |
-| **Small quantizations** (Q2 / Q3) | Tool-call JSON malformed | `repair_tool_call` |
-| **Fine-tunes / Modelfiles with wrong template** | Stop markers leak (`<\|eot_id\|>`, `<\|im_end\|>`) | `strip_stop_markers` |
+| `llama3.1` / `llama3.2` instruct (Q5+) | 通常なし | — |
+| `mistral-nemo` / `mistral-small` | 通常なし | — |
+| `phi-3` / `phi-4` | 通常なし | — |
+| `qwen2.5`（`-coder` でない方） | 通常なし | — |
+| **`qwen2.5-coder`**（全サイズ） | 出力に `<think>…</think>` が混ざる | `strip_thinking` |
+| **`gpt-oss-120b` / `gpt-oss-20b`** | `<think>…</think>` を吐く | `strip_thinking` |
+| **`deepseek-r1` / `qwq`**（reasoning 系） | 推論過程がそのまま応答に漏れる | `strip_thinking` |
+| **小さい量子化**（Q2 / Q3） | tool_call JSON が壊れる | `repair_tool_call` |
+| **テンプレート不整合の fine-tune / Modelfile** | `<\|eot_id\|>` / `<\|im_end\|>` 等の stop marker が漏れる | `strip_stop_markers` |
 
-Takeaway: "Well-behaved model + OpenAI-compatible agent" is the
-shape where CodeRouter is doing the **least** work for you.
-Reasoning models (`r1`, `qwq`, `gpt-oss`, `qwen-coder`) and
-small / niche quantizations are where it starts to matter.
+要点: 「お行儀の良いモデル + OpenAI 互換エージェント」が、CodeRouter の仕事が **一番少ない**組み合わせ。reasoning 系 (`r1` / `qwq` / `gpt-oss` / `qwen-coder`) と、小さい / マイナーな量子化に触り始めた瞬間から効いてきます。
 
 ---
 
-## 3. The `num_ctx` footgun (affects everyone)
+## 3. `num_ctx` の落とし穴（全員の問題）
 
-One thing that bites every local setup regardless of model:
-**Ollama's default `num_ctx` is 2048 tokens**. That is too small
-for real coding tasks, and Ollama **silently truncates** rather
-than erroring.
+モデルに関係なく、ローカル環境を必ず噛むのがこれ: **Ollama のデフォルト `num_ctx` は 2048 トークン**。実コーディング用途には全く足りないサイズで、かつ Ollama は **無言で切り詰め**、エラーにしません。
 
-- Direct path: you set `num_ctx` per session / per API call, and
-  you remember to update it when the agent's system prompt grows.
-- With CodeRouter: it's centralized in `providers.yaml` once.
+- 直続き: リクエストごとに `num_ctx` を指定し、エージェントのシステムプロンプトが増えたら覚えて更新する
+- CodeRouter 経由: `providers.yaml` に 1 箇所書いて終わり
 
-Not the biggest reason to adopt CodeRouter, but worth knowing
-it exists.
+これだけで CodeRouter を入れる理由には弱いですが、存在することは知っておいて損はない落とし穴です。
 
 ---
 
-## 4. Quick decision tree
+## 4. 直続きで行ける条件（チェックリスト）
 
-If **every** box is checked, the direct path works:
+**全部** チェックが付くなら、直続きで十分です:
 
-- [ ] Your agent is OpenAI-compatible (Codex CLI, plain SDK, curl)
-- [ ] Your model is on the "no issue" list above (or you've
-      verified yours)
-- [ ] You're running a single provider (no local → cloud fallback)
-- [ ] You don't need Anthropic `/v1/messages` ingress
-- [ ] You're comfortable passing `num_ctx` / `keep_alive` yourself
+- [ ] エージェントが OpenAI 互換（Codex CLI / 素の SDK / curl）
+- [ ] モデルが「問題なし」リスト（または自分で確認済み）
+- [ ] 単一プロバイダで運用（ローカル→クラウドのフォールバック不要）
+- [ ] Anthropic `/v1/messages` ingress が不要
+- [ ] `num_ctx` / `keep_alive` は自分で渡す運用で問題ない
 
-Miss any one, and CodeRouter does real work.
+1 つでも外れたら、CodeRouter は実際に仕事をします。
 
 ---
 
-## 5. Verify it yourself
+## 5. 自分で確かめる手順
 
-Before adopting anything, prove your direct path actually works:
+何かを導入する前に、まず直続きが本当に動くか試すのが早いです:
 
 ```bash
-# Point Codex CLI (or any OpenAI-compatible tool) at Ollama
+# Codex CLI（あるいは任意の OpenAI 互換ツール）を Ollama に向ける
 export OPENAI_BASE_URL=http://localhost:11434/v1
-export OPENAI_API_KEY=ollama  # dummy, Ollama ignores it
+export OPENAI_API_KEY=ollama  # ダミー。Ollama は無視
 codex "write a function that reverses a string in rust"
 ```
 
-Watch for these four symptoms:
+以下 4 症状を観察:
 
-1. **`<think>` tags visible in the reply** → reasoning leak;
-   you need `strip_thinking`.
-2. **Stray `<|eot_id|>` / `<|im_end|>` / `<|turn|>` at the end
-   of replies** → template mismatch; you need `strip_stop_markers`.
-3. **The agent says "no tool calls returned" while the model
-   clearly printed tool JSON as plain text** → you need
-   `repair_tool_call`.
-4. **Long prompts get cut off without an error** → `num_ctx`
-   too small.
+1. **応答に `<think>` タグが見える** → reasoning 漏れ。`strip_thinking` が要る
+2. **応答末尾に `<|eot_id|>` / `<|im_end|>` / `<|turn|>` などが残る** → テンプレート不整合。`strip_stop_markers` が要る
+3. **「tool_call が返ってこない」とエージェントが言うのに、モデルは tool の JSON を素のテキストで吐いている** → `repair_tool_call` が要る
+4. **長いプロンプトで応答が無言で切れる** → `num_ctx` が小さい
 
-A clean day of real work with none of those symptoms means you
-don't need CodeRouter. If one shows up repeatedly, the matching
-filter is what fixes it.
+どれも起きずに 1 日実運用できたなら、CodeRouter は不要です。繰り返し出る症状があれば、対応するフィルタが解決策。
 
 ---
 
-## 6. When CodeRouter is flat-out required
+## 6. CodeRouter が必須になる場面
 
-- **Claude Code against any non-Anthropic model.** `/v1/messages`
-  doesn't exist on Ollama. There is no direct path.
-- **Automatic local → free cloud → paid fallback with the
-  mid-stream safety guard.** Writing that yourself is subtle
-  (see [`docs/articles/zenn-02-coderouter-architecture.md`](./articles/zenn-02-coderouter-architecture.md)).
-- **`coderouter doctor` for diagnosing a misbehaving setup.**
-  Its six probes cover exactly the failure modes above.
+- **Claude Code を Anthropic 以外のモデルで動かす。** `/v1/messages` は Ollama には存在しないため、直続きの経路自体がありません
+- **ローカル → 無料クラウド → 有料 の自動フォールバックを、mid-stream ガード付きで** 回したい。自前で書くと地味に難しい（[`docs/articles/zenn-02-coderouter-architecture.md`](./articles/zenn-02-coderouter-architecture.md) 参照）
+- **`coderouter doctor` で不調を診断したい** — 6 プローブが上記の失敗モードを網羅しています
 
-## 7. When CodeRouter is the wrong choice
+## 7. CodeRouter では解けない場面
 
-- **GitHub Copilot CLI.** It's locked to GitHub's backend. No
-  tool on your side can redirect it.
-- **Single-agent + single-model production where you want the
-  fewest moving parts.** A direct `base_url` swap is simpler.
-- **You need features CodeRouter does not have** — caching,
-  embeddings, fine-grained cost tracking, conversation stores.
-  That's LiteLLM / a custom wrapper's territory.
+- **GitHub Copilot CLI.** バックエンドが GitHub 固定で、どんなツールでも差し替え不可能
+- **単一エージェント + 単一モデルの本番で「動く部品を最小に保ちたい」** ケース。直 `base_url` 差し替えの方が単純
+- **CodeRouter にない機能が必要**（キャッシュ、埋め込み、細粒度コスト計測、会話ストアなど）。そこは LiteLLM か自前ラッパの領分
 
 ---
 
-## Summary
+## まとめ
 
-Pull CodeRouter in when **at least one** of these is true:
+CodeRouter を入れる価値があるのは、**以下の少なくとも 1 つ**が当てはまるとき:
 
-1. Your agent speaks Anthropic (Claude Code)
-2. Your model leaks `<think>` / stop markers / malformed tool JSON
-3. You want tier fallback without writing the mid-stream guard
-4. You want `doctor` to diagnose setup issues
+1. エージェントが Anthropic wire を喋る（Claude Code）
+2. モデルが `<think>` / stop marker / 壊れた tool JSON を吐く
+3. mid-stream ガード付きのティアフォールバックが欲しい
+4. `doctor` でセットアップ不調を診断したい
 
-Otherwise, `OPENAI_BASE_URL=http://localhost:11434/v1` is the
-simpler right answer, and skipping CodeRouter is fine.
+それ以外は、`OPENAI_BASE_URL=http://localhost:11434/v1` というシンプルな一行が正解で、CodeRouter を使わない選択も十分妥当です。

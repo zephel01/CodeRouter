@@ -1,145 +1,146 @@
-# CodeRouter Usage Guide
+# CodeRouter 利用ガイド
 
-A practical companion to [`README.md`](../README.md). The README tells you what CodeRouter *is*; this guide tells you how to pick a model for your hardware, which knobs to tune, and which OS flow to follow.
+[`README.md`](../README.ja.md) の実践的な補足です。README が CodeRouter が**何か**を説明するのに対し、本ガイドはハードウェアに合ったモデルの選び方、どのつまみを回すか、OS ごとの起動フローを説明します。
 
-Sections:
+目次:
 
-1. [OS compatibility](#1-os-compatibility)
-2. [Pick a model for your hardware](#2-pick-a-model-for-your-hardware)
-3. [Tuning defaults per local model](#3-tuning-defaults-per-local-model)
-4. [Ollama setup — the short version](#4-ollama-setup--the-short-version)
-5. [Claude Code launch flow per OS](#5-claude-code-launch-flow-per-os)
-6. [OpenRouter free-tier pairing](#6-openrouter-free-tier-pairing)
-7. [Verify it works (`doctor` + `verify`)](#7-verify-it-works-doctor--verify)
-8. [Troubleshooting quick index](#8-troubleshooting-quick-index)
-9. [Attribution](#9-attribution)
+1. [OS 互換性](#1-os-互換性)
+2. [ハードウェア別のモデル選定](#2-ハードウェア別のモデル選定)
+3. [ローカルモデルごとのチューニング既定値](#3-ローカルモデルごとのチューニング既定値)
+4. [Ollama セットアップ — 要点版](#4-ollama-セットアップ--要点版)
+5. [OS 別の Claude Code 起動フロー](#5-os-別の-claude-code-起動フロー)
+6. [OpenRouter 無料枠とのペア方針](#6-openrouter-無料枠とのペア方針)
+7. [動作確認 (`doctor` + `verify`)](#7-動作確認-doctor--verify)
+8. [トラブルシューティングのクイックインデックス](#8-トラブルシューティングのクイックインデックス)
+9. [セキュリティとサプライチェーン](#9-セキュリティとサプライチェーン)
+10. [Attribution](#10-attribution)
 
-Japanese version: [`docs/usage-guide.ja.md`](./usage-guide.ja.md)
+English version: [`docs/usage-guide.md`](./usage-guide.md)
 
 ---
 
-## 1. OS compatibility
+## 1. OS 互換性
 
-CodeRouter itself is pure Python 3.12+ and five pip dependencies — the server runs anywhere CPython runs. The constraints come from two adjacent pieces: **Ollama** (the local model backend most users pair this with) and **Claude Code** (the CLI client). OS support is effectively `min(coderouter, ollama, claude-code)`.
+CodeRouter 自体は純 Python 3.12+ と 5 つの pip 依存 — CPython が動くところならどこでも動きます。制約は隣接する 2 つ、**Ollama**（ほとんどのユーザーが組み合わせるローカルモデルバックエンド）と **Claude Code**（CLI クライアント）から来ます。OS 対応は実質 `min(coderouter, ollama, claude-code)`。
 
-| OS | CodeRouter server | Ollama | Claude Code | Verified path |
+| OS | CodeRouter サーバー | Ollama | Claude Code | 検証済経路 |
 |---|---|---|---|---|
-| macOS — Apple Silicon (M1–M5) | ✅ | ✅ native (Metal) | ✅ via `npm install -g @anthropic-ai/claude-code` | **Primary dev target.** All v1.0 real-machine verify runs use this path. |
-| macOS — Intel | ✅ | ✅ but slow (CPU only; no Metal GPU) | ✅ | Works for CodeRouter wire layer; local inference impractical — use cloud fallback only. |
-| Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ native (CUDA if NVIDIA GPU, else CPU) | ✅ | Fully supported. `uv` + `pip install` path identical to macOS. |
-| Linux — ARM64 (Raspberry Pi 5 / AWS Graviton) | ✅ | ⚠️ CPU-only on Pi; cloud instances fine | ✅ | CodeRouter runs fine; usable primarily as a "route-to-cloud" proxy on Pi-class hardware. |
-| Windows — native (PowerShell / cmd) | ⚠️ partial | ✅ native (CUDA) | ⚠️ `claude` CLI has known Windows-native quirks | `coderouter serve` works. `scripts/verify_*.sh` are bash-only — run them under WSL or Git Bash. |
-| Windows — WSL2 (Ubuntu) | ✅ | ✅ (install inside WSL or bridge to Windows-host Ollama at `host.docker.internal:11434`) | ✅ | **Recommended Windows path.** Same UX as Linux from inside WSL2. |
+| macOS — Apple Silicon (M1–M5) | ✅ | ✅ ネイティブ (Metal) | ✅ `npm install -g @anthropic-ai/claude-code` | **主要開発ターゲット。** v1.0 の実機検証はすべてこの経路。 |
+| macOS — Intel | ✅ | ✅ だが遅い (CPU のみ。Metal GPU なし) | ✅ | CodeRouter のワイア層は動作; ローカル推論は非現実的 — クラウドフォールバック限定で使う。 |
+| Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ ネイティブ (NVIDIA GPU なら CUDA、他は CPU) | ✅ | フル対応。`uv` + `pip install` 経路は macOS と同一。 |
+| Linux — ARM64 (Raspberry Pi 5 / AWS Graviton) | ✅ | ⚠️ Pi では CPU のみ; クラウド Graviton なら問題なし | ✅ | CodeRouter は動く; Pi クラスでは「クラウド中継」プロキシとして有用。 |
+| Windows — native (PowerShell / cmd) | ⚠️ 一部 | ✅ ネイティブ (CUDA) | ⚠️ `claude` CLI は Windows native で既知の癖あり | `coderouter serve` は動く。`scripts/verify_*.sh` は bash 専用 — WSL か Git Bash で。 |
+| Windows — WSL2 (Ubuntu) | ✅ | ✅ (WSL 内にインストール、または `host.docker.internal:11434` でホスト側 Ollama にブリッジ) | ✅ | **Windows 推奨経路。** WSL2 内からは Linux と同じ UX。 |
 
-Quick decision rules:
+判断の目安:
 
-- **Apple Silicon Mac, ≥ 16 GB unified memory** — ideal setup. Ollama + qwen2.5-coder works out of the box.
-- **Linux workstation with NVIDIA GPU (≥ 8 GB VRAM)** — also ideal. Ollama uses CUDA automatically.
-- **Windows** — use WSL2 unless you have a specific reason not to. Bash shell scripts (`scripts/verify_v1_0.sh`) require a POSIX shell.
-- **No local GPU** — CodeRouter still earns its keep. Skip local-tier providers and point the chain straight at `openrouter-free` → `openrouter-claude` (paid, opt-in). You get the routing / fallback / mid-stream guard value without local inference.
+- **Apple Silicon Mac、ユニファイドメモリ 16 GB 以上** — 理想。Ollama + qwen2.5-coder がそのまま動く。
+- **NVIDIA GPU 搭載 Linux ワークステーション (VRAM 8 GB 以上)** — 同じく理想。Ollama が自動で CUDA を使う。
+- **Windows** — 特別な理由がなければ WSL2。bash シェルスクリプト（`scripts/verify_v1_0.sh`）は POSIX シェルが必要。
+- **ローカル GPU なし** — それでも CodeRouter は役立ちます。ローカルティアのプロバイダを飛ばし、チェーンを `openrouter-free` → `openrouter-claude`（有料、オプトイン）に直結。ローカル推論無しでルーティング / フォールバック / ミッドストリームガードの価値は得られます。
 
-Known gaps:
+既知の隙間:
 
-- `scripts/verify_v0_5.sh` and `scripts/verify_v1_0.sh` assume macOS `/bin/bash` 3.2+ (Linux bash 4+ is fine). They do not target Windows cmd/PowerShell.
-- No Docker image shipped yet — `plan.md §11` tracks this for v1.6 (originally planned as v1.1; re-scoped after v1.5 shipped ahead of the launcher block).
+- `scripts/verify_v0_5.sh` と `scripts/verify_v1_0.sh` は macOS `/bin/bash` 3.2+ を想定（Linux bash 4+ は問題なし）。Windows cmd/PowerShell は対象外。
+- Docker イメージは未提供 — `plan.md §11` が v1.6 で追跡（当初 v1.1 予定、v1.5 が先行出荷されたため繰り下げ）。
 
 ---
 
-## 2. Pick a model for your hardware
+## 2. ハードウェア別のモデル選定
 
-Two separate questions: "how big a model will my machine load" and "how fast will inference be". The table below optimizes for the first; speed is dominated by memory bandwidth (Apple unified memory, CUDA GDDR, or CPU RAM — in that order).
+別の 2 つの問い: 「どれくらいの大きさのモデルが載るか」と「推論はどれくらい速いか」。下の表は前者に最適化しています。速度はメモリ帯域（Apple ユニファイドメモリ、CUDA GDDR、CPU RAM の順）で決まります。
 
-| Your machine | Local model (Ollama tag) | Why |
+| あなたのマシン | ローカルモデル (Ollama タグ) | 理由 |
 |---|---|---|
-| 8 GB VRAM / 8–16 GB RAM (entry Windows / Linux laptop, M1/M2 base Mac) | `qwen2.5-coder:1.5b` — then straight to OpenRouter free | 1.5b loads in ~1 GB and responds fast. Quality is marginal for Claude Code tool-use; treat as "only when offline" and let the chain fall through to free cloud for real work. |
-| 16 GB VRAM / 16–24 GB RAM (RTX 4070 / M1 Pro / M2 / M3 base) | `qwen2.5-coder:7b` (default `Q4_K_M` quant, ~4.5 GB) | Sweet spot. Tool-capable, returns in 30–60s per Claude-Code turn on M-series. `examples/providers.yaml` ships with this as the lead local provider. |
-| 24 GB+ VRAM / 24–36 GB RAM (RTX 4090 / M1 Max / M2 Max / M3 Max 32GB) | `qwen2.5-coder:14b` (~8.5 GB) | Better tool-selection quality than 7b. Typical turn ~2 min. Pair with 7b as a fast first attempt + 14b as quality fallback — that's what the `claude-code` profile does. |
-| 48 GB+ / M-series Max/Ultra 64 GB+ | `qwen2.5-coder:32b` (~19 GB) or two 14b's in different quants | At this tier, local is good enough that cloud fallback becomes a nice-to-have rather than the primary path. |
-| Mac 96 GB+ / dedicated GPU server 80 GB+ | Multi-model hot-swap (32b + 14b + 7b all warm) | Out of scope for this guide — if you have the hardware, you already have opinions. |
+| VRAM 8 GB / RAM 8–16 GB（エントリ Windows / Linux ラップトップ、M1/M2 ベース Mac） | `qwen2.5-coder:1.5b` — そのまま OpenRouter 無料にフォールスルー | 1.5b は ~1 GB で載り、応答が速い。Claude Code のツール使用には品質がギリギリ; 「オフラインの時だけ」と割り切り、本気の作業はチェーンを無料クラウドに流す。 |
+| VRAM 16 GB / RAM 16–24 GB（RTX 4070 / M1 Pro / M2 / M3 ベース） | `qwen2.5-coder:7b`（既定 `Q4_K_M` 量子化、~4.5 GB） | スイートスポット。tool 対応、M 系で Claude Code 1 ターン ~30–60s。`examples/providers.yaml` の先頭ローカルプロバイダはこれ。 |
+| VRAM 24 GB+ / RAM 24–36 GB（RTX 4090 / M1 Max / M2 Max / M3 Max 32GB） | `qwen2.5-coder:14b`（~8.5 GB） | 7b よりツール選択品質が高い。典型的 1 ターン ~2 分。7b を速い初手、14b を品質フォールバックで組む — `claude-code` プロファイルがこれ。 |
+| 48 GB+ / M 系 Max/Ultra 64 GB+ | `qwen2.5-coder:32b`（~19 GB）または異量子化の 14b を 2 本 | この階層ではローカルが十分良く、クラウドフォールバックはメインではなく「あれば良い」。 |
+| Mac 96 GB+ / 専用 GPU サーバー 80 GB+ | マルチモデルのホットスワップ（32b + 14b + 7b を全て常駐） | 本ガイドの範囲外 — そのハードウェアを持っているなら既に独自の意見があります。 |
 
-All tags above assume the default `Q4_K_M` quantization unless stated. You can tighten to `Q5_K_M` / `Q6_K_M` for slightly better quality at the cost of ~25 % more VRAM. `Q8_0` is rarely worth it at this parameter count.
+上のタグは既定の `Q4_K_M` 量子化を想定しています。品質を少し上げるなら `Q5_K_M` / `Q6_K_M`（VRAM +25% 程度）、`Q8_0` はこのパラメータ数ではほぼ割に合いません。
 
-Rule of thumb for VRAM: a `Q4_K_M` GGUF needs roughly `params × 0.55 GB` of VRAM, plus 1–2 GB for KV cache at 32K context. So `qwen2.5-coder:14b` Q4 ≈ 7.7 GB weights + 1.5 GB KV ≈ 9.2 GB — fits a 16 GB GPU comfortably but leaves little room for anything else.
+VRAM の目安: `Q4_K_M` GGUF は概ね `params × 0.55 GB` の VRAM + 32K コンテキストの KV キャッシュに 1–2 GB。つまり `qwen2.5-coder:14b` Q4 ≈ 7.7 GB 重み + 1.5 GB KV ≈ 9.2 GB — 16 GB GPU に余裕で入りますが、他に使う余地はほぼ残りません。
 
-### Models worth knowing beyond qwen2.5-coder
+### qwen2.5-coder 以外で押さえておく価値のあるモデル
 
-CodeRouter treats any OpenAI-compat endpoint the same way, so model choice is orthogonal to router choice. A few commonly-paired options, grouped by family. CodeRouter doesn't care which vendor shipped the weights — as long as Ollama (or any OpenAI-compat server) can load the tag, the router can route to it.
+CodeRouter はどの OpenAI 互換エンドポイントも同じ扱いで、モデル選択はルーター選択と独立です。よく組み合わされるいくつかを、ファミリ別にグループ化してあげます。Ollama（あるいは任意の OpenAI 互換サーバー）がタグをロードできればルーティング可能です — ベンダー不問。
 
-Dense coder families (the 2.5-coder profile below extends directly):
+Dense coder 系（上の 2.5-coder プロファイルがそのまま拡張できます）:
 
-- **`qwen3-coder:7b` / `:14b`** — qwen3 dense coder family. Similar scale to 2.5-coder with a different reasoning style. Tends to leak `<think>` tags more — enable `output_filters: [strip_thinking]` and/or `append_system_prompt: "/no_think"`. Shipped as a reference profile in `examples/providers.yaml` under `ollama-hf-example` (commented out).
-- **`deepseek-coder-v2:16b`** — DeepSeek-v2 MoE architecture (2.4B active, 16B total). Very fast for its size on macOS unified memory. Tool-use is hit-or-miss; set `capabilities.tools: false` if `coderouter doctor` says so.
+- **`qwen3-coder:7b` / `:14b`** — qwen3 dense コーダ系。2.5-coder と同規模、推論スタイルが違う。`<think>` タグを漏らしがちなので `output_filters: [strip_thinking]` または `append_system_prompt: "/no_think"` を有効化。`examples/providers.yaml` の `ollama-hf-example` にリファレンスプロファイル（コメントアウト）として同梱。
+- **`deepseek-coder-v2:16b`** — DeepSeek-v2 MoE アーキテクチャ（アクティブ 2.4B / 総 16B）。macOS ユニファイドメモリでは大きさの割にかなり速い。tool 使用は当たり外れ。`coderouter doctor` の判定で `capabilities.tools: false` を付ける。
 
-MoE coders (big-parameter-count, small-active — easier on memory bandwidth than their headline size suggests):
+MoE コーダ（大きなパラメータ合計、小さなアクティブ — 見出しサイズの割にメモリ帯域にやさしい）:
 
-- **`qwen3-coder:30b-a3b`** — 30 B total / ~3 B active MoE. Tool-capable, streams noticeably faster than dense 30B on Apple Silicon because only the ~3 B active path runs per token; VRAM still has to hold the whole graph (~18 GB Q4). Enable both `strip_thinking` and `strip_stop_markers`, and verify tool-call reliability with `coderouter doctor`.
-- **`qwen3:32b`** (dense, general-purpose) — big general model; use `append_system_prompt: "/no_think"` to silence the chain-of-thought channel before it reaches Claude Code's UI. Lower tool-call hit rate than 2.5-coder:32b; probe to confirm.
-- **`qwen3:30b-a3b`** (general MoE sibling to the coder) — same MoE footprint as qwen3-coder:30b-a3b but general-domain. Useful in a "fast" profile when you need long-context reasoning without coder bias.
+- **`qwen3-coder:30b-a3b`** — 総 30B / アクティブ ~3B の MoE。tool 対応、アクティブ ~3B 経路しか毎トークン動かないため Apple Silicon では dense 30B より明確に速くストリームします; VRAM はグラフ全体を保持する必要あり (~18 GB Q4)。`strip_thinking` と `strip_stop_markers` を両方有効にし、`coderouter doctor` で tool 呼び出しの信頼性を検証。
+- **`qwen3:32b`**（dense, 汎用）— 大型汎用。Claude Code の UI に chain-of-thought チャネルが届く前に `append_system_prompt: "/no_think"` で黙らせる。tool 呼び出し成功率は 2.5-coder:32b より低め; プローブで確認。
+- **`qwen3:30b-a3b`**（コーダ MoE の汎用版）— `qwen3-coder:30b-a3b` と同じ MoE フットプリントで汎用。コーダバイアスなしで長文推論が欲しい「fast」プロファイル用途に便利。
 
-Reasoning-tuned distills (emit `<think>` blocks on by default — always pair with `strip_thinking` + `strip_stop_markers`):
+Reasoning チューニングの distill（既定で `<think>` ブロックを吐く — 常に `strip_thinking` + `strip_stop_markers` とセット）:
 
-- **`deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b`** — R1-distilled Qwen bases. Strong on plan-then-act reasoning, weak on structured tool JSON; leave `capabilities.tools: false` and use them as a quality-fallback for text answers rather than the tool-call tier.
+- **`deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b`** — R1 で蒸留した Qwen ベース。計画 → 実行の推論に強く、構造化ツール JSON には弱い; `capabilities.tools: false` のまま、tool 呼び出し層ではなくテキスト回答の品質フォールバックとして使う。
 
-General-purpose (not coder-tuned, so typically `capabilities.tools: false` unless the family is instruction-trained for tool use):
+汎用（非コーダ、ファミリが命令チューニングされていなければ通常 `capabilities.tools: false`）:
 
-- **`gemma3:4b` / `:12b` / `:27b`** — Google's Gemma 3 family. Multilingual (Japanese included), but no tool-use training — treat as `capabilities.tools: false`. `gemma3:12b` Q4 fits comfortably in 12 GB VRAM and is a reasonable "fast chat" tier. There is no `/no_think` directive — Gemma 3 doesn't emit `<think>` blocks by default, so `output_filters` can stay empty unless you see leakage.
-- **`gemma4:e2b` / `:e4b` / `:latest` / `:26b` / `:31b`** — Google's Gemma 4 family, published on Ollama as <https://ollama.com/library/gemma4>. A noticeably different lineup from Gemma 3: the `e2b` / `e4b` tags are *effective-parameter* builds tuned for edge / laptop deployment (128 K context at ~7–10 GB pull size), `:26b` is a Mixture-of-Experts with ~4 B active / 26 B total and a **256 K** context window, and `:31b` is the dense flagship. Gemma 4 is multimodal (text + image) and ships with **configurable thinking modes** — unlike Gemma 3, it *can* emit `<think>` blocks when reasoning is enabled, so **start with `output_filters: [strip_thinking]`** on all gemma4 tags and enable `strip_stop_markers` too if you see marker leakage. Tool-use on the family is lineage-dependent — Gemma 3 had none, Gemma 4 has some instruct tuning, so **always verify with `coderouter doctor`** before flipping `capabilities.tools: true`. The `:26b` MoE is the sweet spot on Apple Silicon (24–32 GB unified memory) because only the ~4 B active path runs per token while the 256 K window gives you Claude-Code-friendly headroom.
-- **`llama3.3:70b`** — the 70 B instruct dense from Meta. Tool-capable when quantized cleanly; needs ≥ 48 GB VRAM or Mac 64 GB+ unified. For most users this sits in a "paid-tier replacement if I have the hardware" bucket.
-- **`llama3.2:3b` / `phi4:14b`** — general-purpose, not coder-tuned. Useful as a "fast" profile for short chat replies outside of code sessions.
-- **`gpt-oss:20b`** / **`gpt-oss:120b`** (OpenAI OSS family) — release tags vary by vendor mirror; the 20 B is the hardware sweet spot on a 24 GB GPU. Emits a non-standard `reasoning` field on each choice's `message` / `delta` that the v0.5-C `openai_compat` adapter already strips; probe once with `coderouter doctor` to confirm the strip fires and `reasoning-leak` returns `OK`.
+- **`gemma3:4b` / `:12b` / `:27b`** — Google の Gemma 3 ファミリ。多言語（日本語含む）だが tool 使用のトレーニングは無し — `capabilities.tools: false` 前提で。`gemma3:12b` Q4 は 12 GB VRAM に楽に入り、「fast chat」階層として妥当。`/no_think` 指示はなく、Gemma 3 は既定で `<think>` ブロックを吐かないので漏れが観測されない限り `output_filters` は空でよい。
+- **`gemma4:e2b` / `:e4b` / `:latest` / `:26b` / `:31b`** — Google の Gemma 4 ファミリ。Ollama では <https://ollama.com/library/gemma4> で公開されています。Gemma 3 からラインナップが大きく変わりました: `e2b` / `e4b` は**実効パラメータ** (effective) でエッジ/ラップトップ向けに調整されたビルド（コンテキスト 128K、pull サイズ ~7–10 GB）、`:26b` は総 26B / アクティブ ~4B の **Mixture-of-Experts** で **256K** コンテキスト、`:31b` が dense のフラッグシップです。Gemma 4 はマルチモーダル（テキスト + 画像）で、**設定可能な thinking モード**を搭載 — Gemma 3 と違い、推論を有効にすると `<think>` ブロックを吐くことがあります。したがって gemma4 の全タグで **`output_filters: [strip_thinking]` から始め**、マーカー漏れが見えたら `strip_stop_markers` も追加します。tool 使用は世代依存 — Gemma 3 は未対応、Gemma 4 は一定のインストラクトチューニング有り — なので `capabilities.tools: true` にする前に**必ず `coderouter doctor` で検証**してください。`:26b` MoE は Apple Silicon（24–32 GB ユニファイドメモリ）のスイートスポット: 毎トークン動くのはアクティブ ~4B 経路だけで、256K ウィンドウは Claude Code にとって余裕のあるヘッドルームになります。
+- **`llama3.3:70b`** — Meta の 70B dense instruct。クリーンに量子化すれば tool 対応; 48 GB 以上の VRAM か Mac 64 GB+ ユニファイドが必要。多くのユーザーにとっては「そのハードウェアがあれば有料ティアの代替」枠。
+- **`llama3.2:3b` / `phi4:14b`** — 汎用、コーダチューニングではない。コード以外の短いチャット返信の「fast」プロファイルとして有用。
+- **`gpt-oss:20b`** / **`gpt-oss:120b`**（OpenAI OSS 系）— ベンダーミラーでタグが異なる; 24 GB GPU のスイートスポットは 20B。各 choice の `message` / `delta` に非標準 `reasoning` フィールドを吐きますが、v0.5-C の `openai_compat` アダプタが既に剥がします; `coderouter doctor` で 1 回プローブし strip が発火して `reasoning-leak` が `OK` を返すことを確認してください。
 
-Use `coderouter doctor --check-model <provider>` after adding any new model — its six probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) will tell you which `capabilities.*` flags and `extra_body.options.*` values the model actually wants. The doctor's verdicts are the source of truth; the table in §3 is the known-good starting point it checks you against.
+新しいモデルを追加したら必ず `coderouter doctor --check-model <provider>` を走らせてください — 6 プローブ（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming）が、モデルが実際に欲しがる `capabilities.*` と `extra_body.options.*` を教えてくれます。doctor の判定が真実の源で、§3 の表はそれと突き合わせるための既知良好な起点にすぎません。
 
-MoE footprint reminder: "N total / M active" means the router streams like an M-parameter model in latency terms but needs N-parameter weights resident in VRAM. Qwen3 30B-A3B loads like a 30 B but runs like a 3 B — an unusually good deal on Apple Silicon where memory bandwidth is the bottleneck, but only if you actually have the ~18 GB Q4 weights-fit budget.
+MoE フットプリントの補足: 「N 総 / M アクティブ」とは、レイテンシ的には M パラメータ相当で流れる一方、VRAM には N パラメータ分の重みを常駐させる必要がある、という意味です。Qwen3 30B-A3B は 30B のようにロードし 3B のように動く — メモリ帯域がボトルネックの Apple Silicon では異例にお得ですが、~18 GB Q4 の重み保持予算が実際にあることが前提です。
 
 ---
 
-## 3. Tuning defaults per local model
+## 3. ローカルモデルごとのチューニング既定値
 
-The values below are known-good starting points. `coderouter doctor --check-model` will tell you when a model wants something different for your specific Ollama build.
+下の値は既知良好な起点です。`coderouter doctor --check-model` が、あなたの固有 Ollama ビルドでモデルが別の値を欲しがっているときに教えてくれます。
 
-Rows are grouped by family so you can find the row that matches the tag you pulled. Columns left of `output_filters` go into `extra_body.options` in your `providers.yaml`; `output_filters` and `capabilities.tools` are top-level on the provider. `—` means "no filter needed by default; confirm with `coderouter doctor`".
+行はファミリ別に束ねてあるので、pull したタグに合う行を探しやすいはずです。`output_filters` より左の列は `providers.yaml` の `extra_body.options` に入れます; `output_filters` と `capabilities.tools` はプロバイダ直下のトップレベル。`—` は「既定ではフィルタ不要、`coderouter doctor` で確認」の意。
 
-| Model | `num_ctx` | `num_predict` | `temperature` | `output_filters` | `capabilities.tools` |
+| モデル | `num_ctx` | `num_predict` | `temperature` | `output_filters` | `capabilities.tools` |
 |---|---:|---:|---:|---|:---:|
 | **qwen2.5-coder (dense, coder-tuned)** | | | | | |
-| `qwen2.5-coder:1.5b` | 8192 | 2048 | 0.2 | `[strip_thinking]` | false (too small to reliably tool-call) |
+| `qwen2.5-coder:1.5b` | 8192 | 2048 | 0.2 | `[strip_thinking]` | false (小さすぎて確実には tool-call できない) |
 | `qwen2.5-coder:7b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
 | `qwen2.5-coder:14b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
 | `qwen2.5-coder:32b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true |
 | **qwen3 family (coder + general, dense + MoE)** | | | | | |
-| `qwen3-coder:7b` / `:14b` | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (verify w/ doctor) |
-| `qwen3-coder:30b-a3b` (MoE, ~3 B active) | 65536 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (verify w/ doctor) |
-| `qwen3:30b-a3b` (general MoE) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | verify w/ doctor |
-| `qwen3:32b` (dense, general) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | verify w/ doctor (often false) |
+| `qwen3-coder:7b` / `:14b` | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (doctor で検証) |
+| `qwen3-coder:30b-a3b` (MoE、アクティブ ~3B) | 65536 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | true (doctor で検証) |
+| `qwen3:30b-a3b` (general MoE) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | doctor で検証 |
+| `qwen3:32b` (dense, general) | 32768 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | doctor で検証 (概ね false) |
 | **DeepSeek (coder MoE + R1 distills)** | | | | | |
-| `deepseek-coder-v2:16b` | 16384 | 4096 | 0.2 | `[strip_thinking]` | verify w/ doctor (often false) |
-| `deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b` | 16384 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | false (R1 distills rarely tool-call cleanly) |
-| **Gemma 3 (Google, general multilingual)** | | | | | |
+| `deepseek-coder-v2:16b` | 16384 | 4096 | 0.2 | `[strip_thinking]` | doctor で検証 (概ね false) |
+| `deepseek-r1:distill-qwen-14b` / `:distill-qwen-32b` | 16384 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` | false (R1 distill は構造化 tool-call が安定しない) |
+| **Gemma 3 (Google、汎用多言語)** | | | | | |
 | `gemma3:4b` | 8192 | 2048 | 0.3 | — | false |
 | `gemma3:12b` | 16384 | 4096 | 0.3 | — | false |
 | `gemma3:27b` | 32768 | 4096 | 0.3 | — | false |
-| **Gemma 4 (Google, multimodal + configurable thinking; 2026)** | | | | | |
-| `gemma4:e2b` (edge, ~2 B effective) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
-| `gemma4:e4b` (edge, ~4 B effective) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
-| `gemma4:latest` (~9.6 GB pull, 128 K ctx) | 32768 | 4096 | 0.3 | `[strip_thinking]` | verify w/ doctor |
-| `gemma4:26b` (MoE: ~4 B active / 26 B total, 256 K ctx) | 65536 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | verify w/ doctor |
-| `gemma4:31b` (dense flagship) | 32768 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | verify w/ doctor |
-| **Llama (Meta, general instruct)** | | | | | |
+| **Gemma 4 (Google、マルチモーダル + 設定可能 thinking; 2026)** | | | | | |
+| `gemma4:e2b` (edge、実効 ~2B) | 32768 | 4096 | 0.3 | `[strip_thinking]` | doctor で検証 |
+| `gemma4:e4b` (edge、実効 ~4B) | 32768 | 4096 | 0.3 | `[strip_thinking]` | doctor で検証 |
+| `gemma4:latest` (pull 約 9.6 GB、128K ctx) | 32768 | 4096 | 0.3 | `[strip_thinking]` | doctor で検証 |
+| `gemma4:26b` (MoE、アクティブ ~4B / 総 26B、256K ctx) | 65536 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | doctor で検証 |
+| `gemma4:31b` (dense フラッグシップ) | 32768 | 4096 | 0.3 | `[strip_thinking, strip_stop_markers]` | doctor で検証 |
+| **Llama (Meta、汎用 instruct)** | | | | | |
 | `llama3.2:3b` | 8192 | 2048 | 0.3 | — | false |
-| `llama3.3:70b` | 32768 | 4096 | 0.2 | — | true (verify w/ doctor; needs ≥ 48 GB VRAM or 64 GB+ unified) |
-| **gpt-oss (OpenAI open-weights)** | | | | | |
-| `gpt-oss:20b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true (verify w/ doctor) |
-| `gpt-oss:120b` | 65536 | 4096 | 0.2 | `[strip_thinking]` | true (verify w/ doctor; needs ≥ 80 GB VRAM) |
-| **Other** | | | | | |
+| `llama3.3:70b` | 32768 | 4096 | 0.2 | — | true (doctor で検証; VRAM 48 GB+ または 64 GB+ ユニファイドが必要) |
+| **gpt-oss (OpenAI オープンウェイト)** | | | | | |
+| `gpt-oss:20b` | 32768 | 4096 | 0.2 | `[strip_thinking]` | true (doctor で検証) |
+| `gpt-oss:120b` | 65536 | 4096 | 0.2 | `[strip_thinking]` | true (doctor で検証; VRAM 80 GB+ が必要) |
+| **その他** | | | | | |
 | `phi4:14b` | 16384 | 4096 | 0.2 | — | false |
-| HF-GGUF `hf.co/<user>/<repo>:<quant>` | 8192 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | false by default (probe to confirm) |
+| HF-GGUF `hf.co/<user>/<repo>:<quant>` | 8192 | 4096 | 0.2 | `[strip_thinking, strip_stop_markers]` + `append_system_prompt: "/no_think"` | 既定 false（プローブで確認） |
 
-The table is deliberately opinionated for the Claude-Code-through-CodeRouter path: `num_ctx` defaults err on the high side (Claude Code's per-turn system prompt is 15–20 K tokens, so 2048 is always wrong and 8192 is borderline), `temperature` sits at 0.2 for tool-call reliability, and `output_filters` is pre-seeded for families that leak `<think>` or stop-marker tokens. If a family you want isn't listed, **pick the closest row** (qwen3 ≈ qwen3-coder, gemma3 ≈ general dense without tool-use), then run `coderouter doctor --check-model <provider>` — the probe verdicts are the authoritative signal; this table is just a first draft so the doctor has something to compare against.
+この表は CodeRouter を介した Claude Code 経路に合わせて意図的に強めの推奨です: `num_ctx` の既定は高めに倒し（Claude Code の毎ターンシステムプロンプトは 15–20K トークンなので 2048 は常に間違い、8192 でも際どい）、`temperature` は tool-call 信頼性のため 0.2、`output_filters` は `<think>` や stop マーカーを漏らすファミリに対して事前投入。欲しいファミリが載っていなければ**最も近い行**を採用し（qwen3 ≒ qwen3-coder、gemma3 ≒ tool 非対応の dense 汎用）、`coderouter doctor --check-model <provider>` を走らせてください — プローブの判定が権威で、この表は doctor が比較する相手としての初期ドラフトにすぎません。
 
-Why `temperature: 0.2`? Claude Code issues tool calls via structured JSON. Higher temperature (the Ollama default is 0.7) produces more creative phrasing and more malformed JSON. CodeRouter's v0.3-A tool-call repair handles common breakage, but prevention is cheaper than repair. This is one of the findings the [claude-code-local](https://github.com/nicedreamzapp/claude-code-local) project surfaced during its own tool-call reliability work — CodeRouter adopts the same default independently.
+なぜ `temperature: 0.2`？ Claude Code は構造化 JSON でツール呼び出しを発行します。temperature が高い（Ollama 既定 0.7）ほど表現が創造的になり、JSON が壊れやすくなります。CodeRouter v0.3-A の tool-call 修復が壊れを救いますが、予防のほうが安上がり。これは [claude-code-local](https://github.com/nicedreamzapp/claude-code-local) が独立に tool-call 信頼性のワークで拾った知見で、CodeRouter も独立して同じ既定にたどり着きました。
 
-How the values plug into `providers.yaml`:
+値の `providers.yaml` への具体的な入れ方:
 
 ```yaml
 providers:
@@ -158,22 +159,22 @@ providers:
       tools: true
 ```
 
-`num_ctx` and `num_predict` live inside `extra_body.options` because that's Ollama's native JSON shape for these knobs (passed through unmodified to `/v1/chat/completions`). `temperature` *can* also be a top-level field on the OpenAI-shape request, but declaring it inside `options` keeps all three tuning values in one block and Ollama honors it identically either way.
+`num_ctx` と `num_predict` が `extra_body.options` の下に居るのは、Ollama のネイティブ JSON 形状がそうだからです（そのまま `/v1/chat/completions` に渡される）。`temperature` は OpenAI 形状リクエストのトップレベルにも置けますが、`options` の中にまとめて置くと 3 つのチューニング値が 1 ブロックに収まり、Ollama はどちらでも同じように尊重します。
 
-### Which knobs matter most
+### どのつまみが一番効くか
 
-1. **`num_ctx`** is the #1 silent-fail source with Ollama. Default is 2048 tokens; Claude Code's system prompt alone is 15–20 K. If you see blank / gibberish replies with 200 status, this is almost always it. `coderouter doctor` v1.0-B detects this directly (canary echo-back).
-2. **`num_predict`** bounds the *output* length. Default 128 on older Ollama, 256 on some forks. Claude Code replies that look truncated mid-sentence are usually this. `coderouter doctor` v1.0-C detects via a deterministic "count 1 to 30" streaming probe.
-3. **`temperature`** is a quality knob, not a correctness knob. If tool-call repair fires a lot in your logs (`recover_garbled_tool_json` / v0.3-A), dropping temperature to 0.2 is the first fix.
-4. **`output_filters`** removes `<think>` / `<|turn|>` / other stop-marker leaks from the response byte stream at the adapter boundary. Costs one pass over the content; works on every model, every provider, every client.
+1. **`num_ctx`** が Ollama で #1 のサイレント失敗源。既定 2048 トークン; Claude Code のシステムプロンプトだけで 15–20K。200 ステータスなのに空/意味不明の返信が出るときはほぼこれ。`coderouter doctor` v1.0-B が canary エコーで直接検出します。
+2. **`num_predict`** は**出力**長の上限。古い Ollama で既定 128、一部フォークで 256。Claude Code の返信が文の途中で切れるのは大抵これ。`coderouter doctor` v1.0-C が決定的な「1 から 30 まで数えて」ストリーミングプローブで検出します。
+3. **`temperature`** は品質のつまみで、正しさのつまみではありません。ログで tool-call 修復が頻発する（`recover_garbled_tool_json` / v0.3-A）なら、まず 0.2 に落とすのが最初の対処。
+4. **`output_filters`** はアダプタ境界のレスポンスバイトストリームから `<think>` / `<|turn|>` / 他の stop マーカー漏れを除去。コンテンツを 1 回余計に舐める分のコストで、どのモデル・どのプロバイダ・どのクライアントでも動作します。
 
-See [README.md → Ollama beginner — 5 silent-fail symptoms](../README.md#ollama-beginner--5-silent-fail-symptoms-v07-c) for the symptom→fix mapping in narrative form.
+ナラティブな症状→修正マップは [README → Ollama 初心者 — サイレント失敗 5 症状](../README.ja.md#ollama-初心者--サイレント失敗-5-症状-v07-c) を参照。
 
 ---
 
-## 4. Ollama setup — the short version
+## 4. Ollama セットアップ — 要点版
 
-CodeRouter does not install or wrap Ollama — it just speaks to its OpenAI-compat endpoint at `http://localhost:11434/v1`. Setup is:
+CodeRouter は Ollama をインストールも包みもしません — `http://localhost:11434/v1` の OpenAI 互換エンドポイントと話すだけです。セットアップ:
 
 ```bash
 # macOS
@@ -184,48 +185,48 @@ brew services start ollama
 curl -fsSL https://ollama.com/install.sh | sh
 
 # Windows
-#   Download installer from https://ollama.com/download
-#   Or, recommended: install inside WSL2 using the Linux command above.
+#   インストーラを https://ollama.com/download からダウンロード
+#   または推奨: 上の Linux コマンドで WSL2 内にインストール
 ```
 
-Pull the models you declared in `providers.yaml`:
+`providers.yaml` で宣言したモデルを pull:
 
 ```bash
 ollama pull qwen2.5-coder:7b
 ollama pull qwen2.5-coder:14b
 ```
 
-Confirm it's up:
+起動確認:
 
 ```bash
 curl http://localhost:11434/v1/models
 # → {"object":"list","data":[{"id":"qwen2.5-coder:7b", ...}, ...]}
 ```
 
-Environment knobs worth knowing:
+知っておくと便利な環境変数:
 
-- `OLLAMA_KEEP_ALIVE=30m` — how long a loaded model stays resident. Default 5 min is aggressive if you use the local tier intermittently.
-- `OLLAMA_NUM_PARALLEL=2` — number of concurrent requests the server will batch. Raise if you run CodeRouter + another client against the same Ollama.
-- `OLLAMA_FLASH_ATTENTION=1` — experimental attention optimization. Sometimes faster on Apple Silicon; measure before leaving it on.
+- `OLLAMA_KEEP_ALIVE=30m` — ロード済みモデルの常駐時間。既定 5 分はローカルティアを間欠的に使うと厳しい。
+- `OLLAMA_NUM_PARALLEL=2` — サーバーがバッチする同時リクエスト数。同じ Ollama に CodeRouter + 別クライアントを当てるなら上げる。
+- `OLLAMA_FLASH_ATTENTION=1` — 実験的な attention 最適化。Apple Silicon で速くなることがある; 常時 on にする前に計測を。
 
-Deeper Ollama setup topics (choosing a quantization, HF-GGUF loading, custom `Modelfile`, multi-GPU) live in Ollama's own docs at <https://github.com/ollama/ollama>. CodeRouter's concern stops at "the `/v1/*` endpoint is reachable and the tag exists".
+もっと深い Ollama 話（量子化選択、HF-GGUF ロード、カスタム `Modelfile`、マルチ GPU）は Ollama 自身の docs <https://github.com/ollama/ollama> が扱います。CodeRouter の関心は「`/v1/*` エンドポイントに到達可能で、タグが存在する」までです。
 
 ---
 
-## 5. Claude Code launch flow per OS
+## 5. OS 別の Claude Code 起動フロー
 
-The pattern is the same on every OS: start CodeRouter in one terminal, then start Claude Code with two env vars pointing at it.
+パターンはどの OS でも同じ: 1 つのターミナルで CodeRouter を起動し、もう 1 つのターミナルで Claude Code を起動しながら環境変数 2 つでそれを指す。
 
 ### macOS / Linux
 
-Terminal 1 — start CodeRouter:
+ターミナル 1 — CodeRouter 起動:
 
 ```bash
 cd /path/to/CodeRouter
 uv run coderouter serve --port 8088 --mode claude-code
 ```
 
-Terminal 2 — start Claude Code pointed at CodeRouter:
+ターミナル 2 — Claude Code を CodeRouter に向けて起動:
 
 ```bash
 ANTHROPIC_BASE_URL=http://localhost:8088 \
@@ -233,11 +234,11 @@ ANTHROPIC_AUTH_TOKEN=dummy \
 claude
 ```
 
-The `ANTHROPIC_AUTH_TOKEN` value is arbitrary — CodeRouter ignores it; it just needs to be non-empty so Claude Code doesn't complain.
+`ANTHROPIC_AUTH_TOKEN` は任意の値で構いません — CodeRouter は無視しますが、Claude Code が非空を要求するので入れる必要があります。
 
-### Windows — WSL2 (recommended)
+### Windows — WSL2（推奨）
 
-Same as Linux. Run both terminals inside WSL2. Claude Code's npm install runs inside WSL2 too:
+Linux と同じ。両ターミナルを WSL2 内で実行。Claude Code の npm インストールも WSL2 内:
 
 ```bash
 npm install -g @anthropic-ai/claude-code
@@ -246,21 +247,21 @@ npm install -g @anthropic-ai/claude-code
 ### Windows — native PowerShell
 
 ```powershell
-# Terminal 1
+# ターミナル 1
 cd C:\path\to\CodeRouter
 uv run coderouter serve --port 8088 --mode claude-code
 
-# Terminal 2
+# ターミナル 2
 $env:ANTHROPIC_BASE_URL = "http://localhost:8088"
 $env:ANTHROPIC_AUTH_TOKEN = "dummy"
 claude
 ```
 
-Known caveats on Windows native: `scripts/verify_*.sh` require bash (use Git Bash or WSL2). The server itself and the `coderouter doctor` subcommand work identically to Linux.
+Windows native の既知の癖: `scripts/verify_*.sh` は bash 必須（Git Bash または WSL2）。サーバー本体と `coderouter doctor` サブコマンドは Linux と同じように動きます。
 
-### Verifying the bridge
+### 橋の検証
 
-From any OS, once CodeRouter is running:
+どの OS でも、CodeRouter が起動済なら:
 
 ```bash
 curl http://localhost:8088/v1/messages \
@@ -273,85 +274,85 @@ curl http://localhost:8088/v1/messages \
   }'
 ```
 
-A 200 response with content is all you need before pointing Claude Code at it.
+200 とコンテンツが返れば Claude Code を向ける準備は OK。
 
 ---
 
-## 6. OpenRouter free-tier pairing
+## 6. OpenRouter 無料枠とのペア方針
 
-OpenRouter hosts several free-tier models you can layer into your chain as mid-tier fallback between local and paid Claude. The default `claude-code` profile in `examples/providers.yaml` already uses two — pairing two *different vendors* gives rate-limit escape: when qwen hits its per-minute cap, gpt-oss is still available.
+OpenRouter は無料ティアのモデルをいくつかホストしており、ローカルと有料 Claude の間の中間層としてチェーンに重ねられます。`examples/providers.yaml` の既定 `claude-code` プロファイルは 2 つを使っています — **異なるベンダー**を並べるとレート制限脱出になります: qwen が毎分上限に達しても gpt-oss は動く。
 
-Currently shipped as free-tier references:
+現在、無料ティアのリファレンスとして同梱しているもの:
 
-| Provider (YAML name) | Model | Best at | Caveat |
+| プロバイダ (YAML 名) | モデル | 得意 | 注意 |
 |---|---|---|---|
-| `openrouter-free` | `qwen/qwen3-coder:free` | Long-context coding (262K window), tool-use | Daily quota; rate-limits around 20 req/min |
-| `openrouter-gpt-oss-free` | `openai/gpt-oss-120b:free` | General chat, rate-limit escape from qwen | Emits non-standard `reasoning` field — v0.5-C strips it; harmless |
+| `openrouter-free` | `qwen/qwen3-coder:free` | 長文コーディング (262K ウィンドウ)、tool 使用 | 日次クォータ; 20 req/min 前後のレート制限 |
+| `openrouter-gpt-oss-free` | `openai/gpt-oss-120b:free` | 汎用チャット、qwen からのレート制限脱出 | 非標準 `reasoning` フィールドを吐く — v0.5-C が剥がす; 無害 |
 
-The roster rotates — see [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) for the weekly diff. New free models appear, old ones get pulled without warning. Re-run `scripts/openrouter_roster_diff.py` weekly (or let the cron in `scripts/` handle it) to track.
+ロスターはローテーションします — 週次差分は [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) 参照。新しい無料モデルが現れたり、古いものが予告なく引き上げられたりします。週次で `scripts/openrouter_roster_diff.py`（または `scripts/` の cron）を走らせて追跡してください。
 
-Set `OPENROUTER_API_KEY` before launch — OpenRouter free still requires auth:
+起動前に `OPENROUTER_API_KEY` を設定 — OpenRouter free でも認証は必要:
 
 ```bash
-export OPENROUTER_API_KEY=sk-or-v1-...    # get one at https://openrouter.ai/keys
+export OPENROUTER_API_KEY=sk-or-v1-...    # https://openrouter.ai/keys で取得
 uv run coderouter serve --port 8088
 ```
 
-Pairing strategy that works in practice:
+現場で効くペア戦略:
 
-1. **Local first** (7b for speed) — 95 % of short edits hit this and never leave the box.
-2. **Local second** (14b for quality) — catches the 5 % the small model botches.
-3. **OpenRouter free** (qwen3-coder) — when both local fail (timeout / 5xx / overload), long-context is an advantage.
-4. **OpenRouter free different vendor** (gpt-oss-120b) — rate-limit escape from qwen.
-5. **Claude paid** (`ALLOW_PAID=true`) — last resort.
+1. **ローカル先頭**（速度狙いの 7b）— 短い編集の 95% はここでヒットし、ボックスから出ない。
+2. **ローカル 2 番手**（品質狙いの 14b）— 小さなモデルが外した 5% を拾う。
+3. **OpenRouter free**（qwen3-coder）— 両ローカルが失敗（タイムアウト / 5xx / オーバーロード）したとき、長文コンテキストが武器に。
+4. **OpenRouter free 別ベンダー**（gpt-oss-120b）— qwen からのレート制限脱出。
+5. **Claude 有料**（`ALLOW_PAID=true`）— 最終砦。
 
-That's exactly the `claude-code` profile in `examples/providers.yaml`.
+これがまさに `examples/providers.yaml` の `claude-code` プロファイルです。
 
 ---
 
-## 7. Verify it works (`doctor` + `verify`)
+## 7. 動作確認 (`doctor` + `verify`)
 
-CodeRouter ships two verification tools:
+CodeRouter は 2 つの検証ツールを同梱:
 
-**Per-provider diagnostic** — `coderouter doctor --check-model <provider>`. Runs the six-probe chain (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) against one provider and prints a verdict table plus copy-paste YAML patches for any mismatch. Use after every `providers.yaml` edit.
+**プロバイダ単位の診断** — `coderouter doctor --check-model <provider>`。6 プローブ連鎖（auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming）を 1 プロバイダに対して走らせ、判定表と不一致時のコピペ YAML パッチを出力。`providers.yaml` を編集するたびに使うのが良い。
 
 ```bash
 uv run coderouter doctor --check-model ollama-qwen-coder-7b
 ```
 
-**Full-system real-machine verify** — `bash scripts/verify_v1_0.sh`. Runs three paired bare/tuned scenarios end-to-end to prove the transformation + probe loop is closed. See `scripts/verify_v1_0.sh --help` for the scenario breakdown and [`docs/retrospectives/v1.0-verify.md`](./retrospectives/v1.0-verify.md) for the reference evidence doc.
+**フルシステムの実機検証** — `bash scripts/verify_v1_0.sh`。3 つのペア（bare/tuned）シナリオをエンドツーエンドで回し、変換 + プローブのループが閉じていることを実証。シナリオ内訳は `scripts/verify_v1_0.sh --help`、参照エビデンスドキュメントは [`docs/retrospectives/v1.0-verify.md`](./retrospectives/v1.0-verify.md)。
 
-The earlier v0.5 series also has its own verify runner at `scripts/verify_v0_5.sh` covering the capability-gate (`thinking` / `cache_control` / `reasoning`) surface. Both scripts are idempotent and safe to re-run.
-
----
-
-## 8. Troubleshooting quick index
-
-Short map to the right README section for each common symptom:
-
-- **Blank / gibberish reply, 200 status** → [silent-fail symptom #1](../README.md#ollama-beginner--5-silent-fail-symptoms-v07-c) (`num_ctx` too low).
-- **"Cut off mid-word"** → silent-fail symptom not numbered yet (`num_predict` too low). v1.0-C doctor probe detects it.
-- **"Can't read files" / no tool calls** → silent-fail symptom #2 (`capabilities.tools` mismatch).
-- **`<think>` tags in UI** → silent-fail symptom #3 (`output_filters: [strip_thinking]`).
-- **First request always 404** → silent-fail symptom #4 (typo in `model:` or missed `ollama pull`).
-- **All cloud providers 401** → silent-fail symptom #5 (`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` unset).
-- **`capability-degraded` log line** → expected observability; see README Troubleshooting.
-- **`502 Bad Gateway: all providers failed`** → read the `provider-failed` log lines in order; the last `error` field explains why the chain bottomed out.
-
-Everything else: `coderouter doctor --check-model <provider>` first, log lines second.
+v0.5 系にも `scripts/verify_v0_5.sh` があり、ケイパビリティゲート (`thinking` / `cache_control` / `reasoning`) の面を網羅。どちらも冪等で再実行して問題ありません。
 
 ---
 
-## 9. Security and supply chain
+## 8. トラブルシューティングのクイックインデックス
 
-Secrets belong in env vars (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`), never in `providers.yaml` or `.env` files that can be committed by accident. The router defaults to binding `127.0.0.1`; don't expose `0.0.0.0` without a reverse proxy that enforces auth.
+代表的な症状 → README の該当セクションへの短いマップ:
 
-CI enforces `gitleaks` (secret scan), `pip-audit` + OSV-Scanner (CVE audit across two advisory feeds), `uv sync --frozen` (lockfile drift rejection), and a forbidden-SDK grep (no `anthropic` / `openai` / `litellm` / `langchain` in the runtime path). Dependabot proposes weekly bumps for both Python deps and GitHub Actions versions.
+- **空/意味不明の返信、200 ステータス** → [サイレント失敗症状 #1](../README.ja.md#ollama-初心者--サイレント失敗-5-症状-v07-c)（`num_ctx` 低すぎ）。
+- **「単語の途中で切れる」** → まだ番号は付けていない症状（`num_predict` 低すぎ）。v1.0-C の doctor プローブが検出。
+- **「ファイルが読めません」/ ツール呼び出しなし** → 症状 #2（`capabilities.tools` 不一致）。
+- **UI に `<think>` タグ** → 症状 #3（`output_filters: [strip_thinking]`）。
+- **初回リクエストが常に 404** → 症状 #4（`model:` のタイポ、または `ollama pull` 漏れ）。
+- **クラウドプロバイダ全部 401** → 症状 #5（`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` 未設定）。
+- **`capability-degraded` ログ行** → 想定内の観測; README のトラブルシューティング参照。
+- **`502 Bad Gateway: all providers failed`** → `provider-failed` ログ行を順に読む; 末尾の `error` フィールドがチェーン終端の理由。
 
-Full policy, threat model, and vulnerability reporting path: [`docs/security.md`](./security.md).
+それ以外はどれも `coderouter doctor --check-model <provider>` を最初に、ログ行を 2 番目に。
+
+---
+
+## 9. セキュリティとサプライチェーン
+
+シークレットは環境変数 (`OPENROUTER_API_KEY`、`ANTHROPIC_API_KEY`) に置き、誤ってコミットされうる `providers.yaml` や `.env` には書かないでください。ルーターの既定バインドは `127.0.0.1` です; 認証を強制するリバースプロキシ無しに `0.0.0.0` を公開しないこと。
+
+CI は `gitleaks`（シークレットスキャン）、`pip-audit` + OSV-Scanner（2 つのアドバイザリフィードでの CVE 監査）、`uv sync --frozen`（lockfile ドリフト拒否）、そして禁則 SDK grep（ランタイム経路に `anthropic` / `openai` / `litellm` / `langchain` を入れさせない）を強制します。Dependabot が Python 依存と GitHub Actions バージョンの週次 bump を提案します。
+
+完全なポリシー、脅威モデル、脆弱性報告経路: [`docs/security.md`](./security.md)（英語）。
 
 ---
 
 ## 10. Attribution
 
-Tuning defaults and the "temperature 0.2 for tool-call reliability" heuristic are informed by independent work on [claude-code-local](https://github.com/nicedreamzapp/claude-code-local) (Matt Macosko), which ran the same problem end-to-end on MLX-native Apple Silicon and documented the knobs that matter. CodeRouter takes a different implementation path — cross-platform OpenAI-compat router vs. Apple-only MLX-native server — but converged on the same tuning values. Where the two projects overlap, this guide credits prior art; where they differ (routing / fallback / bidirectional wire translation / declarative filter chain), the design is CodeRouter's own.
+チューニング既定値と「tool-call 信頼性のための temperature 0.2」ヒューリスティクスは、MLX ネイティブの Apple Silicon で同じ問題をエンドツーエンドに解き、効くつまみを文書化した独立した [claude-code-local](https://github.com/nicedreamzapp/claude-code-local)（Matt Macosko）の先行ワークから示唆を得ています。CodeRouter は違う実装経路 — クロスプラットフォームの OpenAI 互換ルーター vs Apple 限定の MLX ネイティブサーバー — を採りましたが、同じチューニング値に収束しました。両プロジェクトが重なるところでは先行実装としてクレジットし、異なるところ（ルーティング / フォールバック / 双方向ワイア変換 / 宣言的フィルタチェーン）は CodeRouter 固有の設計です。

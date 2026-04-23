@@ -1,0 +1,354 @@
+# ============================================================
+# CodeRouter providers.yaml — NVIDIA NIM free-tier starter
+#
+# Shape:
+#   local (Ollama)  →  NVIDIA NIM free  →  OpenRouter free  →  (paid)
+#
+# Local-first still wins — CodeRouter only falls through to NIM when
+# the local stack is unavailable / overloaded / times out. NIM then
+# acts as a *high-quality* free escape hatch before OpenRouter's much
+# tighter free rate limit.
+#
+# Why NIM alongside OpenRouter free?
+# ----------------------------------
+#   OpenRouter free tier (per-account, per-model, as of 2026-04):
+#     - ~20 req/min
+#     - ~200 req/day
+#     - a handful of free-tier SKUs; several gated as "available when
+#       the provider has spare capacity" → 429 bursts
+#
+#   NVIDIA NIM developer tier (build.nvidia.com, verified 2026-04):
+#     - 40 req/min rate cap (2× OpenRouter free)
+#     - initial free credit grant (check
+#       https://build.nvidia.com/account/usage for your current balance
+#       — credits are consumed per request, heavier reasoning / 400B+
+#       models cost more per call)
+#     - full native tool-calling on Llama-3.3-70B, Qwen3-Coder-480B,
+#       Kimi-K2 — verified live against integrate.api.nvidia.com on
+#       2026-04-23
+#     - 70B–480B class coder / instruct models, streaming (SSE with
+#       stream_options.include_usage), vision on select SKUs
+#
+#   Rule of thumb:
+#     - If it's a short coding turn your 7B local can handle → Ollama.
+#     - If the turn needs quality and you still want free → NIM.
+#     - If NIM 429s or you've run out of credits → OpenRouter free.
+#     - If ALLOW_PAID=true and both free lanes are dead → paid cloud.
+#
+# NVIDIA NIM setup
+# ----------------
+#   1. Sign up at https://build.nvidia.com (free, no CC required).
+#   2. Generate an API key — format is `nvapi-...`.
+#   3. Put it in .env as NVIDIA_NIM_API_KEY=nvapi-...
+#   4. Start CodeRouter with `--profile claude-code-nim`.
+#
+# Live-verified roster (2026-04-23)
+# ---------------------------------
+# Baseline smoke test against integrate.api.nvidia.com/v1 — chat probe
+# ("Reply with exactly: pong", max_tokens=8, temperature=0) plus an
+# explicit tool-call probe (declare one echo tool, assert tool_calls
+# is returned):
+#
+#   INCLUDED IN THIS FILE (tool-capable):
+#     meta/llama-3.3-70b-instruct           chat  540ms  tool_calls=OK
+#     qwen/qwen3-coder-480b-a35b-instruct   chat  634ms  tool_calls=OK
+#     moonshotai/kimi-k2-instruct           chat 2838ms  tool_calls=OK
+#
+#   INCLUDED BUT CHAT-ONLY:
+#     qwen/qwen2.5-coder-32b-instruct       chat  160ms  tools=HTTP 400
+#                                           ("Tool use has not been enabled")
+#
+#   INCLUDED IN nim-reasoning PROFILE ONLY (reasoning_content variant):
+#     moonshotai/kimi-k2-thinking           chat 4056ms  reasoning_content
+#                                           wraps output in <think>...</think>
+#                                           → strip_thinking filter applies
+#
+#   REJECTED DURING PROBING (documented so you don't retry blindly):
+#     nvidia/llama-3.1-nemotron-70b-instruct       HTTP 404 (account roster)
+#     deepseek-ai/deepseek-r1                      HTTP 410 EOL 2026-01-26
+#     nvidia/llama-3.3-nemotron-super-49b-v1.5     200 but empty content +
+#                                                  no tool_calls (reasoning-
+#                                                  only variant; useless for
+#                                                  Claude Code)
+#     deepseek-ai/deepseek-v3.2                    TIMEOUT @ 15s
+#     z-ai/glm4.7                                  TIMEOUT @ 10s
+#
+# → Any provider with `tools: true` MUST use one of the three
+#   tool-capable model IDs above. `qwen/qwen2.5-coder-32b-instruct`
+#   is declared below with `tools: false` so CodeRouter's capability
+#   gate never sends a tool-laden request to it (the router falls
+#   through to the next provider instead of tripping a 400).
+#
+# Model-id drift
+# --------------
+#   NIM model slugs are case-sensitive and include the vendor prefix.
+#   The current roster lives at https://build.nvidia.com/models. When
+#   a slug is deprecated the endpoint returns 404 / 410 and CodeRouter
+#   falls through to the next provider (per the v0.3-D retryable-
+#   status list). Keeping ≥2 NIM entries from *different* model
+#   families (Meta + Qwen + Moonshot below) means one slug drift
+#   never kills the whole NIM lane. Run
+#   `coderouter doctor --check-model nim-llama-3.3-70b` after editing
+#   to confirm the slug, auth, and tool-call capability match what
+#   you declared.
+# ============================================================
+
+allow_paid: false
+default_profile: claude-code-nim
+display_timezone: Asia/Tokyo
+
+providers:
+  # ------------------------------------------------------------
+  # Tier 1: local (same as the main examples/providers.yaml)
+  # ------------------------------------------------------------
+
+  - name: ollama-qwen-coder-7b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:7b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  - name: ollama-qwen-coder-14b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5-coder:14b
+    paid: false
+    timeout_s: 300
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # Tier 2a: NVIDIA NIM free (40 req/min)
+  #
+  # Every NIM stanza is a plain ``openai_compat`` entry — the NIM
+  # gateway speaks OpenAI /v1/chat/completions verbatim, including
+  # ``tools``, streaming, and ``stream_options: {include_usage: true}``.
+  # No special adapter is needed.
+  #
+  # api_key_env points at NVIDIA_NIM_API_KEY which you set in .env.
+  # The Authorization header becomes `Bearer nvapi-...` automatically
+  # (see coderouter/adapters/openai_compat.py::_headers).
+  #
+  # paid: false is intentional — the free developer tier consumes
+  # credits per request, but is not charged to a credit card. Leaving
+  # it false keeps the chain usable under the default ALLOW_PAID=false.
+  # Flip to true when you've upgraded to a paid NIM subscription and
+  # want that subscription gated behind ALLOW_PAID.
+  # ------------------------------------------------------------
+
+  # Primary NIM choice for Claude Code-style coding traffic.
+  # Llama-3.3-70B-Instruct has been on NIM since late 2024, supports
+  # native tool calling, 128K context, and survives Claude Code's
+  # 15-20K-token system prompt within the 90s timeout.
+  # Verified 2026-04-23: chat 540ms, tool_calls 540ms (echo tool OK),
+  # streaming 260ms / 12 SSE chunks / usage returned via
+  # stream_options.include_usage.
+  - name: nim-llama-3.3-70b
+    kind: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    model: meta/llama-3.3-70b-instruct
+    api_key_env: NVIDIA_NIM_API_KEY
+    paid: false
+    timeout_s: 90
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Star of the agentic-coding lane: Qwen3-Coder 480B-A35B, a sparse
+  # MoE tuned specifically for tool-using coding agents. Larger model,
+  # but NIM routes it efficiently — verified pong-latency 634ms and
+  # correct tool_calls on the echo probe (2026-04-23). Use this as the
+  # quality fallback when Llama-3.3 mis-selects a tool.
+  - name: nim-qwen3-coder-480b
+    kind: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    model: qwen/qwen3-coder-480b-a35b-instruct
+    api_key_env: NVIDIA_NIM_API_KEY
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Moonshot's Kimi-K2 — another strong coder-with-tools. Slower on
+  # NIM than Llama/Qwen (≈2.8s first-byte on the tool probe) so we
+  # keep it third in the chain rather than primary. Verified
+  # 2026-04-23: echo tool_call returned cleanly.
+  - name: nim-kimi-k2
+    kind: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    model: moonshotai/kimi-k2-instruct
+    api_key_env: NVIDIA_NIM_API_KEY
+    paid: false
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # Qwen2.5-Coder 32B — explicitly chat-only on NIM.
+  #
+  # We verified on 2026-04-23 that this model returns HTTP 400 for any
+  # request that declares ``tools`` ("Tool use has not been enabled,
+  # because it is unsupported by qwen/qwen2.5-coder-32b-instruct").
+  # Declaring ``tools: false`` below makes CodeRouter's capability gate
+  # route around this entry whenever the incoming request carries
+  # tool definitions (every Claude Code turn does), so the NIM lane
+  # remains useful for lightweight non-agent chat traffic without
+  # tripping 400s on agent traffic.
+  - name: nim-qwen-coder-32b-chat
+    kind: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    model: qwen/qwen2.5-coder-32b-instruct
+    api_key_env: NVIDIA_NIM_API_KEY
+    paid: false
+    timeout_s: 60
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false   # NIMがHTTP 400で弾くので、routerがこの枝を回避する
+
+  # Reasoning variant of Kimi-K2. Live probe on 2026-04-23 returned
+  # ``content: null`` and the full answer inlined into
+  # ``reasoning_content`` as ``<think>...</think>`` text — i.e. the
+  # model wraps its reasoning in literal think tags on the NIM edge.
+  # ``strip_thinking`` below exists to scrub those tags if the field
+  # ever bleeds into the content channel on a future NIM build
+  # (adapter v1.0-A applies the filter at the content boundary; it is
+  # a no-op on the current response shape but cheap to keep on).
+  # Slower first byte (≈4s) than the plain ``kimi-k2-instruct``
+  # variant; use only in the ``nim-reasoning`` profile below, not in
+  # the primary Claude Code chain.
+  - name: nim-kimi-k2-thinking
+    kind: openai_compat
+    base_url: https://integrate.api.nvidia.com/v1
+    model: moonshotai/kimi-k2-thinking
+    api_key_env: NVIDIA_NIM_API_KEY
+    paid: false
+    timeout_s: 180
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # Tier 2b: OpenRouter free (escape hatch for when NIM 429s or your
+  # free credit balance runs out). Same stanzas as the main
+  # examples/providers.yaml — see that file for the per-day /
+  # per-minute quota notes.
+  # ------------------------------------------------------------
+
+  - name: openrouter-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-coder:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  - name: openrouter-gpt-oss-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-oss-120b:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # Tier 3: paid (ALLOW_PAID=true required)
+  # ------------------------------------------------------------
+
+  - name: openrouter-claude
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: anthropic/claude-sonnet-4
+    api_key_env: OPENROUTER_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  - name: anthropic-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-6
+    api_key_env: ANTHROPIC_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+profiles:
+  # Recommended Claude Code chain. NIM is wedged between local (Ollama)
+  # and OpenRouter free. The three tool-capable NIM entries come from
+  # *different* model families (Meta / Qwen / Moonshot) so a single
+  # slug deprecation or per-model rate-limit burst can't kill the whole
+  # NIM lane.
+  - name: claude-code-nim
+    providers:
+      - ollama-qwen-coder-7b
+      - ollama-qwen-coder-14b
+      - nim-llama-3.3-70b
+      - nim-qwen3-coder-480b
+      - nim-kimi-k2
+      - openrouter-free
+      - openrouter-gpt-oss-free
+      - openrouter-claude
+
+  # "I have no local GPU" variant — skip Ollama entirely and start
+  # straight from NIM. Still falls back to OpenRouter free, then paid.
+  - name: nim-first
+    providers:
+      - nim-llama-3.3-70b
+      - nim-qwen3-coder-480b
+      - nim-kimi-k2
+      - openrouter-free
+      - openrouter-gpt-oss-free
+      - openrouter-claude
+
+  # Strictly free lane — no paid providers even when ALLOW_PAID=true.
+  - name: free-only-nim
+    providers:
+      - ollama-qwen-coder-7b
+      - ollama-qwen-coder-14b
+      - nim-llama-3.3-70b
+      - nim-qwen3-coder-480b
+      - nim-kimi-k2
+      - openrouter-free
+      - openrouter-gpt-oss-free
+
+  # Reasoning-heavy chain. Put Kimi-K2-Thinking up front when you
+  # actually want reasoning traces (strip_thinking is applied on the
+  # provider so the UI stays clean; flip the filter off locally if you
+  # *do* want traces surfaced).
+  - name: nim-reasoning
+    providers:
+      - nim-kimi-k2-thinking
+      - nim-qwen3-coder-480b
+      - nim-llama-3.3-70b
+      - openrouter-free
