@@ -1,0 +1,136 @@
+# ============================================================
+# CodeRouter providers.yaml — Note 記事用サンプル (2026-04 版)
+#
+# Qwen3.6-coder / Gemma4 を主役にした、Claude Code + Codex CLI 向けの
+# 「ローカル → 無料クラウド」のみで完結するチェーン。
+# 有料 API は ALLOW_PAID=true を明示しない限り絶対に呼ばれません。
+#
+# 使い方:
+#   1. このファイルを ~/.coderouter/providers.yaml に置く
+#        mkdir -p ~/.coderouter
+#        cp examples/providers.note-2026.yaml ~/.coderouter/providers.yaml
+#      または GitHub から直接:
+#        curl -fsSL -o ~/.coderouter/providers.yaml \
+#          https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.note-2026.yaml
+#   2. ステップ 1 で `ollama pull` したモデル名と一致しているか確認
+#   3. （任意）OpenRouter の無料クラウドを使う場合のみ
+#        export OPENROUTER_API_KEY="sk-or-v1-..."
+#   4. coderouter serve --port 8088
+# ============================================================
+
+allow_paid: false              # 有料プロバイダはオプトイン制 (既定 false)
+default_profile: claude-code   # 何も指定しないと Claude Code 用の鎖が選ばれる
+display_timezone: Asia/Tokyo
+
+providers:
+  # ------------------------------------------------------------
+  # Tier 1: ローカル Ollama (無料・最優先)
+  # ------------------------------------------------------------
+
+  # メイン: 最新の Qwen3.6-coder 8B
+  # M-series Mac / メモリ 16GB 以上 PC でサクサク動くサイズ。
+  # ツール選択もそこそこ安定するので Claude Code の主軸に向いています。
+  - name: ollama-qwen3-coder
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6-coder:8b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]   # Qwen 系の <think>...</think> 漏れを除去
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # サブ: Google Gemma4 9B (vendor 多様化)
+  # Qwen が落ちても、別系統の Gemma が拾ってくれるよう挟む。
+  # 英語ドキュメントの整形が綺麗、コード生成も平均的に高品質。
+  - name: ollama-gemma4
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:9b
+    paid: false
+    timeout_s: 120
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # フォールバック: 軽量モデル (~1-2 GB)
+  # メインの 2 つが両方落ちた / メモリが厳しい時の最後のローカル砦。
+  # tools: false にしてあるのは、1.5B クラスはツール呼び出し JSON を
+  # 安定して生成できないためです (Claude Code 利用時にハングする原因)。
+  - name: ollama-light
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6-coder:1.5b
+    paid: false
+    timeout_s: 60
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false
+
+  # ------------------------------------------------------------
+  # Tier 2: 無料クラウド (OpenRouter free) — 最後の砦
+  # OPENROUTER_API_KEY が未設定なら自動で無視されます。
+  # ------------------------------------------------------------
+
+  # 無料枠の本命: Qwen3-Coder 480B MoE。tools / 262K context 対応。
+  - name: openrouter-qwen-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-coder:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # 無料枠の予備: openai/gpt-oss-120b。Qwen 側が 429 (rate limit) のとき用。
+  # 別ベンダーを混ぜることで、片方の上限を踏んでも続けられます。
+  - name: openrouter-gptoss-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-oss-120b:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+profiles:
+  # Claude Code 用 (ANTHROPIC_BASE_URL=http://localhost:8088 で呼ばれる)
+  # ローカル 3 段 → 無料クラウド 2 段。有料は一切含めない。
+  - name: claude-code
+    providers:
+      - ollama-qwen3-coder
+      - ollama-gemma4
+      - ollama-light
+      - openrouter-qwen-free
+      - openrouter-gptoss-free
+
+  # Codex CLI / 素の OpenAI SDK 用 (OPENAI_BASE_URL=http://localhost:8088/v1)
+  # Codex は Claude Code ほどシステムプロンプトが重くないので、
+  # ローカル 1 段 + 無料クラウドだけのスリムな構成にしています。
+  - name: default
+    providers:
+      - ollama-qwen3-coder
+      - openrouter-qwen-free
+      - openrouter-gptoss-free
+
+  # 「絶対に有料は呼ばれない」厳格モード。
+  # ALLOW_PAID=true を誤って設定してしまった時の安全弁。
+  - name: free-only
+    providers:
+      - ollama-qwen3-coder
+      - ollama-gemma4
+      - ollama-light
+      - openrouter-qwen-free
+      - openrouter-gptoss-free
