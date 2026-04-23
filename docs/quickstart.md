@@ -1,6 +1,6 @@
 # Quickstart — 最短で動かす
 
-> この手順書は「最低限の作業で動かす」ことだけを目的にしています。設定の理由や背景は [usage-guide.ja.md](./usage-guide.ja.md) に寄せてあります。
+> この手順書は「最低限の作業で動かす」ことだけを目的にしています。設定の理由や背景は [usage-guide.md](./usage-guide.md) に寄せてあります。
 
 Claude Code または codex CLI を、ローカルの Ollama で **$0** で回せる状態までを 10〜15 分で作ります。チェーンは共通で、最後のステップだけエージェント別に分かれます。
 
@@ -253,6 +253,6 @@ default_profile: auto   # ← この sentinel が auto_router を有効化する
 
 ## 次に読むもの
 
-- [usage-guide.ja.md](./usage-guide.ja.md) — 各設定項目の意味、複数プロバイダの詳細チューニング、doctor の全診断内容
+- [usage-guide.md](./usage-guide.md) — 各設定項目の意味、複数プロバイダの詳細チューニング、doctor の全診断内容
 - [security.md](./security.md) — 有料 API を opt-in する時の注意
-- [README.ja.md](../README.ja.md) §「CodeRouter は自分に必要か？」 — そもそも自分の用途に要るかの判断フロー
+- [README.md](../README.md) §「CodeRouter は自分に必要か？」 — そもそも自分の用途に要るかの判断フロー

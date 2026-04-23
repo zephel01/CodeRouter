@@ -1,6 +1,6 @@
 # Quickstart — get it running in one sitting
 
-> This guide is intentionally minimum-effort. Background on *why* each setting exists lives in [usage-guide.md](./usage-guide.md).
+> This guide is intentionally minimum-effort. Background on *why* each setting exists lives in [usage-guide.en.md](./usage-guide.en.md).
 
 You'll have Claude Code or the codex CLI talking to a local Ollama stack for **$0** in about 10–15 minutes. The fallback chain is shared between the two patterns; only the last step differs per agent.
 
@@ -256,6 +256,6 @@ When you want your own rules ("translate requests go to writing", "anything cont
 
 ## What to read next
 
-- [usage-guide.md](./usage-guide.md) — per-setting meaning, multi-provider tuning, full doctor diagnostic catalog
-- [security.md](./security.md) — caveats when opting into paid APIs
-- [README.md](../README.md) § "Do I actually need CodeRouter?" — decision flow for whether this fits your use case
+- [usage-guide.en.md](./usage-guide.en.md) — per-setting meaning, multi-provider tuning, full doctor diagnostic catalog
+- [security.en.md](./security.en.md) — caveats when opting into paid APIs
+- [README.en.md](../README.en.md) § "Do I actually need CodeRouter?" — decision flow for whether this fits your use case

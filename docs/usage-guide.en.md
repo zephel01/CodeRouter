@@ -1,6 +1,6 @@
 # CodeRouter Usage Guide
 
-A practical companion to [`README.md`](../README.md). The README tells you what CodeRouter *is*; this guide tells you how to pick a model for your hardware, which knobs to tune, and which OS flow to follow.
+A practical companion to [`README.md`](../README.en.md). The README tells you what CodeRouter *is*; this guide tells you how to pick a model for your hardware, which knobs to tune, and which OS flow to follow.
 
 Sections:
 
@@ -14,7 +14,7 @@ Sections:
 8. [Troubleshooting quick index](#8-troubleshooting-quick-index)
 9. [Attribution](#9-attribution)
 
-Japanese version: [`docs/usage-guide.ja.md`](./usage-guide.ja.md)
+Japanese version: [`docs/usage-guide.md`](./usage-guide.md)
 
 ---
 
@@ -167,7 +167,7 @@ providers:
 3. **`temperature`** is a quality knob, not a correctness knob. If tool-call repair fires a lot in your logs (`recover_garbled_tool_json` / v0.3-A), dropping temperature to 0.2 is the first fix.
 4. **`output_filters`** removes `<think>` / `<|turn|>` / other stop-marker leaks from the response byte stream at the adapter boundary. Costs one pass over the content; works on every model, every provider, every client.
 
-See [README.md → Ollama beginner — 5 silent-fail symptoms](../README.md#ollama-beginner--5-silent-fail-symptoms-v07-c) for the symptom→fix mapping in narrative form.
+See [README.md → Ollama beginner — 5 silent-fail symptoms](../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) for the symptom→fix mapping in narrative form.
 
 ---
 
@@ -329,7 +329,7 @@ The earlier v0.5 series also has its own verify runner at `scripts/verify_v0_5.s
 
 Short map to the right README section for each common symptom:
 
-- **Blank / gibberish reply, 200 status** → [silent-fail symptom #1](../README.md#ollama-beginner--5-silent-fail-symptoms-v07-c) (`num_ctx` too low).
+- **Blank / gibberish reply, 200 status** → [silent-fail symptom #1](../README.en.md#ollama-beginner--5-silent-fail-symptoms-v07-c) (`num_ctx` too low).
 - **"Cut off mid-word"** → silent-fail symptom not numbered yet (`num_predict` too low). v1.0-C doctor probe detects it.
 - **"Can't read files" / no tool calls** → silent-fail symptom #2 (`capabilities.tools` mismatch).
 - **`<think>` tags in UI** → silent-fail symptom #3 (`output_filters: [strip_thinking]`).
@@ -348,7 +348,7 @@ Secrets belong in env vars (`OPENROUTER_API_KEY`, `ANTHROPIC_API_KEY`), never in
 
 CI enforces `gitleaks` (secret scan), `pip-audit` + OSV-Scanner (CVE audit across two advisory feeds), `uv sync --frozen` (lockfile drift rejection), and a forbidden-SDK grep (no `anthropic` / `openai` / `litellm` / `langchain` in the runtime path). Dependabot proposes weekly bumps for both Python deps and GitHub Actions versions.
 
-Full policy, threat model, and vulnerability reporting path: [`docs/security.md`](./security.md).
+Full policy, threat model, and vulnerability reporting path: [`docs/security.en.md`](./security.en.md).
 
 ---
 
