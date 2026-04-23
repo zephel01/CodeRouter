@@ -39,8 +39,23 @@
 # ----------------
 #   1. Sign up at https://build.nvidia.com (free, no CC required).
 #   2. Generate an API key — format is `nvapi-...`.
-#   3. Put it in .env as NVIDIA_NIM_API_KEY=nvapi-...
-#   4. Start CodeRouter with `--profile claude-code-nim`.
+#   3. Put it in .env with the `export` keyword:
+#        export NVIDIA_NIM_API_KEY=nvapi-...
+#      then `source .env`. CodeRouter does NOT auto-load .env, and the key
+#      MUST be exported (not just shell-local) — otherwise the child server
+#      process sees an empty value, sends no Authorization header, and the
+#      upstream returns:
+#        "401 from upstream: Header of type `authorization` was missing"
+#      Verify with: `env | grep NVIDIA_NIM_API_KEY` (must print a row).
+#   4. Run `coderouter doctor --check-model nim-qwen3-coder-480b` first.
+#      If `auth+basic-chat …… [OK]` appears, your env var reached the
+#      Python process and the key itself is valid. Skip the doctor step
+#      only if you've successfully done it before in this shell.
+#   5. Start CodeRouter with `coderouter serve --mode claude-code-nim --port 8088`.
+#      (This file already sets `default_profile: claude-code-nim`, so if you
+#      copy it to ~/.coderouter/providers.yaml you can also just run
+#      `coderouter serve --port 8088`. The `--port` MUST match what your
+#      Claude Code env vars expect, e.g. `ANTHROPIC_BASE_URL=http://localhost:8088`.)
 #
 # Live-verified roster (2026-04-23)
 # ---------------------------------
@@ -306,27 +321,39 @@ providers:
 profiles:
   # Recommended Claude Code chain. NIM is wedged between local (Ollama)
   # and OpenRouter free. The three tool-capable NIM entries come from
-  # *different* model families (Meta / Qwen / Moonshot) so a single
+  # *different* model families (Qwen / Moonshot / Meta) so a single
   # slug deprecation or per-model rate-limit burst can't kill the whole
   # NIM lane.
+  #
+  # Ordering note (2026-04-24, real-machine verified):
+  #   nim-qwen3-coder-480b is FIRST among NIM, not Llama-3.3-70B.
+  #   Llama-3.3-70B is technically the lowest-latency NIM entry, but in
+  #   live Claude Code traffic it over-eagerly invokes Skill / AskUser
+  #   Question tools — e.g. "こんにちは" got rewritten to `Skill(hello)`
+  #   and a fabricated "What is your name?" elicitation. Qwen3-Coder-480B
+  #   is purpose-trained for agentic coding and does not exhibit this
+  #   behavior. Llama-3.3-70B is kept in the chain as a tail fallback,
+  #   not as the first responder. See docs/articles/note-nvidia-nim.md
+  #   §6-2 for the symptom log.
   - name: claude-code-nim
     providers:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
-      - nim-llama-3.3-70b
-      - nim-qwen3-coder-480b
-      - nim-kimi-k2
+      - nim-qwen3-coder-480b      # NIM主力 — agentic coding 専用設計、過剰呼び出しなし
+      - nim-kimi-k2               # 第2候補 — slow but tool-stable
+      - nim-llama-3.3-70b         # 退避線 — Claude Code 単独では暴走するので最後尾
       - openrouter-free
       - openrouter-gpt-oss-free
       - openrouter-claude
 
   # "I have no local GPU" variant — skip Ollama entirely and start
   # straight from NIM. Still falls back to OpenRouter free, then paid.
+  # Same Qwen-first ordering as `claude-code-nim`.
   - name: nim-first
     providers:
-      - nim-llama-3.3-70b
-      - nim-qwen3-coder-480b
+      - nim-qwen3-coder-480b      # 第1選択
       - nim-kimi-k2
+      - nim-llama-3.3-70b         # Claude Code 用途では最後尾
       - openrouter-free
       - openrouter-gpt-oss-free
       - openrouter-claude
@@ -336,9 +363,9 @@ profiles:
     providers:
       - ollama-qwen-coder-7b
       - ollama-qwen-coder-14b
-      - nim-llama-3.3-70b
       - nim-qwen3-coder-480b
       - nim-kimi-k2
+      - nim-llama-3.3-70b
       - openrouter-free
       - openrouter-gpt-oss-free
 
