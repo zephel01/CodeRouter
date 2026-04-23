@@ -42,13 +42,15 @@ providers:
       streaming: true
       tools: true
 
-  # サブ: Google Gemma4 9B (vendor 多様化)
+  # サブ: Google Gemma4 e4b (vendor 多様化)
   # Qwen が落ちても、別系統の Gemma が拾ってくれるよう挟む。
+  # Gemma4 は Matformer 系で `:e4b` (effective 4B) / `:e2b` (effective 2B) という
+  # 独特のタグ命名。実体は同じ重みファイルを推論時に切り替える設計です。
   # 英語ドキュメントの整形が綺麗、コード生成も平均的に高品質。
   - name: ollama-gemma4
     kind: openai_compat
     base_url: http://localhost:11434/v1
-    model: gemma4:9b
+    model: gemma4:e4b              # 約 7 GB / より軽くしたければ gemma4:e2b に変更
     paid: false
     timeout_s: 120
     output_filters: [strip_thinking]
