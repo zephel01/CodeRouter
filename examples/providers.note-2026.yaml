@@ -1,7 +1,7 @@
 # ============================================================
 # CodeRouter providers.yaml — Note 記事用サンプル (2026-04 版)
 #
-# Qwen3.6-coder / Gemma4 を主役にした、Claude Code + Codex CLI 向けの
+# Qwen3.5 / Gemma4 を主役にした、Claude Code + Codex CLI 向けの
 # 「ローカル → 無料クラウド」のみで完結するチェーン。
 # 有料 API は ALLOW_PAID=true を明示しない限り絶対に呼ばれません。
 #
@@ -27,13 +27,14 @@ providers:
   # Tier 1: ローカル Ollama (無料・最優先)
   # ------------------------------------------------------------
 
-  # メイン: 最新の Qwen3.6-coder 8B
+  # メイン: Alibaba 最新の Qwen3.5 9B (約 5.5 GB / 256K context / マルチモーダル)
   # M-series Mac / メモリ 16GB 以上 PC でサクサク動くサイズ。
   # ツール選択もそこそこ安定するので Claude Code の主軸に向いています。
+  # qwen3.6 系は記事執筆時点で 30B+ の大型しか無いため 3.5 を採用。
   - name: ollama-qwen3-coder
     kind: openai_compat
     base_url: http://localhost:11434/v1
-    model: qwen3.6-coder:8b
+    model: qwen3.5:9b
     paid: false
     timeout_s: 120
     output_filters: [strip_thinking]   # Qwen 系の <think>...</think> 漏れを除去
@@ -59,14 +60,14 @@ providers:
       streaming: true
       tools: true
 
-  # フォールバック: 軽量モデル (~1-2 GB)
+  # フォールバック: 軽量モデル qwen3.5:0.8b (~1.0 GB)
   # メインの 2 つが両方落ちた / メモリが厳しい時の最後のローカル砦。
-  # tools: false にしてあるのは、1.5B クラスはツール呼び出し JSON を
+  # tools: false にしてあるのは、1B 未満のクラスはツール呼び出し JSON を
   # 安定して生成できないためです (Claude Code 利用時にハングする原因)。
   - name: ollama-light
     kind: openai_compat
     base_url: http://localhost:11434/v1
-    model: qwen3.6-coder:1.5b
+    model: qwen3.5:0.8b
     paid: false
     timeout_s: 60
     output_filters: [strip_thinking]
