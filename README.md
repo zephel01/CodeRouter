@@ -29,6 +29,13 @@
   <a href="./README.en.md">English</a> · <strong>日本語</strong> · <a href="./docs/usage-guide.md">利用ガイド</a> · <a href="./docs/security.md">Security</a>
 </p>
 
+<p align="center">
+  <strong>10 分で動かす →</strong> <a href="./docs/quickstart.md">Quickstart</a>
+  ｜ <strong>詳しく →</strong> <a href="./docs/usage-guide.md">利用ガイド</a>
+  ｜ <strong>無料で回す →</strong> <a href="./docs/free-tier-guide.md">無料枠ガイド</a>
+  ｜ <strong>要るか判定 →</strong> <a href="./docs/when-do-i-need-coderouter.md">要否判定</a>
+</p>
+
 <!-- TODO: before/after GIF を docs/assets/before-after-toolcall.gif に配置予定。
      暫定で ダッシュボードのスクショ だけリンク。 -->
 <!-- ![Before / After tool calling demo](./docs/assets/before-after-toolcall.gif) -->
@@ -41,6 +48,20 @@
 - ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 601 本緑
 
 → **Claude Code / gemini-cli / codex + Ollama / llama.cpp / NVIDIA NIM で、破綻しない local-first agent が組める**
+
+## ドキュメント
+
+| 目的 | ドキュメント | 内容 |
+|---|---|---|
+| **動かす** | [Quickstart](./docs/quickstart.md) | Claude Code / codex を local Ollama で 10〜15 分で動かす最短手順 |
+| **使いこなす** | [利用ガイド](./docs/usage-guide.md) | HW 別モデル選定・チューニング既定値・OS ごとの起動フロー・`doctor` / `verify` の読み方 |
+| **無料で回す** | [無料枠ガイド](./docs/free-tier-guide.md) | NVIDIA NIM 40 req/min × OpenRouter 無料枠の使い分け・live 検証済みモデル表・地雷 5 点 |
+| **要るか判断する** | [要否判定ガイド](./docs/when-do-i-need-coderouter.md) | エージェント × モデルの詳細マトリクスで「そもそも自分に必要か」を決める |
+| **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
+| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.6.1 — NIM 無料枠対応） |
+| **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
+
+English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Security](./docs/security.en.md)
 
 ## CodeRouter で何が楽になるか
 

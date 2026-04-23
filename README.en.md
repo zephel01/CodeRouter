@@ -30,6 +30,13 @@
   <strong>English</strong> · <a href="./README.md">日本語</a> · <a href="./docs/usage-guide.en.md">Usage guide</a> · <a href="./docs/security.en.md">Security</a>
 </p>
 
+<p align="center">
+  <strong>Up in 10 min →</strong> <a href="./docs/quickstart.en.md">Quickstart</a>
+  ｜ <strong>Deep dive →</strong> <a href="./docs/usage-guide.en.md">Usage guide</a>
+  ｜ <strong>Run for free →</strong> <a href="./docs/free-tier-guide.en.md">Free-tier guide</a>
+  ｜ <strong>Do I need it? →</strong> <a href="./docs/when-do-i-need-coderouter.en.md">Decision guide</a>
+</p>
+
 <!-- TODO: before/after GIF will live at docs/assets/before-after-toolcall.gif. -->
 <!-- ![Before / After tool calling demo](./docs/assets/before-after-toolcall.gif) -->
 
@@ -41,6 +48,20 @@
 - Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 601 tests green
 
 → **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
+
+## Documentation
+
+| Goal | Doc | What's inside |
+|---|---|---|
+| **Get it running** | [Quickstart](./docs/quickstart.en.md) | Claude Code / codex on top of local Ollama in 10–15 minutes |
+| **Use it well** | [Usage guide](./docs/usage-guide.en.md) | Hardware-tier model picks, tuning defaults, per-OS launch flow, reading `doctor` / `verify` output |
+| **Run for free** | [Free-tier guide](./docs/free-tier-guide.en.md) | Stacking NVIDIA NIM (40 req/min) with OpenRouter free: live-verified roster and five footguns |
+| **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
+| **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.6.1 — NIM free-tier support) |
+| **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
+
+日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [Security](./docs/security.md)
 
 ## What gets easier with CodeRouter
 
