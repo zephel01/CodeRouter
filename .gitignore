@@ -78,3 +78,9 @@ docs/inside/
 docs/articles/
 !.env.publish.tpl
 !.env.tpl
+
+# v1.7-A: 1Password publish-time secret reference templates.
+# These contain `op://` references, not actual secrets, but kept out
+# of the repo because the Vault path includes personal Vault names.
+.env.publish.tpl
+.env.tpl
