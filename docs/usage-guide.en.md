@@ -336,8 +336,10 @@ Short map to the right README section for each common symptom:
 - **"Can't read files" / no tool calls** → silent-fail symptom #2 (`capabilities.tools` mismatch).
 - **`<think>` tags in UI** → silent-fail symptom #3 (`output_filters: [strip_thinking]`).
 - **First request always 404** → silent-fail symptom #4 (typo in `model:` or missed `ollama pull`).
-- **All cloud providers 401** → silent-fail symptom #5 (`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` unset).
-- **`capability-degraded` log line** → expected observability; see README Troubleshooting.
+- **All cloud providers 401** → silent-fail symptom #5 (`OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` not exported — see [troubleshooting §1-2](./troubleshooting.en.md#1-2-env-requires-export)).
+- **`Header of type authorization was missing` 401** → env var didn't reach the child process ([troubleshooting §1-3 / §1-4](./troubleshooting.en.md#1-3-verifying-that-the-env-var-actually-reached-the-child)).
+- **Claude Code rewrites greetings as `Skill(hello)` etc.** → backend model is over-eager about tool invocation ([troubleshooting §4-1](./troubleshooting.en.md#4-1-greetings-get-rewritten-as-tool-calls-llama-3-3-70b-class)).
+- **`capability-degraded` log line** → expected observability; see [troubleshooting §2](./troubleshooting.en.md#2-reading-logs-and-common-patterns).
 - **`502 Bad Gateway: all providers failed`** → read the `provider-failed` log lines in order; the last `error` field explains why the chain bottomed out.
 
 Everything else: `coderouter doctor --check-model <provider>` first, log lines second.

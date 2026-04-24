@@ -41,6 +41,7 @@
 | v1.5.0 | 2026-04-22 | `v1.5.0` | — | Umbrella tag: v1.5-A/B/C/D/E/F を束ねる。Observability pillar — plan.md §12 を丸ごと受ける minor、計測 / 可視化 / 配信 / timezone / demo の 5 柱。計 **527 tests green** (457 → 527、+70)、Runtime deps 据え置き (curses + urllib は stdlib、tailwind は CDN、Prometheus 形式は自前文字列生成)。`v1.0.1 → v1.5.0` で §11 (旧 v1.1 = 配布 / launcher / doctor) を飛ばし越した結果、§11 ヘッダは "v1.6" にリラベル |
 | v1.6.0 | 2026-04-22 | `v1.6.0` | `a6ac84b` | Umbrella tag: v1.6-A/B/C を束ねる。`auto_router` (task-aware routing) — plan.md §11 を 3 sub-release で受け、`default_profile: auto` sentinel + 4-variant `RuleMatcher` + bundled ruleset (image→multi / code-fence≥0.3→coding / else→writing) + `/v1/messages` / `/v1/chat/completions` 両 ingress precedence 拡張 + `coderouter_auto_router_fallthrough_total` Prometheus counter + `examples/providers.auto.yaml` / `providers.auto-custom.yaml`。527 → 596 tests green (+69)、Runtime deps 据え置き (13 sub-release 連続) |
 | v1.6.1 | 2026-04-23 | `v1.6.1` | — | Patch-level: (1) **NVIDIA NIM 無料枠 (40 req/min) 対応** — `examples/providers.nvidia-nim.yaml` 新設 (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning` の 4 プロファイル、local → NIM → OpenRouter free → paid の 8 段チェーン)、live 検証 (2026-04-23) 済み 3 tool-capable モデル採用、`tests/test_examples_yaml.py` で CI invariants。(2) **ドキュメント言語優先度スワップ** — README.md / docs/{usage-guide,security,quickstart,when-do-i-need-coderouter}.md の 5 ペアを日本語 main / 英語 `.en.md` sub に入替、pyproject `readme` も日本語に。(3) **README ヒーロー書き換え** — tool-call repair を最前面に。(4) **`docs/free-tier-guide.md`** 新規 (NIM + OpenRouter 無料枠の使い分け reference、JA + EN)。(5) `coderouter/__init__.py` を `importlib.metadata.version` 経由に (`--version` 出力修正、pyproject が single source of truth)。596 → **601 tests green** (+5)、Runtime deps 据え置き (14 sub-release 連続) |
+| v1.6.2 | 2026-04-24 | (未タグ) | — | Patch-level: v1.6.1 出荷後の実機運用で踏んだ罠を docs / examples 側に集約する小さな release。(1) **`docs/troubleshooting.md` / `.en.md` 新規** — README §トラブルシューティングを独立化した上で、v1.6.2 検証で発覚した 5 トピック (CLI 訂正 `serve --mode` / `.env` の `export` 必須 / `env` 検証 / `Header of type authorization was missing` 401 切り分け / `~/.zshrc` 反映漏れ / Llama-3.3-70B 系の過剰ツール呼び出し / `UserPromptSubmit hook error` (claude-mem 等プラグイン相性) / auto-compact 遅延 / ダッシュボード活用) を §1 / §4 として追加。(2) **README §トラブルシューティング短縮** — 30 秒早見表 + 症状別 4 入口索引に置換、Ollama 5 症状は 1 行サマリ + リンクのみ。旧アンカー (`ollama-初心者...` / `ollama-beginner...`) を後方互換のため残置。(3) **`examples/.env.example` 全キー `export` 必須化** — 冒頭に load 手順 / 検証コマンドの documentation 追加。(4) **`examples/providers.nvidia-nim.yaml` 4 プロファイル並び替え** — Llama-3.3-70B を最後尾に、Qwen3-Coder-480B を第一選択に (実機検証で Llama が Claude Code 単独で過剰ツール呼び出しを起こすため)。プロファイル選定理由のコメント追記。(5) **`examples/providers.nvidia-nim.yaml` セットアップコメント拡張** — 5 ステップ + `.env` export 必須 / `--port 8088` 整合の明記。(6) **`docs/articles/note-nvidia-nim.md` 改訂** — §6 / §7 に実機検証ログ追加。601 → **601 tests green** (±0、コード変更なし、`tests/test_examples_yaml.py` の既存 invariant が profile 並び替え後も pass することで間接検証)、Runtime deps 据え置き (15 sub-release 連続) |
 各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
 振り返り: [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md) / [`docs/retrospectives/v0.5.md`](./docs/retrospectives/v0.5.md) / [`docs/retrospectives/v0.5-verify.md`](./docs/retrospectives/v0.5-verify.md) / [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md) / [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md) / [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md) / [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。
 
@@ -923,6 +924,34 @@ v1.6.0 出荷直後の patch-level。5 系統を 1 release に束ねた:
 - [x] 全 `.md` リンク解決を walker で検証 (唯一残る dangling は pre-existing の `docs/openrouter-roster/CHANGES.md`、cron 生成で意図的)
 - [x] README 両言語のバージョンバッジ 1.5.0 → 1.6.1、テスト数 453 → 601 に同期
 - [x] `CHANGELOG.md` に `[v1.6.1]` エントリ、release history table 更新
+
+### 11.5 v1.6.2 — Troubleshooting 切り出し + `.env` / NIM YAML hygiene (2026-04-24)
+
+v1.6.1 出荷直後、自分が NIM 構成を実機で立てて二重トラップ (env 変数の `export` 漏れによる 401 → そこを越えても Llama-3.3-70B が "こんにちは" を `Skill(hello)` に化けさせる) を踏んだのを受けて、現場で得た知見を docs / examples 側へ確実に折り込む patch-level。コード変更を伴わないため CHANGELOG / plan.md / docs のみで完結する小さな release。
+
+- [x] **`docs/troubleshooting.md` 新規 (JA primary)** — README §トラブルシューティングの全文を独立化した上で v1.6.2 検証で発覚した 5 トピックを追加 (§1 起動・設定の罠 / §4 Claude Code 連携の罠)。具体的には CLI コマンド訂正 (`serve --mode`、`--profile` ではない)、`.env` の `export` 必須、`env` での export 検証、`Header of type authorization was missing` 401 の切り分け、`~/.zshrc` 反映漏れ、Llama-3.3-70B 系の過剰ツール呼び出し、`UserPromptSubmit hook error` (claude-mem 等プラグインとの構造的ミスマッチ)、auto-compact 遅延、ダッシュボード活用の 9 項目
+- [x] **`docs/troubleshooting.en.md` 新規 (EN sub)** — JA 版と章番号 / アンカー 1 対 1 対応
+- [x] **README.md / README.en.md §トラブルシューティング短縮** — 30 秒で読める早見表 + 症状別索引 (4 入口) に置換、Ollama 5 症状は 1 行サマリ + リンクのみ。旧アンカー (`ollama-初心者--サイレント失敗-5-症状-v07-c` / `ollama-beginner--5-silent-fail-symptoms-v07-c`) は両 README に残して後方互換確保
+- [x] **README.md / README.en.md ドキュメント目次** — 「詰まったとき」「When stuck」行を `troubleshooting.md` / `.en.md` 指向で追加、両 README の言語スイッチャに `troubleshooting` / `トラブルシューティング` を併記
+- [x] **`docs/usage-guide.md` / `usage-guide.en.md` §8 quick index** — 既存 README 参照を `docs/troubleshooting.md` 指向に書き換え、`Header of type authorization was missing 401` と「Claude Code 上で挨拶が `Skill(hello)` 等に化ける」の 2 行を追記
+- [x] **`examples/.env.example`** — 全キー (`ALLOW_PAID` / `OPENROUTER_API_KEY` / `NVIDIA_NIM_API_KEY` / `ANTHROPIC_API_KEY` / `CODEROUTER_CONFIG`) を `export KEY=value` 形式に統一。冒頭に「ロード方法 (`source .env` で動く / `set -a && source .env && set +a` でも可) / CodeRouter は自動 source しない / 検証コマンド (`env | grep ...`)」のドキュメンテーションを追加
+- [x] **`examples/providers.nvidia-nim.yaml` 4 プロファイル並び替え** — `claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning` の全てで NIM レーンの順序を Qwen3-Coder-480B → Kimi-K2 → Llama-3.3-70B に変更 (実機検証で Llama-3.3-70B が Claude Code 単独利用時に過剰ツール呼び出しを起こすことが判明、第一選択から退避線へ)。プロファイル直前のコメントブロックに選定理由 (実機検証の症状ログ + `docs/articles/note-nvidia-nim.md` §6-2 への参照) を追加
+- [x] **`examples/providers.nvidia-nim.yaml` セットアップコメント拡張** — 冒頭の "NVIDIA NIM setup" を 5 ステップに拡張、`.env` の `export` 必須 / `coderouter doctor` を起動前に通すこと / `--port 8088` を Claude Code に合わせる必要を明記
+- [x] **`docs/articles/note-nvidia-nim.md` 改訂** — v1.6.2 検証ログを §6 (実機罠 3 種) と §7 (ダッシュボード活用) に追記、§4 / §9 / §11 の手順を実機検証済みコマンドに更新
+
+**DoD**:
+
+- [x] `docs/troubleshooting.md` / `.en.md` の章番号 / アンカーが両言語で 1 対 1 対応していること
+- [x] README §トラブルシューティングから新ドキュメントへの 4 入口リンクが全て解決すること
+- [x] 旧アンカー (`#ollama-初心者...`) を README 内に残置してリンク切れを防いでいること
+- [x] `examples/.env.example` で `source .env` 直後に `env | grep` で全キーが visible になること
+- [x] `examples/providers.nvidia-nim.yaml` の YAML が pytest `tests/test_examples_yaml.py` でパスすること (profile 順序変更後も既存 invariant が通る)
+- [x] `CHANGELOG.md` に `[v1.6.2]` エントリ、release history table 更新
+
+**スコープ外 / 次回送り**:
+
+- [ ] capability registry に `claude_code_suitability: degraded` のような hint を追加して、Llama-3.3-70B 系を Claude Code チェーンに置く時に startup で WARN を出す仕組み — 設計の比重が大きいので v1.7 (もしくは独立した v1.6.3) で別途検討
+- [ ] `coderouter serve --env-file .env` フラグでの `.env` 自動 source 提供 — 同じく v1.7 候補。意図的に手動運用を要求していた既存挙動とどう折り合いを付けるかの判断含み
 
 ### 11.B (後: v1.7 候補) — 配布 / launcher / doctor
 

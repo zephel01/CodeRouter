@@ -57,11 +57,12 @@
 | **使いこなす** | [利用ガイド](./docs/usage-guide.md) | HW 別モデル選定・チューニング既定値・OS ごとの起動フロー・`doctor` / `verify` の読み方 |
 | **無料で回す** | [無料枠ガイド](./docs/free-tier-guide.md) | NVIDIA NIM 40 req/min × OpenRouter 無料枠の使い分け・live 検証済みモデル表・地雷 5 点 |
 | **要るか判断する** | [要否判定ガイド](./docs/when-do-i-need-coderouter.md) | エージェント × モデルの詳細マトリクスで「そもそも自分に必要か」を決める |
+| **詰まったとき** | [トラブルシューティング](./docs/troubleshooting.md) | `doctor` の使い方、`.env` の export 必須、Ollama サイレント失敗 5 症状、Claude Code 連携の罠 |
 | **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
 | **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.6.1 — NIM 無料枠対応） |
 | **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
 
-English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Security](./docs/security.en.md)
+English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [Security](./docs/security.en.md)
 
 ## CodeRouter で何が楽になるか
 
@@ -393,126 +394,37 @@ suggested patch for ~/.coderouter/providers.yaml:
 
 ## トラブルシューティング
 
-まず第一に: 失敗中のプロバイダに対して **[`coderouter doctor --check-model <provider>`](#doctor--coderouter-doctor---check-model-provider-v07-b)** を走らせてください。4 プローブを回し、宣言と観測の不一致があればコピペ YAML パッチを出します。`doctor` がクリーンを返すのに問題が続くなら、下のログ読みワークフローにフォールスルー。
+> **詳細は独立ドキュメント [`docs/troubleshooting.md`](./docs/troubleshooting.md) (v1.6.2 で分離)** を参照してください。
+> 本節は 30 秒で済む早見表。
 
-v0.4-D 以降、失敗した上流リクエストはサーバーログに**上流レスポンスボディそのもの**を添えて現れます。リクエストが失敗したときは次のような行を探します:
+**まず第一に**: 失敗中のプロバイダに対して **[`coderouter doctor --check-model <provider>`](#doctor--coderouter-doctor---check-model-provider-v07-b)** を走らせてください。6 probe を回し、宣言と観測の不一致があればコピペ YAML パッチを出します。
 
-```
-{"level": "WARNING", "msg": "provider-failed", "provider": "...",
- "status": 4xx, "retryable": true|false, "error": "[provider status=4xx] 4xx from upstream: {...}"}
-```
+**症状別の入口** (詳細はリンク先):
 
-よくあるパターンと意味:
+- 起動して上流に 401: `Header of type authorization was missing` → [§1 起動・設定の罠](./docs/troubleshooting.md#1-起動設定で踏みやすい-5-つの罠-v162-追加) (`.env` の `export` 必須、`coderouter serve --mode <profile>` の正しい使い方)
+- ログに `provider-failed` / `capability-degraded` / `chain-uniform-auth-failure` → [§2 ログの読み方](./docs/troubleshooting.md#2-ログの読み方とよくあるパターン)
+- Ollama に向けたら無音 / `<think>` タグ漏れ / 「ファイルが読めません」 → [§3 Ollama 5 症状](./docs/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c)
+- Claude Code 上で挨拶がツール呼び出しに化ける / `UserPromptSubmit hook error` → [§4 Claude Code 連携の罠](./docs/troubleshooting.md#4-claude-code-連携で踏みやすい罠-v162-追加)
 
-- **`"Extra inputs are not permitted"` が body フィールドに対して** — 上流（通常 Anthropic）が知らないフィールドを拒否。`anthropic-beta` ヘッダでゲートされているフィールド（`context_management`、新しい `cache_control` / `thinking` variant）なら、クライアントが実際にヘッダを付けたか確認。v0.4-D 以降 CodeRouter はそのまま転送しますが、クライアントが送っていなければ上流に届きません。
-- **`"adaptive thinking is not supported on this model"`** — v0.5-A 以降ユーザーには届かないはず。ケイパビリティゲートが `thinking: {type: enabled}` リクエストをそのフィールドを受け付けるモデルに流し（ヒューリスティクス: `claude-opus-4-*` / `claude-sonnet-4-6` / `claude-sonnet-4-7` / `claude-haiku-4-*`）、対応なしチェーンではブロックを剥がします。まだこのエラーを見るなら、(a) チェーンにヒューリスティクス未収載の新 Anthropic ファミリがいる — 当該プロバイダに `capabilities.thinking: true` を明示、あるいは (b) モデル slug を添えて issue を立て、ヒューリスティクスを更新。サーバーログの `capability-degraded` 行でゲート発火を確認。
-- **`capability-degraded` ログで `reason: "non-standard-field"` かつ `dropped: ["reasoning"]`** (v0.5-C) — 上流が OpenAI spec 非準拠の `reasoning` フィールドを `message` / `delta` に返した。OpenRouter 無料モデル（特に `openai/gpt-oss-120b:free`）で発生。アダプタが下流に渡す前に剥がすのでこのログは純粋に観測用 — 何も壊れていません。本当に reasoning テキストを素通ししたい（reasoning-aware クライアントを前立てている等）場合は当該プロバイダに `capabilities.reasoning_passthrough: true` を付けると strip が止まります。ストリーミング: いくつチャンクに跨ろうとログは 1 ストリーム最大 1 回。
-- **`capability-degraded` ログで `reason: "translation-lossy"` かつ `dropped: ["cache_control"]`** (v0.5-B) — リクエストが `cache_control` マーカー付きだったが、選ばれたプロバイダが `kind: openai_compat` なので Anthropic → OpenAI 変換で消失。エラーではなく（リクエストは成功）、ただ Anthropic のプロンプトキャッシングはそのプロバイダでは効きません。対策は (a) `kind: anthropic` プロバイダをチェーンの前に置く、または (b) 将来 `openai_compat` 上流が cache マーカーを保持するなら `capabilities.prompt_cache: true` で当該ログをオプトアウト。なお Anthropic 側の 1024 トークン最小も注意: これを下回るシステムプロンプトは対応プロバイダでも `cached_tokens: 0` を報告します — 上流の制約で CodeRouter のバグではありません。
-- **`rate_limit_error` / 429** — Anthropic 組織レベルの TPM 上限。リトライ可能（エンジンが次プロバイダを試す）。プロファイル順を調整するか、Claude Code のコンテキストを `/compact` で減らす。
-- **`unknown profile 'xxx'` (400)** — リクエスト body の `profile` フィールドあるいは `X-CodeRouter-Profile` ヘッダが設定のどの `profiles[].name` とも一致しない。有効名はレスポンス body に。
-- **`502 Bad Gateway: all providers failed`** — チェーン全プロバイダがリトライ可能エラーを返した。`provider-failed` ログ行を順に読む。末尾の `error` フィールドがチェーン終端の理由。
+ダッシュボード `http://localhost:8088/dashboard` を別タブで開いておくと、ほとんどの罠が**目で見て 10 秒で**特定できます。
 
-ミッドストリーム失敗は SSE ストリーム内で単発の `event: error` / `type: api_error` として出ます（ヘッダは既送出なので 5xx HTTP ステータスは返らない）。これは「どのプロバイダも開始できなかった」（`type: overloaded_error`）とは区別されます。
+ミッドストリーム失敗は SSE ストリーム内で単発の `event: error` / `type: api_error` として出ます (ヘッダは既送出なので 5xx HTTP ステータスは返らない)。これは「どのプロバイダも開始できなかった」 (`type: overloaded_error`) とは区別されます。
 
-### Ollama 初心者 — サイレント失敗 5 症状 (v0.7-C)
+<!-- 旧アンカーの後方互換 — 古い記事 / 検索結果からのリンクが切れないように -->
+<a id="ollama-初心者--サイレント失敗-5-症状-v07-c"></a>
+<a id="ollama-beginner--5-silent-fail-symptoms-v07-c"></a>
 
-「新規 Ollama をインストールし、ルーターを向けたらどうもおかしい」は最多の onboarding 失敗です。症状はエラーに見えないことがほとんど — モデルが肩をすくめたように見える。これまで現場で集めた 5 種、各症状の一行診断と修正 YAML を添えます。下の `<provider>` は `providers.yaml` のプロバイダ名（例: `ollama-qwen-coder-7b`）。
+### Ollama 初心者 — サイレント失敗 5 症状
 
-**1. 200 を返しているのに返信が空/意味不明。** Ollama の既定 `num_ctx` は 2048 トークン。Claude Code のシステムプロンプトだけで毎ターン 15–20 K トークンあり、2048 以降はプロンプトの**先頭**から黙って落ちます — ツール定義、タスク記述、全部。モデルは残された末尾から答えています。
+詳細は [`docs/troubleshooting.md` §3](./docs/troubleshooting.md#3-ollama-初心者--サイレント失敗-5-症状-v07-c) に移動しました。
 
-```bash
-coderouter doctor --check-model <provider>
-# → num_ctx: NEEDS_TUNING — canary が返信に欠落; 上流が切り詰め
-#   (`extra_body.options.num_ctx` 宣言なし、Ollama 既定は 2048)
-```
+- 症状 1: 200 が返るのに返信が空/意味不明 → `num_ctx` 既定 2048 に切り詰められた
+- 症状 2: 「ファイルが読めません」を繰り返す → 小さなモデルが tools 仕様を扱えていない (`tools: false` 宣言)
+- 症状 3: `<think>...</think>` が漏れる → `output_filters: [strip_thinking]`
+- 症状 4: 初回リクエストが毎回失敗 → `ollama pull <tag>` 忘れ / `model:` タイポ
+- 症状 5: 全プロバイダが一様に失敗 → クラウド API キー未 export ([§1-2 / §1-3](./docs/troubleshooting.md#1-2-env-には-export-が必須))
 
-```yaml
-# providers.yaml — doctor 提案パッチ:
-- name: <provider>
-  extra_body:
-    options:
-      num_ctx: 32768    # VRAM 節約なら 16384 でも可
-```
-
-**v1.0-B** 以降 doctor プローブがこれを直接検出します — 約 5K トークンプロンプトの先頭に canary トークンを埋め込み、エコーを求める。canary が返ってこなければ Ollama が先頭を落とした証拠。プローブは Ollama 形状プロバイダ（base URL にポート 11434、または `extra_body.options.num_ctx` 宣言あり）のみ発火するため、他 `kind: openai_compat` 上流は静かに SKIP。
-
-**2. Claude Code が「ファイルが読めません」と繰り返す。** モデルは `tools` パラメータを受け取ったが混乱し、空のアシスタントメッセージを返した。小さな量子化モデル（≤ 7B、Q4）はツール仕様自体を扱えないことが多い。CodeRouter v0.3-A の tool-call 修復は**壊れた**ツール JSON を復元できますが、このケースは「モデルがそもそもツール呼び出しを試みなかった」 — 修復対象がありません。
-
-```bash
-coderouter doctor --check-model <provider>
-# → tool_calls: NEEDS_TUNING — model returned no tool_use and registry says tools=true
-```
-
-```yaml
-# providers.yaml — doctor 提案パッチ:
-- name: <provider>
-  capabilities:
-    tools: false    # observed: model returned no tool_use block
-```
-
-`tools: false` にすると、ツール要求リクエスト到来時にチェーンは次のプロバイダに進みます。強いモデル（qwen2.5-coder:14b やクラウドフォールバック）と組み合わせて使ってください。
-
-**3. UI に `<think>...</think>` タグが漏れる。** Qwen3 蒸留モデル、DeepSeek-R1 蒸留、一部の HF GGUF 変種は chain-of-thought を Anthropic の `thinking` ブロックではなく通常のコンテンツチャネルに吐きます。タグが Claude Code のターミナルにそのまま出ます。
-
-```bash
-coderouter doctor --check-model <provider>
-# → reasoning-leak: NEEDS_TUNING — observed `<think>` in content,
-#   provider has no `output_filters` declared
-```
-
-**v1.0-A** 以降 doctor プローブは適用可能なフィルタパッチを出します。独立した 2 つの対処 — どちらでも、両方でも:
-
-```yaml
-# providers.yaml — 出力側スクラブ (v1.0-A、常時機能・推奨):
-- name: <provider>
-  output_filters: [strip_thinking]
-  # <|turn|> / <|channel>thought / ... も出るなら strip_stop_markers も追加
-```
-
-```yaml
-# providers.yaml — 入力側オプトアウト（モデルが従うときは安価;
-# Qwen3 / R1-distill 系は `/no_think` を尊重する）:
-- name: <provider>
-  append_system_prompt: "/no_think"
-```
-
-`output_filters` はアダプタ境界のバイトストリームに作用するのでどのモデル・どのプロバイダ・どのクライアントでも動作します — コンテンツを 1 回余計に舐める分のコストと引き換え。2 つは重ね掛け可能で、`examples/providers.yaml` のサンプル `ollama-qwen-coder-*` は `output_filters: [strip_thinking]` が有効な状態で出荷されています。
-
-**4. チェーンへの初リクエストが毎回失敗して回復する。** `providers.yaml` の `model` フィールドにタイポがある、または `ollama pull <tag>` を忘れている。Ollama は `404 model not found` を返し、これは retryable 分類（v0.2-x のバグ修正）なのでチェーンはフォールスルーしますが、毎ターン、ローカルティアのレイテンシ優位を失います。
-
-```bash
-coderouter doctor --check-model <provider>
-# → auth+basic-chat: UNSUPPORTED — 404 from upstream (run `ollama pull <tag>`)
-# → (remaining probes SKIP — no point running them until the model exists)
-```
-
-対処: `ollama pull <your-yaml-tag>` またはタイポ修正。404 は Ollama が「そのタグの GGUF は載せていない」と言っている。HF-on-Ollama モデル名は `:Q4_K_M` 形式の量子化サフィックス必須で、省略すると同じ 404 になります。
-
-**5. チェーン全プロバイダが一様に失敗する。** `OPENROUTER_API_KEY` / `ANTHROPIC_API_KEY` が未設定（または期限切れ）で、チェーンの全クラウドプロバイダが順に 401。v0.5.1 A-3 以降 `chain-uniform-auth-failure` WARN が事後的にこのパターンを識別しますが、トラフィック開始前に捕まえるほうが楽です。
-
-```bash
-coderouter doctor --check-model <the-cloud-provider>
-# → auth+basic-chat: AUTH_FAIL — 401 from upstream (check env var <KEY_NAME>)
-# → (remaining probes SKIP — auth dominates)
-```
-
-対処: 環境変数を設定、あるいはサーバー起動時にロードされる `.env` に追加 (`cp examples/.env.example .env`)。`coderouter doctor` は動作中のサーバーと同じ env を読むので、シェルからのプローブ成功はサーバーも動くという信頼できるシグナルです。
-
-**全部まとめて走らせる**にはプロバイダごとに `doctor`:
-
-```bash
-for p in ollama-qwen-coder-7b ollama-qwen-coder-14b openrouter-free openrouter-gpt-oss-free; do
-  coderouter doctor --check-model "$p" || true
-done
-```
-
-終了コードは 3 バケット（0 クリーン / 2 パッチ可能 / 1 ブロッカ）に集約されるので、上のループは CI に繋げられます — 完全な表は [Doctor サブセクション](#doctor--coderouter-doctor---check-model-provider-v07-b)。
-
-同じローカル Ollama に対して CodeRouter（ルーター層）と [lunacode](https://github.com/zephel01/lunacode)（エディタハーネス）を両方走らせている場合、lunacode の [`docs/MODEL_SETTINGS.md`](https://github.com/zephel01/lunacode/blob/main/docs/MODEL_SETTINGS.md) が姉妹リファレンスです — 同じ 5 症状を、CodeRouter のプロバイダ粒度宣言が届かないエディタ/ハーネス層（モデル別設定、チャットテンプレート上書き、`/no_think` バリアント）でカバーします。
-
-#### HF-on-Ollama リファレンスプロファイル
-
-Ollama の `hf.co/<user>/<repo>:<quant>` ローダ経由で HF ホスト GGUF を動かすと、5 症状がすべて増幅されます — HF GGUF はチャットテンプレートなしで出荷されることが多く、蒸留元の `<think>` タグを引き継ぎ、症状 4 を踏む `:<quant>` サフィックスが必須です。`examples/providers.yaml` にはコメントアウトされた `ollama-hf-example` スタンザがあり、各つまみ（`extra_body.options.num_ctx`、`append_system_prompt: "/no_think"`、`capabilities.tools: false`、`reasoning_passthrough`）を例示し、インラインコメントで各対応症状を示しています。コピーし、`model:` を pull した HF タグに書き換え、`coderouter doctor --check-model ollama-hf-example` で検証してください。
+各症状の `coderouter doctor` 出力例とコピペ可能 YAML パッチは [docs/troubleshooting.md](./docs/troubleshooting.md) に。HF-on-Ollama 構成 / lunacode との関係も同じドキュメントに集約。
 
 ## 依存ポリシー
 

@@ -6,6 +6,36 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.6.2] — 2026-04-24 (Troubleshooting split-out + .env / NIM YAML hygiene)
+
+**Theme: v1.6.1 出荷後の実機運用で踏んだ罠を、ドキュメント側に集約する patch-level。** Claude Code から NIM 経由の Llama-3.3-70B を実機で叩いて発見した 3 系統 (`.env` の `export` 漏れによる 401 / Llama-3.3-70B が Claude Code の system prompt に過剰反応して "こんにちは" を `Skill(hello)` に化けさせる挙動 / `claude-mem` 等の第三者プラグインが CodeRouter 経由だと内部呼び出しに失敗する構造) を、独立した `docs/troubleshooting.md` (JA primary) + `.en.md` (EN sub) に切り出して整理。README §トラブルシューティングは 30 秒で読めるサマリ + 症状別索引に短縮。`examples/.env.example` は各キーに `export` 必須の形式に変更し、ロード手順 / 検証手順 / 4 つの API キー (NIM / OpenRouter / Anthropic / CODEROUTER_CONFIG) の説明を冒頭ドキュメンテーションに追加。`examples/providers.nvidia-nim.yaml` の 4 プロファイル (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) は Llama-3.3-70B を最後尾に下げて Qwen3-Coder-480B を第一選択にする実機検証済みの順序へ並び替え、選択理由を YAML 内コメントで明文化 (Llama 自体の動作は健全、Claude Code 専用 prompt との相性問題)。全て docs / examples のみの変更、Python コード側の public API / ingress 契約は完全に変更なし。
+
+- Tests: 601 → **601** (±0、新規ロジックなし。`tests/test_examples_yaml.py` の NIM YAML invariants が profile 並び替え後も pass することで間接検証)
+- Runtime deps: 5 → 5 (15 sub-release 連続据え置き)
+- Non-breaking: ドキュメント切り出し + サンプル YAML の export 追加 / プロファイル並び替えのみで、Python コード側の挙動は変更なし
+
+### Changes
+
+- **`docs/troubleshooting.md` 新規 (JA primary)** — README §トラブルシューティングの全文を切り出した上で、v1.6.2 の実機検証で発覚した 5 トピックを §1 (起動・設定の罠) と §4 (Claude Code 連携の罠) として追加。§1 は CLI 訂正 (`serve --mode`)、`.env` の `export` 必須、`env` での export 検証、`Header of type authorization was missing` 401 の切り分け、`~/.zshrc` 反映漏れの 5 つ。§4 は Llama-3.3-70B 系の過剰ツール呼び出し / `UserPromptSubmit hook error` (claude-mem 等プラグインとの構造的ミスマッチ) / auto-compact 遅延 / ダッシュボード活用の 4 つ
+- **`docs/troubleshooting.en.md` 新規 (EN sub)** — JA 版と章番号 / アンカー 1 対 1 対応
+- **README.md / README.en.md §トラブルシューティング短縮** — 30 秒で読める早見表 + 症状別索引 (4 入口) に置換、Ollama 5 症状は 1 行サマリ + リンクのみ。旧アンカー (`ollama-初心者--サイレント失敗-5-症状-v07-c` / `ollama-beginner--5-silent-fail-symptoms-v07-c`) は両 README に残して後方互換確保
+- **README.md / README.en.md ドキュメント目次** — 「詰まったとき」「When stuck」行を `troubleshooting.md` / `.en.md` 指向で追加、両 README の言語スイッチャに `troubleshooting` / `トラブルシューティング` を併記
+- **`docs/usage-guide.md` / `usage-guide.en.md` §8 quick index** — 既存 README 参照を `docs/troubleshooting.md` 指向に書き換え、`Header of type authorization was missing 401` と「Claude Code 上で挨拶が `Skill(hello)` 等に化ける」の 2 行を追記
+- **`examples/.env.example`** — 全キー (`ALLOW_PAID` / `OPENROUTER_API_KEY` / `NVIDIA_NIM_API_KEY` / `ANTHROPIC_API_KEY` / `CODEROUTER_CONFIG`) を `export KEY=value` 形式に統一。冒頭に「ロード方法 (`source .env` で動く / `set -a && source .env && set +a` でも可) / CodeRouter は自動 source しない / 検証コマンド (`env | grep ...`)」のドキュメンテーションを追加
+- **`examples/providers.nvidia-nim.yaml` 4 プロファイル並び替え** — `claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning` の全てで NIM レーンの順序を Qwen3-Coder-480B → Kimi-K2 → Llama-3.3-70B に変更 (実機検証で Llama-3.3-70B が Claude Code 単独利用時に過剰ツール呼び出しを起こすことが判明、第一選択から退避線へ)。プロファイル直前のコメントブロックに選定理由 (実機検証の症状ログ + `docs/articles/note-nvidia-nim.md` §6-2 への参照) を追加
+- **`examples/providers.nvidia-nim.yaml` セットアップコメント拡張** — 冒頭の "NVIDIA NIM setup" を 5 ステップに拡張、`.env` の `export` 必須 / `coderouter doctor` を起動前に通すこと / `--port 8088` を Claude Code に合わせる必要を明記
+- **`docs/articles/note-nvidia-nim.md` 改訂** — v1.6.2 検証ログを §6 (実機罠 3 種) と §7 (ダッシュボード活用) に追記、§4 / §9 / §11 の手順を実機検証済みコマンドに更新
+
+### Why
+
+v1.6.1 出荷直後にユーザー (=自分) が NIM 構成を実機で立てた際、`source .env` だけでは `coderouter serve` の子プロセスに env 変数が届かず `Header of type authorization was missing` 401 で詰まり、そこを越えても Llama-3.3-70B が "こんにちは" を `Skill(hello)` に化けさせて使い物にならない、という二重トラップを踏んだ。両方とも CodeRouter のコードは健全で、ドキュメント / サンプル設定が「実機で踏むであろう罠」を予防していなかったのが本質的な問題。v1.6.2 はこの「現場で実際に踏んだ」知見を docs / examples に確実に折り込むための小さな patch リリース。コード変更を伴わないため CHANGELOG / plan.md / docs のみで完結。
+
+### Migration
+
+不要。既存 `~/.coderouter/providers.yaml` / 既存 env 変数 / 既存 Python import / 既存 ingress 契約は全て変更なし。`examples/providers.nvidia-nim.yaml` を `~/.coderouter/providers.yaml` にコピーして使っているユーザーは、本リリースの YAML を上書きコピーすると Qwen-first 順序に切り替わる。`.env` を従来形式 (export なし) で運用していて問題なく動いていた人は、実は親シェル経由で別途 export していたケースが大半で、v1.6.2 の `.env.example` をそのまま `cp` しても動作は変わらない (export を二重宣言しても害はない)。
+
+---
+
 ## [v1.6.1] — 2026-04-23 (NIM free-tier + doc hygiene)
 
 **Theme: v1.6.0 `auto_router` 出荷直後の patch-level。** NVIDIA NIM 開発者枠 (40 req/min) を 1 級市民として local-first fallback チェーンに組み込み、併せて README / docs の言語優先度を「日本語 main / 英語 sub」にスワップ (ターゲット層の reality に合わせる)、README ヒーローを「Claude Code × ローカル LLM で tool calling が破綻する問題を CodeRouter の修復パスで直す」という最強のピッチに書き換え、`coderouter/__init__.py` の `__version__` hardcode を `importlib.metadata.version("coderouter")` 経由に切替 (`pyproject.toml` の `version` を single source of truth に)。全て non-breaking — 既存 YAML / 既存 API / 既存 ingress 契約は verbatim 維持、新規ファイル追加 + 既存 docs のリネーム + README hero の入替のみ。
