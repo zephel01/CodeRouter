@@ -6,6 +6,30 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.6.3] — 2026-04-24 (`--env-file` + `doctor --check-env` for `.env` hygiene)
+
+**Theme: ergonomic + safe `.env` handling, without rolling our own crypto.** v1.6.2 documented the `.env` `export` gotcha; v1.6.3 makes it disappear by giving operators two new tools that integrate cleanly with the existing secret-management ecosystem (1Password CLI, sops, direnv, OS Keychain) instead of inventing yet another encryption scheme.
+
+- **`coderouter serve --env-file PATH`** — load a `.env`-style file into the worker's env *before* uvicorn boots. Repeatable for layering. Default precedence is "shell wins, file fills in gaps" so it's safe to run as a default; flip with `--env-file-override` when the file is the source of truth (e.g. CI).
+- **`coderouter doctor --check-env [PATH]`** — local-fs / git-state probe for a `.env` file: existence + POSIX permissions (0600 expected) + `.gitignore` coverage + git-tracking state. Same exit-code contract as `--check-model` (0 OK / 2 patchable / 1 blocker). `--check-model` and `--check-env` are now mutually optional and can be combined in one invocation.
+- **Stdlib-only `.env` parser** (`coderouter.config.env_file`) — supports the subset that 1Password / sops / hand-edited files actually emit (bare values, `"double"` quotes with `\n`/`\t`/`\"` escapes, `'single'` quotes literal, optional `export` prefix, inline `#` comments on bare values, blank lines). No variable expansion, no command substitution, no multi-line. Rejects POSIX-invalid keys and unterminated quotes with `file:lineno`-prefixed errors.
+- **`docs/troubleshooting.md` / `.en.md` §5** — new "`.env` security in practice" section with: threat model (what at-rest encryption can and can't defend), 4-point quick checklist, full 1Password CLI recipe (`op run --env-file=.env.tpl --`), direnv + sops recipe (encrypted `.env.enc` in git), OS Keychain recipes (macOS Keychain / Linux libsecret), `--env-file` layering patterns, and the "minimize key scope" hygiene reminder.
+- **Why no encryption-in-app**: the design rationale is in §5-1 of the doc — encryption only addresses 2 of 7 realistic threats (cold-disk theft, backups), the decryption key has to live somewhere anyway, and most security-conscious users already run 1Password / sops. `--env-file` makes integration trivial; rolling our own AES would lock those users out of their existing workflow.
+
+- Tests: 601 → **651** (+50, +8.3%): `tests/test_env_file.py` (26 — parsing edge cases, override semantics, multi-file layering), `tests/test_env_security.py` (15 — perms / .gitignore / git-tracking against real subprocess `git`, with `git` skip-marker for non-POSIX), `tests/test_cli.py` (+8 — `--env-file` end-to-end including malformed-file exit, `--check-env` exit codes, multi-`--env-file` precedence; +1 renamed `test_doctor_requires_at_least_one_flag` for the now-optional `--check-model` rule).
+- Runtime deps: 5 → 5 (16 sub-release streak preserved). The new modules are pure stdlib (`os`, `stat`, `subprocess`, `shutil`, `pathlib`, `re`).
+- Backward compat: `--check-model` is no longer required at the argparse level (now optional), but the CLI emits a friendly "provide --check-model and/or --check-env" + exit 1 when neither is passed. Existing scripts that always passed `--check-model` are unaffected.
+
+### Why
+
+v1.6.2 added 9 docs entries explaining `.env` footguns. The right next step is to give operators commands so they don't have to remember the entire doc — `--env-file` removes the export-in-`.env` confusion entirely (since the file is parsed by us, not sourced by the shell), and `--check-env` collapses the 3-grep manual checklist (`chmod ls -l`, `git check-ignore`, `git ls-files`) into one command with copy-paste fixes. Both ship "additive only" so v1.6.2 setups continue to work verbatim.
+
+### Migration
+
+None required. Existing setups (manual `export` in `.zshrc`, `source .env`, direnv-managed `.envrc`) all keep working unchanged. Adopt `--env-file` and `--check-env` opportunistically when they're the cleaner path for a given workflow.
+
+---
+
 ## [v1.6.2] — 2026-04-24 (Troubleshooting split-out + .env / NIM YAML hygiene)
 
 **Theme: v1.6.1 出荷後の実機運用で踏んだ罠を、ドキュメント側に集約する patch-level。** Claude Code から NIM 経由の Llama-3.3-70B を実機で叩いて発見した 3 系統 (`.env` の `export` 漏れによる 401 / Llama-3.3-70B が Claude Code の system prompt に過剰反応して "こんにちは" を `Skill(hello)` に化けさせる挙動 / `claude-mem` 等の第三者プラグインが CodeRouter 経由だと内部呼び出しに失敗する構造) を、独立した `docs/troubleshooting.md` (JA primary) + `.en.md` (EN sub) に切り出して整理。README §トラブルシューティングは 30 秒で読めるサマリ + 症状別索引に短縮。`examples/.env.example` は各キーに `export` 必須の形式に変更し、ロード手順 / 検証手順 / 4 つの API キー (NIM / OpenRouter / Anthropic / CODEROUTER_CONFIG) の説明を冒頭ドキュメンテーションに追加。`examples/providers.nvidia-nim.yaml` の 4 プロファイル (`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning`) は Llama-3.3-70B を最後尾に下げて Qwen3-Coder-480B を第一選択にする実機検証済みの順序へ並び替え、選択理由を YAML 内コメントで明文化 (Llama 自体の動作は健全、Claude Code 専用 prompt との相性問題)。全て docs / examples のみの変更、Python コード側の public API / ingress 契約は完全に変更なし。

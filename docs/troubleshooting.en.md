@@ -16,7 +16,8 @@ Each symptom is laid out as: what's happening / what to type to confirm / how to
 - [2. Reading logs and common patterns](#2-reading-logs-and-common-patterns)
 - [3. Ollama beginner — 5 silent-fail symptoms (v0.7-C)](#3-ollama-beginner--5-silent-fail-symptoms-v07-c)
 - [4. Claude Code integration gotchas (added in v1.6.2)](#4-claude-code-integration-gotchas-added-in-v162)
-- [5. HF-on-Ollama reference profile](#5-hf-on-ollama-reference-profile)
+- [5. `.env` security in practice (added in v1.6.3)](#5-env-security-in-practice-added-in-v163)
+- [6. HF-on-Ollama reference profile](#6-hf-on-ollama-reference-profile)
 - [Sister references](#sister-references)
 
 ---
@@ -322,7 +323,172 @@ It's 10× faster than `grep`-ing the log. Recommended runtime habit while drivin
 
 ---
 
-## 5. HF-on-Ollama reference profile
+## 5. `.env` security in practice (added in v1.6.3)
+
+`.env` files contain plaintext API keys. Even for local development, the four points below are the minimum baseline; CodeRouter v1.6.3 ships scaffolding for each.
+
+### 5-1. Threat model — what's defended, what isn't
+
+| # | Threat | Helped by at-rest encryption? | What CodeRouter v1.6.3 supports |
+|---|---|---|---|
+| 1 | Accidental `git add .env && push` | △ rotation is still required after the push | `coderouter doctor --check-env` catches `.gitignore` and tracking issues before they fire |
+| 2 | Stolen laptop / cloned disk image | ◎ | OS-level full-disk encryption (FileVault / dm-crypt / BitLocker) is the right layer; in-app encryption is strictly worse |
+| 3 | Other users on the same OS reading `ps` / `/proc/$pid/environ` | ✕ post-decrypt env is fully visible | `--check-env` enforces 0600 file mode |
+| 4 | `swap` / coredump / shell history | ✕ same | Don't put keys on the command line — use `--env-file` or an external secret manager |
+
+Rolling our own AES would only address threats 2/6 (backups), and the decryption key still has to live somewhere. The v1.6.3 stance is to integrate with the tools that already solve this well (1Password, sops, OS Keychain, direnv) by handing CodeRouter the env via `--env-file`.
+
+### 5-2. Quick checklist
+
+```bash
+# 1. Filesystem mode (owner-only)
+chmod 0600 .env
+
+# 2. Listed in .gitignore
+echo '.env' >> .gitignore
+git check-ignore -q .env && echo "ignored OK"
+
+# 3. Not currently tracked by git
+git ls-files --error-unmatch .env 2>/dev/null && echo "ALREADY TRACKED — rotate keys!"
+
+# All three at once
+coderouter doctor --check-env .env
+```
+
+`doctor --check-env` runs four checks (existence / permissions / .gitignore / git-tracking) and prints `OK` / `WARN` / `ERROR` per row. WARN entries come with a copy-paste fix command (`chmod 0600 ...` / `echo '.env' >> .gitignore`); ERROR (i.e. already tracked) emits a multi-step remediation including `git rm --cached`.
+
+### 5-3. 1Password CLI integration (recommended)
+
+Keep `.env` off disk entirely; have 1Password inject secrets into the env at process spawn. Works on macOS / Linux / Windows. Only `.env.tpl` (the template) lives in git.
+
+**Setup**:
+
+```bash
+brew install 1password-cli   # macOS
+# or follow https://developer.1password.com/docs/cli/get-started
+
+op signin
+```
+
+**`.env.tpl`** — secret references instead of values:
+
+```bash
+export NVIDIA_NIM_API_KEY=op://Personal/NVIDIA NIM/credential
+export OPENROUTER_API_KEY=op://Personal/OpenRouter/credential
+export ANTHROPIC_API_KEY=op://Personal/Anthropic/credential
+```
+
+**Run** — `op run` resolves `op://` references and exports the values:
+
+```bash
+op run --env-file=.env.tpl -- coderouter serve --mode claude-code-nim --port 8088
+```
+
+Why this works well:
+
+- `.env.tpl` is safe to commit (no secrets inside)
+- No plaintext `.env` ever touches disk (defeats threats 2 and 6 outright)
+- Per-team-member Vaults make offboarding a Vault swap, not a key rotation
+- CodeRouter sees a normal exported env — `--env-file` is not involved
+
+> **Use `coderouter serve --env-file <path>` when you do want a file in the loop** — for example, when piping 1Password output into a temporary file, or when integrating with direnv / sops which deliver the env via files. Direct `op run` injection doesn't need it.
+
+### 5-4. direnv + sops for git-tracked encrypted secrets
+
+When the team needs the secrets visible in git history (auditable, reviewable, recoverable from backup), encrypt with sops and let direnv decrypt them on `cd`:
+
+```bash
+# 1. Tooling
+brew install sops age
+
+# 2. Generate an age key (~/.config/sops/age/keys.txt)
+age-keygen -o ~/.config/sops/age/keys.txt
+
+# 3. Encrypt with the public key — safe to commit
+sops -e --age <PUBLIC_KEY> .env > .env.enc
+echo '.env' >> .gitignore
+echo '!.env.enc' >> .gitignore
+
+# 4. .envrc — direnv runs this on cd
+cat > .envrc <<'EOF'
+eval "$(sops -d .env.enc)"
+EOF
+direnv allow .
+
+# 5. cd is now enough
+cd ~/works/CodeRouter   # direnv decrypts in the background
+coderouter serve --port 8088
+```
+
+CodeRouter just reads from `os.environ` as usual; `--env-file` is again not needed.
+
+### 5-5. OS Keychain (macOS / Linux libsecret / Windows Credential Manager)
+
+For users who don't want to install 1Password or who prefer the OS-native path:
+
+**macOS**:
+
+```bash
+# Save the key once (interactive prompt for the value)
+security add-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w
+
+# Pull it into env at startup
+export NVIDIA_NIM_API_KEY=$(security find-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w)
+coderouter serve --port 8088
+```
+
+Drop the two lines into `~/.zshrc` and every new shell auto-resolves. Touch ID / password prompts may appear — that's an extra security layer, not an annoyance.
+
+**Linux (libsecret)**:
+
+```bash
+secret-tool store --label='NVIDIA NIM' service NVIDIA_NIM_API_KEY
+
+export NVIDIA_NIM_API_KEY=$(secret-tool lookup service NVIDIA_NIM_API_KEY)
+coderouter serve --port 8088
+```
+
+### 5-6. Layering `--env-file` (intermediate)
+
+`coderouter serve --env-file <path>` accepts the flag multiple times, applied left-to-right with **first occurrence wins**. **File values do NOT override variables already in the environment** by default (flip with `--env-file-override`). This makes layering ergonomic.
+
+```bash
+# Global defaults overridden by project-local values
+coderouter serve \
+  --env-file ~/.coderouter/global.env \
+  --env-file ./project.env \
+  --port 8088
+```
+
+```bash
+# 1Password + project-local overrides
+op run --env-file=.env.tpl -- \
+  coderouter serve \
+    --env-file ./project-local-overrides.env \
+    --port 8088
+```
+
+When `--env-file` runs, CodeRouter logs the **names** (never values) of the keys it actually applied:
+
+```
+serve: --env-file ./project.env: loaded 2 variable(s): CODEROUTER_MODE, OPENROUTER_API_KEY
+```
+
+Values are never written to stdout / stderr — secrets must not leak through logs.
+
+### 5-7. Minimize key scope (cheaper / shorter-lived keys)
+
+Pre-encryption hygiene that's often more effective than encryption itself:
+
+- **NVIDIA NIM**: per-key usage caps and expiry ([build.nvidia.com/account/keys](https://build.nvidia.com/account/keys)). Reserve unrestricted keys for production, cap dev keys at e.g. 100 requests/month.
+- **OpenRouter**: scope a key to `:free` SKUs only — even a leaked key can't cost you anything.
+- **Anthropic**: rotate monthly via the console; shrinks the leak window.
+
+A short-lived, narrowly-scoped key is better than a long-lived encrypted one in most threat models.
+
+---
+
+## 6. HF-on-Ollama reference profile
 
 When you run HF-hosted GGUFs through Ollama's `hf.co/<user>/<repo>:<quant>` loader, all 5 symptoms in §3 amplify — HF GGUFs frequently ship without chat templates, inherit `<think>` tags from their distillation source, and require the `:<quant>` suffix that's so easy to forget (symptom 4).
 

@@ -45,7 +45,7 @@
 - `coderouter doctor --check-model <provider>` でそのモデルが tool call / streaming / thinking に対応しているかを**実プローブで即診断**し、足りない宣言をコピペ可能な YAML パッチで教えてくれる
 - reasoning leak（`<think>...</think>` タグや `<|turn|>` など 6 種の stop マーカー漏れ）を SSE チャンク境界を跨いで自動スクラブ
 - ローカル → 無料クラウド（OpenRouter free / NVIDIA NIM 40 req/min 無料枠）→ 有料 API の自動フォールバック。既定で `ALLOW_PAID=false` なので課金はオプトイン制
-- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 601 本緑
+- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 651 本緑
 
 → **Claude Code / gemini-cli / codex + Ollama / llama.cpp / NVIDIA NIM で、破綻しない local-first agent が組める**
 
@@ -59,7 +59,7 @@
 | **要るか判断する** | [要否判定ガイド](./docs/when-do-i-need-coderouter.md) | エージェント × モデルの詳細マトリクスで「そもそも自分に必要か」を決める |
 | **詰まったとき** | [トラブルシューティング](./docs/troubleshooting.md) | `doctor` の使い方、`.env` の export 必須、Ollama サイレント失敗 5 症状、Claude Code 連携の罠 |
 | **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
-| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.6.1 — NIM 無料枠対応） |
+| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.6.3 — `--env-file` + `doctor --check-env`） |
 | **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
 
 English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [Security](./docs/security.en.md)
@@ -75,7 +75,7 @@ CodeRouter は、コーディングエージェント（Claude Code / gemini-cli
 - **うっかり課金しない。** `ALLOW_PAID=false` が既定。有料プロバイダをチェーンから外したときは理由を 1 行ログに出すので、なぜ使われなかったかが後で grep できます。
 - **ローカル Ollama の上で Claude Code / gemini-cli / codex が動く。** Claude Code は Anthropic のワイアフォーマット、Ollama / llama.cpp / LM Studio は OpenAI。CodeRouter が双方向に変換し、小さいローカルモデルがテキストで吐いてしまう `{"name":..., "arguments":...}` を tool_use ブロックへ復元してからエージェントに渡します。
 - **「なぜか動かない」の原因を教えてくれる。** `coderouter doctor --check-model <provider>` が 6 種類の典型的な失敗モード（コンテキスト切り詰め / ストリーム早期終了 / ツール呼び出し欠落 / reasoning フィールド漏れ / 認証 / Anthropic `thinking`）を実地プローブし、コピペ可能な YAML パッチを出します。
-- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 601 本緑。
+- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 651 本緑。
 
 ```
 クライアント (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -163,6 +163,8 @@ curl http://127.0.0.1:4000/v1/chat/completions \
 
 **NVIDIA NIM 無料枠（40 req/min）と OpenRouter 無料枠をどう重ねるか**は [無料枠ガイド](./docs/free-tier-guide.md) にまとめてあります。live 検証済みのモデル一覧、`claude-code-nim` プロファイルの設計意図、よくあるハマり所 5 点 込み。(English: [free-tier guide](./docs/free-tier-guide.en.md))
 
+**API キーの管理が気になる方** (1Password / direnv + sops / OS Keychain 連携 + `.env` の安全運用) は v1.6.3 で `coderouter serve --env-file` と `coderouter doctor --check-env` を入れています。詳細は [トラブルシューティング §5](./docs/troubleshooting.md#5-env-のセキュリティ運用-v163-追加)。
+
 ## OS 対応
 
 CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(coderouter, ollama, claude-code)` です。
@@ -180,7 +182,7 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 ## ステータス — v1.0 安定版 (2026-04)
 
-**テスト 601 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
+**テスト 651 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
 
 今日の CodeRouter が届ける価値:
 

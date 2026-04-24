@@ -1,6 +1,6 @@
 [project]
 name = "coderouter"
-version = "1.6.1"
+version = "1.6.3"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -45,7 +45,7 @@
 - `coderouter doctor --check-model <provider>` runs live probes against the provider and tells you whether it actually supports tool_calls / streaming / thinking — with a copy-paste YAML patch when declarations and behavior disagree
 - Scrubs reasoning leaks (`<think>...</think>` tags and six variants of `<|turn|>` / `<|eot_id|>` / `<|im_end|>` stop markers) across SSE chunk boundaries
 - Automatic fallback from local → free cloud (OpenRouter free / NVIDIA NIM 40 req/min free tier) → paid APIs, with `ALLOW_PAID=false` as the default so billing is opt-in
-- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 601 tests green
+- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 651 tests green
 
 → **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
 
@@ -59,7 +59,7 @@
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.6.1 — NIM free-tier support) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.6.3 — `--env-file` + `doctor --check-env`) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [Security](./docs/security.md)
@@ -75,7 +75,7 @@ Concretely, it takes care of things most beginners hit the hard way:
 - **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
 - **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
 - **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
-- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 601 tests passing.
+- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 651 tests passing.
 
 ```
 Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -163,6 +163,8 @@ New to CodeRouter? The [usage guide](./docs/usage-guide.en.md) walks through har
 
 **Stacking NVIDIA NIM's free tier (40 req/min) with OpenRouter free** for zero-cost agentic use is covered in the [free-tier guide](./docs/free-tier-guide.en.md) — live-verified model roster, design intent behind the `claude-code-nim` profile, and five common footguns. (日本語版: [無料枠ガイド](./docs/free-tier-guide.md))
 
+**Care about how API keys are managed?** v1.6.3 ships `coderouter serve --env-file` and `coderouter doctor --check-env` for clean integration with 1Password CLI / direnv + sops / OS Keychain — see [troubleshooting §5](./docs/troubleshooting.en.md#5-env-security-in-practice-added-in-v163).
+
 ## OS support
 
 CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, ollama, claude-code)`.
@@ -180,7 +182,7 @@ Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs
 
 ## Status — v1.0 stable (2026-04)
 
-**601 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+**651 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
 
 What CodeRouter can do for you today:
 

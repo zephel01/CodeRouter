@@ -108,6 +108,151 @@ def test_serve_passes_config_via_env(
 
 
 # ---------------------------------------------------------------------------
+# v1.6.3: `coderouter serve --env-file` wiring tests.
+#
+# The parser itself is exercised in tests/test_env_file.py; here we verify
+# the CLI integration: file passed → env populated for the worker; file
+# missing or malformed → exit 1 with a friendly stderr message; multiple
+# --env-file flags layer in order.
+# ---------------------------------------------------------------------------
+
+
+def test_serve_env_file_loads_into_environment(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """--env-file populates os.environ before uvicorn.run is called."""
+    import os
+
+    monkeypatch.delenv("CODEROUTER_TEST_KEY_1", raising=False)
+    p = tmp_path / "test.env"
+    p.write_text("export CODEROUTER_TEST_KEY_1=loaded_value\n")
+    rc = cli.main(["serve", "--env-file", str(p)])
+    assert rc == 0
+    assert os.environ["CODEROUTER_TEST_KEY_1"] == "loaded_value"
+
+
+def test_serve_env_file_does_not_override_existing(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Default precedence: shell-exported env wins over --env-file values."""
+    import os
+
+    monkeypatch.setenv("CODEROUTER_TEST_KEY_2", "from_shell")
+    p = tmp_path / "test.env"
+    p.write_text("CODEROUTER_TEST_KEY_2=from_file\n")
+    rc = cli.main(["serve", "--env-file", str(p)])
+    assert rc == 0
+    assert os.environ["CODEROUTER_TEST_KEY_2"] == "from_shell"
+
+
+def test_serve_env_file_override_flag_flips_precedence(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """--env-file-override makes file values win over the shell."""
+    import os
+
+    monkeypatch.setenv("CODEROUTER_TEST_KEY_3", "from_shell")
+    p = tmp_path / "test.env"
+    p.write_text("CODEROUTER_TEST_KEY_3=from_file\n")
+    rc = cli.main(["serve", "--env-file", str(p), "--env-file-override"])
+    assert rc == 0
+    assert os.environ["CODEROUTER_TEST_KEY_3"] == "from_file"
+
+
+def test_serve_env_file_missing_exits_with_friendly_error(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Non-existent --env-file path → exit 1, message names the file."""
+    rc = cli.main(["serve", "--env-file", "/definitely/not/a/real/path.env"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "/definitely/not/a/real/path.env" in captured.err
+    # uvicorn must NOT have been invoked when --env-file errors out.
+    assert fake_uvicorn == {}
+
+
+def test_serve_env_file_malformed_exits_with_friendly_error(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    tmp_path,
+) -> None:
+    """Malformed line → exit 1, file:lineno in stderr, no uvicorn launch."""
+    p = tmp_path / "bad.env"
+    p.write_text("GOOD=ok\nBAD-KEY=val\n")
+    rc = cli.main(["serve", "--env-file", str(p)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert ":2:" in captured.err
+    assert "invalid key" in captured.err
+    assert fake_uvicorn == {}
+
+
+def test_serve_multiple_env_files_layer_left_to_right(
+    fake_uvicorn: dict[str, object],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    """Two --env-file flags fill in keys in order; first occurrence wins.
+
+    This pins the "earlier file wins" rule documented in env_file.py
+    so a future refactor can't silently flip it.
+    """
+    import os
+
+    monkeypatch.delenv("CODEROUTER_TEST_KEY_4", raising=False)
+    a = tmp_path / "a.env"
+    a.write_text("CODEROUTER_TEST_KEY_4=from_a\n")
+    b = tmp_path / "b.env"
+    b.write_text("CODEROUTER_TEST_KEY_4=from_b\n")
+    rc = cli.main(["serve", "--env-file", str(a), "--env-file", str(b)])
+    assert rc == 0
+    assert os.environ["CODEROUTER_TEST_KEY_4"] == "from_a"
+
+
+# ---------------------------------------------------------------------------
+# v1.6.3: `coderouter doctor --check-env [PATH]` wiring tests.
+# ---------------------------------------------------------------------------
+
+
+def test_doctor_check_env_with_path_runs_security_checks(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """--check-env PATH runs and prints an env-security report."""
+    p = tmp_path / ".env"
+    p.write_text("FOO=bar\n")
+    p.chmod(0o600)
+    rc = cli.main(["doctor", "--check-env", str(p)])
+    captured = capsys.readouterr()
+    # Either OK (outside git repo) or WARN (no .gitignore in tmp_path repo)
+    # — both are valid environments. We just assert the report shape.
+    assert "env-security:" in captured.out
+    assert "permissions" in captured.out
+    assert rc in (0, 2)  # acceptable depending on tmp_path's git context
+
+
+def test_doctor_check_env_warns_on_world_readable_perms(
+    capsys: pytest.CaptureFixture[str], tmp_path
+) -> None:
+    """--check-env on a world-readable .env exits 2 (WARN) with chmod fix."""
+    p = tmp_path / ".env"
+    p.write_text("FOO=bar\n")
+    p.chmod(0o644)
+    rc = cli.main(["doctor", "--check-env", str(p)])
+    assert rc == 2
+    captured = capsys.readouterr()
+    assert "chmod 0600" in captured.out
+
+
+# ---------------------------------------------------------------------------
 # v0.7-B: `coderouter doctor --check-model <provider>` wiring tests.
 #
 # The probe logic itself lives in `coderouter.doctor` and has its own test
@@ -125,15 +270,22 @@ def _fake_config() -> object:
     return object()
 
 
-def test_doctor_check_model_required(monkeypatch: pytest.MonkeyPatch) -> None:
-    """``coderouter doctor`` without --check-model should fail argparse.
+def test_doctor_requires_at_least_one_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``coderouter doctor`` with neither --check-model nor --check-env exits 1.
 
-    Keeps the CLI narrowly scoped to the v0.7-B deliverable — other
-    subcommands (like a future static-lint mode) will be added in later
-    releases with their own flags.
+    v1.6.3: argparse no longer requires --check-model (since --check-env
+    is now an alternative). The "must pass at least one" rule is
+    enforced inside ``_run_doctor`` with a friendly stderr message and
+    exit code 1, so the test now asserts that path instead of an
+    argparse SystemExit.
     """
-    with pytest.raises(SystemExit):
-        cli.main(["doctor"])
+    rc = cli.main(["doctor"])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert "--check-model" in captured.err
+    assert "--check-env" in captured.err
 
 
 def test_doctor_invokes_run_check_model_sync_with_provider_name(
