@@ -126,7 +126,13 @@ jobs:
         run: uv run --with pip-audit pip-audit --strict -r requirements-audit.txt
 
       - name: OSV-Scanner (lockfile mode)
-        uses: google/osv-scanner-action/osv-scanner-action@v1.9.1
+        # 2026-04-25: bumped from v1.9.1 → v2.3.5. The v1.9.x line started
+        # returning 'Pull down action image ... ghcr.io/google/osv-scanner-
+        # action:v1.9.1' / 'Docker pull failed' on fresh CI runs, suggesting
+        # the v1.x docker images on GHCR have rotated out. v2.x ships the
+        # scanner binary inline so docker-pull is no longer in the loop;
+        # the `scan-args` input is unchanged.
+        uses: google/osv-scanner-action/osv-scanner-action@v2.3.5
         with:
           scan-args: |-
             --lockfile=./uv.lock
