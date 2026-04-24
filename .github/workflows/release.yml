@@ -1,0 +1,163 @@
+name: Release to PyPI
+
+# v1.7-A: tag-driven publish to PyPI via Trusted Publishing (OIDC).
+#
+# Trigger: push of a `v*` tag (e.g. `v1.7.0`, `v1.7.0a1`).
+# Output:  sdist + wheel uploaded to https://pypi.org/project/coderouter-cli/
+#          and a GitHub Release draft (manual review before announce).
+#
+# Trusted Publishing setup (one-time, before the first release):
+#   1. Go to https://pypi.org/manage/project/coderouter-cli/settings/publishing/
+#   2. Add a "GitHub" trusted publisher with:
+#        Owner:               zephel01
+#        Repository:          CodeRouter
+#        Workflow filename:   release.yml
+#        Environment name:    pypi          (← required, see `environment:` below)
+#   3. (Optional) Repeat for TestPyPI at
+#        https://test.pypi.org/manage/project/coderouter-cli/settings/publishing/
+#      with workflow filename `release.yml` and environment `testpypi`.
+#
+# After setup, no API token is stored anywhere — GitHub mints a short-lived
+# OIDC credential per run, exchanged with PyPI for an upload token. This is
+# strictly safer than long-lived API tokens in repo secrets.
+
+on:
+  push:
+    tags:
+      - "v*"
+
+# Default to read-only; the publish job opts into id-token write.
+permissions:
+  contents: read
+
+jobs:
+  # ------------------------------------------------------------------
+  # 1. Build & verify
+  # ------------------------------------------------------------------
+  build:
+    name: Build sdist + wheel
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history so version inference works
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Build sdist + wheel
+        run: uv build --out-dir dist/
+
+      - name: Verify the build
+        run: |
+          ls -la dist/
+          # sanity: ensure both artifacts produced
+          test -f dist/*.tar.gz || (echo "::error::sdist missing" && exit 1)
+          test -f dist/*.whl || (echo "::error::wheel missing" && exit 1)
+          # sanity: ensure no .venv contamination snuck in
+          if tar -tzf dist/*.tar.gz | grep -qE '\.venv|__pycache__'; then
+            echo "::error::sdist contains .venv or __pycache__ — fix tool.hatch.build.targets.sdist.only-include in pyproject.toml"
+            tar -tzf dist/*.tar.gz | grep -E '\.venv|__pycache__' | head
+            exit 1
+          fi
+
+      - name: Run tests against the built wheel
+        run: |
+          uv venv --python 3.12 /tmp/wheel-test
+          uv pip install --python /tmp/wheel-test/bin/python dist/*.whl
+          uv pip install --python /tmp/wheel-test/bin/python pytest pytest-asyncio pytest-httpx
+          /tmp/wheel-test/bin/python -m pytest -q
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  # ------------------------------------------------------------------
+  # 2. Publish to PyPI (only on `v*` tags, not `v*-rcN` or local refs)
+  # ------------------------------------------------------------------
+  publish:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/coderouter-cli
+    permissions:
+      id-token: write  # required for Trusted Publishing OIDC token
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Publish via Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          # Trusted Publishing — no API token in repo secrets.
+          # The action picks up the OIDC token automatically.
+          packages-dir: dist/
+          # If you want to allow re-uploading the same version (e.g. for
+          # a botched release), set skip-existing: true. Default false
+          # is safer (a duplicate upload errors out, so a clean retry
+          # requires bumping the version explicitly).
+          skip-existing: false
+
+  # ------------------------------------------------------------------
+  # 3. Draft a GitHub Release with the artifacts attached
+  # ------------------------------------------------------------------
+  github-release:
+    name: Draft GitHub Release
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # creating releases
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Extract release notes from CHANGELOG
+        id: notes
+        run: |
+          # Parse the section for this version out of CHANGELOG.md.
+          # Tag is GITHUB_REF_NAME (e.g. "v1.7.0a1"); strip leading "v"
+          # to match `## [v1.7.0a1]` in the file.
+          version="${GITHUB_REF_NAME#v}"
+          # Use awk to slice from "## [v$version]" up to the next "## ["
+          awk -v ver="$version" '
+            $0 ~ "^## \\[v"ver"\\]" { in_section = 1; print; next }
+            in_section && /^## \[v/ { exit }
+            in_section { print }
+          ' CHANGELOG.md > release_notes.md
+          # Sanity: if empty, fall back to a minimal placeholder
+          if [ ! -s release_notes.md ]; then
+            echo "Release ${GITHUB_REF_NAME}." > release_notes.md
+            echo "" >> release_notes.md
+            echo "Full notes: see [CHANGELOG.md](CHANGELOG.md)." >> release_notes.md
+          fi
+          echo "wrote $(wc -l < release_notes.md) lines"
+
+      - name: Create draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Draft = true so you review the release on GitHub before
+          # publishing it. This prevents botched notes from going out
+          # immediately after a tag push.
+          draft: true
+          name: "${{ github.ref_name }}"
+          tag_name: "${{ github.ref_name }}"
+          body_path: release_notes.md
+          files: |
+            dist/*.tar.gz
+            dist/*.whl

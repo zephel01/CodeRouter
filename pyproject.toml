@@ -1,17 +1,34 @@
 [project]
-name = "coderouter"
-version = "1.6.3"
+# v1.7-A: PyPI distribution name is `coderouter-cli` because the bare
+# `coderouter` slot was already taken by Lawrence Chen's unrelated HTTP
+# routing library (uploaded 2025-06, single 0.1.0 release). The
+# Python *import* name and the *console script* name both stay
+# `coderouter` (unchanged), so user-facing commands look identical:
+#     pip install coderouter-cli         # install
+#     coderouter serve --port 8088       # run
+#     import coderouter                  # import
+# A PEP 541 reclamation request for `coderouter` is tracked separately
+# in plan.md §11.B; once granted, this name will become an alias and
+# `coderouter` will become the canonical distribution name.
+name = "coderouter-cli"
+version = "1.7.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT" }
-authors = [{ name = "zephel01" }]
-keywords = ["llm", "router", "fallback", "local-first", "claude", "openai", "openrouter"]
+authors = [{ name = "zephel01", email = "zephel01@gmail.com" }]
+keywords = ["llm", "router", "fallback", "local-first", "claude", "claude-code", "ollama", "openai", "openrouter", "nvidia-nim"]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: System :: Networking",
+    "Typing :: Typed",
 ]
 
 # ============================================================
@@ -41,7 +58,11 @@ dev = [
 coderouter = "coderouter.cli:main"
 
 [project.urls]
+Homepage = "https://github.com/zephel01/CodeRouter"
 Repository = "https://github.com/zephel01/CodeRouter"
+Issues = "https://github.com/zephel01/CodeRouter/issues"
+Changelog = "https://github.com/zephel01/CodeRouter/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/zephel01/CodeRouter#documentation"
 
 [build-system]
 requires = ["hatchling"]
@@ -49,6 +70,28 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["coderouter"]
+
+# v1.7-A: strict sdist allowlist (`only-include`) so a developer's
+# local virtualenv (.venv / .venv-test / .venv-v16), build artifacts
+# (dist/), and scratch files can never sneak into a published tarball.
+# `only-include` is the safest pattern with hatch — anything not
+# explicitly listed is dropped, which avoids the "exclude pattern
+# didn't match my OS-specific path" footgun. Keep the list tight:
+# we ship the runtime package, examples, tests (so users can run
+# the suite from sdist), docs, and the standard root files.
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "coderouter",
+    "examples",
+    "tests",
+    "docs",
+    "scripts",
+    "README.md",
+    "README.en.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "pyproject.toml",
+]
 
 # ============================================================
 # Linting / formatting

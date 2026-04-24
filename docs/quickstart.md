@@ -46,39 +46,48 @@ ollama serve &   # すでに動いていれば不要
 
 ### 2. CodeRouter をインストール
 
-用途別に 2 経路あります。**Claude Code / codex の前に立てて使うだけ**なら (a) の `uv tool install` 1 発が最短です。`providers.yaml` を書き換えて遊んだり、ソースを読みたい場合は (b) の clone + venv に進んでください。
+**v1.7.0 から PyPI (`coderouter-cli`) で公開**しています。用途別に 3 経路:
 
-> 2026 年の Python は macOS (Homebrew) / Ubuntu 23+ / Debian bookworm+ で PEP 668 が効いており、システム Python への素の `pip install` はエラーになります。(a) / (b) どちらも、その問題を踏まない形になっています。
+- **(a) `uvx` で都度起動 — 一番軽い**
+- **(b) `uv tool install` で PATH に通す — 日常運用**
+- **(c) `git clone` + venv — ソースをいじる / 開発**
 
-**(a) とりあえず使いたい場合 — `uv tool install` 1 発**
+> 2026 年の Python は macOS (Homebrew) / Ubuntu 23+ / Debian bookworm+ で PEP 668 が効いており、システム Python への素の `pip install` はエラーになります。(a) / (b) / (c) どれも、その問題を踏まない形になっています。
+
+**(a) 一番軽い — `uvx` で都度起動** (PyPI から毎回最新を pull。隔離環境)
 
 ```bash
 # uv をインストール (既に入っていれば飛ばす)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# CodeRouter を隔離された tool 環境に入れる (`coderouter` コマンドが PATH に乗る)
-uv tool install --from git+https://github.com/zephel01/CodeRouter.git coderouter
+# 起動時に一緒にインストール + 実行される
+uvx coderouter-cli serve --port 8088
 ```
 
-`pipx` 派なら同等の `pipx install git+https://github.com/zephel01/CodeRouter.git` でも構いません。(a) を選んだ場合は、後の手順 3 で置く `providers.auto.yaml` / `providers.auto-custom.yaml` だけ別途取得しておきます:
+PyPI のバージョンが常に取れるので、「最新で動かしたい、2 週間ぶりに触る」みたいな人に最適。
+
+**(b) 日常運用 — `uv tool install` で PATH に置く**
 
 ```bash
-# examples だけ拾う
-curl -fsSL -o ~/.coderouter/providers.yaml \
-  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+uv tool install coderouter-cli
+coderouter --version           # coderouter 1.7.0
+coderouter serve --port 8088
 ```
 
-**(b) ソースを読む / `auto_router:` ルールを手元でいじる場合 — clone + venv**
+`pipx` 派なら同等の `pipx install coderouter-cli`。以降 `coderouter` コマンドがどこからでも叩けます。
+
+**(c) ソースを読む / `auto_router:` ルールを手元でいじる場合 — clone + venv**
 
 ```bash
 git clone https://github.com/zephel01/CodeRouter.git
 cd CodeRouter
-python3 -m venv .venv
-source .venv/bin/activate        # Windows は .venv\Scripts\activate
-pip install -e .
+uv sync                         # venv 自動作成 + 依存インストール
+uv run coderouter serve --port 8088
 ```
 
-`coderouter serve` を実行するターミナルでは毎回 `source .venv/bin/activate` が必要です (direnv や shell 起動フックを使うのも一案)。
+毎回 `uv run` プレフィックスを付ければ venv activate は不要 (direnv や shell 起動フックでの自動 activate も一案)。
+
+> **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
 
 ### 3. `providers.yaml` を配置
 
@@ -86,12 +95,13 @@ pip install -e .
 
 ```bash
 mkdir -p ~/.coderouter
-# 経路 (b) = clone 済みの場合
-cp examples/providers.yaml ~/.coderouter/providers.yaml
 
-# 経路 (a) = uv tool install で入れた場合は直接ダウンロード
-# curl -fsSL -o ~/.coderouter/providers.yaml \
-#   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+# 経路 (a) / (b) = uvx / uv tool install で入れた場合は直接ダウンロード
+curl -fsSL -o ~/.coderouter/providers.yaml \
+  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+
+# 経路 (c) = clone 済みの場合
+# cp examples/providers.yaml ~/.coderouter/providers.yaml
 ```
 
 ### 4. (任意) OpenRouter API キーを設定
@@ -210,7 +220,7 @@ curl http://localhost:11434/api/version
 
 ### (4) `pip install` が `externally-managed-environment` で落ちる
 
-macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uv tool install`) または経路 (b) (venv を作ってから `pip install -e .`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
+macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uvx coderouter-cli`) または (b) (`uv tool install coderouter-cli`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
 
 ---
 

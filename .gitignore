@@ -76,3 +76,5 @@ docs/inside/
 # docs/articles/ holds Zenn / Note article drafts that are
 # published externally (not on GitHub). Keep them out of the repo.
 docs/articles/
+!.env.publish.tpl
+!.env.tpl

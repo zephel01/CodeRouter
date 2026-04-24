@@ -46,39 +46,48 @@ ollama serve &   # skip if it's already running
 
 ### 2. Install CodeRouter
 
-Two paths depending on how you plan to use it. If you **just want to put CodeRouter in front of Claude Code / codex**, path (a) — `uv tool install` — is shortest. Pick path (b) — clone + venv — if you want to read the source or edit `auto_router:` rules locally.
+**v1.7.0 ships on PyPI as `coderouter-cli`** (Python 3.12+ required). Three install paths depending on how you'll use it:
 
-> On 2026-era macOS (Homebrew Python), Ubuntu 23+, and Debian bookworm+, PEP 668 blocks bare `pip install` into the system Python. Paths (a) and (b) both sidestep that.
+- **(a) `uvx` for one-off runs — lightest**
+- **(b) `uv tool install` to put `coderouter` on PATH — daily use**
+- **(c) `git clone` + venv — if you want to read or modify the source**
 
-**(a) Just want to use it — one-shot `uv tool install`**
+> On 2026-era macOS (Homebrew Python), Ubuntu 23+, and Debian bookworm+, PEP 668 blocks bare `pip install` into the system Python. All three paths above sidestep that.
+
+**(a) Lightest — one-shot `uvx`** (pulls latest from PyPI each time, isolated env)
 
 ```bash
 # Install uv if you don't have it yet
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install CodeRouter into an isolated tool env (puts `coderouter` on PATH)
-uv tool install --from git+https://github.com/zephel01/CodeRouter.git coderouter
+# Install + run in one shot
+uvx coderouter-cli serve --port 8088
 ```
 
-`pipx` works too: `pipx install git+https://github.com/zephel01/CodeRouter.git`. If you took path (a), grab the example config separately in step 3:
+Best for "I want the latest, I touch this once every couple weeks" usage.
+
+**(b) Daily use — `uv tool install` to put it on PATH**
 
 ```bash
-# Fetch just the example you need
-curl -fsSL -o ~/.coderouter/providers.yaml \
-  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+uv tool install coderouter-cli
+coderouter --version           # coderouter 1.7.0
+coderouter serve --port 8088
 ```
 
-**(b) Want to read source / tweak `auto_router:` rules — clone + venv**
+`pipx install coderouter-cli` works equivalently. After this, `coderouter` is callable from any directory.
+
+**(c) Source contributors — clone + venv**
 
 ```bash
 git clone https://github.com/zephel01/CodeRouter.git
 cd CodeRouter
-python3 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
-pip install -e .
+uv sync                         # creates .venv + installs deps
+uv run coderouter serve --port 8088
 ```
 
-Every terminal that runs `coderouter serve` needs `source .venv/bin/activate` first (direnv or a shell-init hook works too if you want it automatic).
+Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use direnv for auto-activation).
+
+> **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
 
 ### 3. Drop in a `providers.yaml`
 
@@ -86,12 +95,13 @@ Copying the sample is enough — its contents match the topology diagram above.
 
 ```bash
 mkdir -p ~/.coderouter
-# Path (b) = you cloned the repo
-cp examples/providers.yaml ~/.coderouter/providers.yaml
 
-# Path (a) = uv tool install — fetch the sample directly
-# curl -fsSL -o ~/.coderouter/providers.yaml \
-#   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+# Paths (a) / (b) — uvx / uv tool install: fetch the sample directly
+curl -fsSL -o ~/.coderouter/providers.yaml \
+  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
+
+# Path (c) — you cloned the repo
+# cp examples/providers.yaml ~/.coderouter/providers.yaml
 ```
 
 ### 4. (Optional) Set an OpenRouter API key
@@ -210,7 +220,7 @@ Check that `providers.yaml` has `output_filters: [strip_thinking]` set on the mo
 
 ### (4) `pip install` errors with `externally-managed-environment`
 
-This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to either path (a) (`uv tool install`) or path (b) (venv then `pip install -e .`) from step 2. Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
+This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to step 2 path (a) (`uvx coderouter-cli`) or (b) (`uv tool install coderouter-cli`). Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
 
 ---
 

@@ -106,8 +106,22 @@ export ALLOW_PAID=false            # 既定。有料 API を使うときだけ t
 
 ### 3.3 サンプル config をコピーして起動
 
+`coderouter` 本体は **v1.7.0 から PyPI (`coderouter-cli`) に公開**されているので、入手は 1 行:
+
 ```bash
-cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
+# サンプル providers.yaml をダウンロード
+mkdir -p ~/.coderouter
+curl -fsSL -o ~/.coderouter/providers.yaml \
+  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
+
+# uvx で起動 (PyPI から都度取得 + 実行)
+uvx coderouter-cli serve --mode claude-code-nim --port 8088
+```
+
+恒久的にインストールしておく場合:
+
+```bash
+uv tool install coderouter-cli
 coderouter serve --mode claude-code-nim --port 8088
 ```
 

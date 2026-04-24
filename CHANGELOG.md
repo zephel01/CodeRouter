@@ -6,6 +6,83 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.7.0] — 2026-04-25 (PyPI 公開: `uvx coderouter-cli` 一発で動く)
+
+**Theme: 「git clone してから `uv tool install --from git+...`」の onboarding 摩擦をゼロにする minor リリース。** PyPI に **`coderouter-cli`** として公開、以降は `uvx coderouter-cli serve --port 8088` の 1 行で何処からでもインストール + 起動できるようになりました。配布インフラ整備のための小さなコード変更 (パッケージ名、`importlib.metadata` lookup 名追従) と、リリースを反復可能にする GitHub Actions workflow / `pyproject.toml` の sdist allowlist が同梱です。Runtime / API 挙動は v1.6.3 から完全に変化なし。
+
+- Tests: 651 → **651** (±0、コード変更は配布周りのみ)
+- Runtime deps: 5 → 5 (17 sub-release 連続据え置き)
+- New PyPI package: [`coderouter-cli`](https://pypi.org/project/coderouter-cli/) (Python ≥ 3.12)
+- Backward compat: 既存の `git clone + uv tool install --from git+...` 経路も引き続き有効。`coderouter` コマンド名 / Python import 名 (`from coderouter import ...`) も完全に変化なし
+
+### Why `coderouter-cli` (and not `coderouter`)
+
+PyPI 上の `coderouter` 名前空間は別作者 (Lawrence Chen) の HTTP routing 系汎用ライブラリ (2025-06 公開、0.1.0 のみ、ドメイン完全別物) によって既に取得済みでした。新規 publish には別名が必要なため、npm / cargo の慣習 (`*-cli` suffix で CLI ツール) に倣って `coderouter-cli` で取得。**Python import 名と console script 名は両方とも `coderouter` のまま**なので、ユーザー視点では `pip install` 時の名前だけが異なります:
+
+```bash
+pip install coderouter-cli       # ← install (名前変わる)
+import coderouter                # ← import (変わらない)
+coderouter serve --port 8088     # ← run (変わらない)
+```
+
+PEP 541 reclamation request で `coderouter` 名を引き取る道は plan.md §11.B に追跡として残します (通っても 1〜数ヶ月かかるので、その間は `coderouter-cli` で運用)。
+
+### Changes
+
+- **PyPI publish 化** — `pyproject.toml` の `name` を `coderouter` → `coderouter-cli` に変更、`version` を 1.7.0 に bump、`classifiers` / `project.urls` / `keywords` を publish に必要なメタデータで enrich (`Topic :: Scientific/Engineering :: Artificial Intelligence` / Homepage / Issues / Changelog / Documentation の 4 URL)
+- **`coderouter/__init__.py`** — `importlib.metadata.version("coderouter")` を `version("coderouter-cli")` に追従。Python import 名 (`coderouter`) は変わらないので、`from coderouter import ...` する全ユーザーには影響なし
+- **`LICENSE` 新規** — MIT License を明示的にファイル化、wheel の `dist-info/licenses/LICENSE` に同梱されるようになった (PyPI の license 表示と sdist の完全性向上)
+- **`tool.hatch.build.targets.sdist`** — `only-include` で sdist を厳格 allowlist 化。ローカル virtualenv (`.venv*`) や `__pycache__` / `dist/` / `.pytest_cache` 等を絶対に取り込まない設計に。これで `uv build` がどのマシンでも同じサイズ (sdist 668 KB / wheel 161 KB) を出す
+- **`.github/workflows/release.yml` 新規** — `git tag v*` push 時に Trusted Publishing (OIDC、API トークン不要) で PyPI へ自動 publish + GitHub Release 草稿作成。**初回 publish (v1.7.0) は手動で実施**、Trusted Publisher 登録後の v1.7.x 以降は tag push のみで自動化される
+- **doc reorder for new entry path** — README ja/en、quickstart.md ja/en、free-tier-guide ja/en の install セクションを `uvx coderouter-cli` 中心に書き換え。`uv tool install --from git+...` 経路は中級者向けに残置
+
+### Real-machine verification
+
+```
+$ uv build
+Successfully built dist/coderouter_cli-1.7.0.tar.gz   (668 KB, .venv 汚染ゼロ)
+Successfully built dist/coderouter_cli-1.7.0-py3-none-any.whl  (161 KB)
+
+$ coderouter-publish-prod   # = op run + uv publish (1Password から PYPI_TOKEN を inject)
+Publishing 2 files https://upload.pypi.org/legacy/
+Uploading coderouter_cli-1.7.0-py3-none-any.whl (157.7KiB)
+Uploading coderouter_cli-1.7.0.tar.gz (652.7KiB)
+
+$ curl -sI "https://pypi.org/pypi/coderouter-cli/json" | head -1
+HTTP/2 200
+```
+
+CDN 伝播後に `uvx coderouter-cli --version` で本物の PyPI 経由インストールも確認済み。
+
+### Migration
+
+不要。**v1.6.x までで `uv tool install --from git+...` していたユーザーは、自然なアップグレード経路として:**
+
+```bash
+# 旧 (引き続き有効)
+uv tool install --from git+https://github.com/zephel01/CodeRouter.git coderouter-cli
+
+# 新 (PyPI から、コマンド 1 行)
+uvx coderouter-cli serve --port 8088
+# あるいは恒久的に:
+uv tool install coderouter-cli
+```
+
+`coderouter` 起動コマンド名、`from coderouter import ...` の Python import、`providers.yaml` のフォーマット、env 変数 (`ANTHROPIC_BASE_URL` 等)、ingress の URL 構造、すべて v1.6.3 と完全に同じです。
+
+### Out of scope / 次回送り (v1.7-B 以降)
+
+v1.7.0 (= v1.7-A) は配布パイプラインだけに集中して shipping させました。plan.md §11.B に記載された残りの v1.7 候補機能は v1.7-B 以降で:
+
+- `coderouter doctor --check-config` / `--check-adapter` (引数なしで全部回す mode)
+- `coderouter doctor --network` (外向き接続検出、CI で 0 outbound 保証)
+- `setup.sh` (RAM 検出 → モデル提案 → providers.yaml 生成)
+- macOS `.command` / Linux `.sh` / Windows `.bat` launcher
+- 起動時アップデートチェック (opt-in)
+- capability registry の `claude_code_suitability` hint (Llama-3.3-70B 系の startup WARN)
+
+---
+
 ## [v1.6.3] — 2026-04-24 (`--env-file` + `doctor --check-env` for `.env` hygiene)
 
 **Theme: ergonomic + safe `.env` handling, without rolling our own crypto.** v1.6.2 documented the `.env` `export` gotcha; v1.6.3 makes it disappear by giving operators two new tools that integrate cleanly with the existing secret-management ecosystem (1Password CLI, sops, direnv, OS Keychain) instead of inventing yet another encryption scheme.

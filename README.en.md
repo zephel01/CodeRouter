@@ -132,24 +132,42 @@ If you're on an OpenAI-compatible agent with a well-behaved model and don't need
 
 Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friendly articles on *why the same local model sometimes works and sometimes doesn't* are published separately on Zenn / Note.
 
-## Quickstart (3 commands)
+## Quickstart (2 commands)
+
+**v1.7.0 ships on PyPI** — `uvx` installs and runs in one shot (Python 3.12+ required):
 
 ```bash
-# 1. Install (uses uv — fast, lockfile-friendly)
-uv sync
-
-# 2. Drop a sample config
+# 1. Drop a sample config
 mkdir -p ~/.coderouter
-cp examples/providers.yaml ~/.coderouter/providers.yaml
+curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
+  > ~/.coderouter/providers.yaml
 
-# 3. Run
-uv run coderouter serve
+# 2. Install + run, in one line
+uvx coderouter-cli serve --port 8088
 ```
 
-Then point any OpenAI client at `http://127.0.0.1:4000`:
+Want a permanent install?
 
 ```bash
-curl http://127.0.0.1:4000/v1/chat/completions \
+uv tool install coderouter-cli
+coderouter serve --port 8088
+```
+
+Cloning for development?
+
+```bash
+git clone https://github.com/zephel01/CodeRouter.git
+cd CodeRouter
+uv sync
+uv run coderouter serve --port 8088
+```
+
+> **Note**: the PyPI distribution name is `coderouter-cli`, but the command and Python import name are both `coderouter`. See [CHANGELOG `[v1.7.0]`](./CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) for details.
+
+Then point any OpenAI client at `http://127.0.0.1:8088`:
+
+```bash
+curl http://127.0.0.1:8088/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{
     "model": "ignored",

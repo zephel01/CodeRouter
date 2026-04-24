@@ -106,8 +106,22 @@ Without `export`, upstream returns `Header of type 'authorization' was missing` 
 
 ### 3.3 Copy the sample config and start
 
+`coderouter` itself **ships on PyPI as `coderouter-cli` from v1.7.0**, so install + run is a single line:
+
 ```bash
-cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
+# Download the sample providers.yaml
+mkdir -p ~/.coderouter
+curl -fsSL -o ~/.coderouter/providers.yaml \
+  https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
+
+# uvx fetches and runs in one shot
+uvx coderouter-cli serve --mode claude-code-nim --port 8088
+```
+
+For a permanent install:
+
+```bash
+uv tool install coderouter-cli
 coderouter serve --mode claude-code-nim --port 8088
 ```
 
