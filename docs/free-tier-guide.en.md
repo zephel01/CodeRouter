@@ -14,7 +14,7 @@ Japanese version: [`docs/free-tier-guide.md`](./free-tier-guide.md)
 3. [Setup (three commands)](#3-setup-three-commands)
 4. [Live-verified NIM model roster](#4-live-verified-nim-model-roster)
 5. [Current OpenRouter free-tier roster](#5-current-openrouter-free-tier-roster)
-6. [Five common footguns](#6-five-common-footguns)
+6. [Six common footguns](#6-six-common-footguns)
 7. [Health-check with `coderouter doctor`](#7-health-check-with-coderouter-doctor)
 8. [Related docs](#8-related-docs)
 
@@ -26,8 +26,8 @@ There are three "no credit card required" lanes you can stack in a CodeRouter fa
 
 | Tier | Example | Rate limit | Billing model | Tool calling | Notes |
 |---|---|---|---|---|---|
-| **Local** | Ollama / llama.cpp (qwen2.5-coder:7B etc.) | Hardware-limited | Zero | Model-dependent (≥7B practical) | Fastest, cheapest, offline-capable |
-| **NVIDIA NIM dev tier** | `meta/llama-3.3-70b-instruct` etc. | **40 req/min** | Initial credit grant (consumed per request) | ✓ (Llama-3.3 / Qwen3-Coder-480B / Kimi-K2 confirmed) | 70B–480B class models, for free |
+| **Local** | Ollama / llama.cpp (qwen3.5:9B / gemma4:e4b etc.) | Hardware-limited | Zero | Model-dependent (≥7B practical) | Fastest, cheapest, offline-capable |
+| **NVIDIA NIM dev tier** | `qwen/qwen3-coder-480b-a35b-instruct` / `moonshotai/kimi-k2-instruct` etc. | **40 req/min** | Initial credit grant (consumed per request) | ✓ (Qwen3-Coder-480B / Kimi-K2 / Llama-3.3-70B confirmed) | 70B–480B class models, for free |
 | **OpenRouter free** | `qwen/qwen3-coder:free` / `openai/gpt-oss-120b:free` etc. | ~20 req/min / ~200 req/day (per model) | Truly free (no credit burn) | ✓ (varies by SKU) | Roster rotates, 429s common |
 
 **Operational rule of thumb**:
@@ -43,7 +43,7 @@ Stacking these three free lanes vertically is exactly what the `claude-code-nim`
 
 ## 2. Recommended fallback chain — the `claude-code-nim` profile
 
-Open `examples/providers.nvidia-nim.yaml` and you'll find this 8-step chain already wired:
+Open `examples/providers.nvidia-nim.yaml` and you'll find this 8-step chain already wired (**v1.6.2 reordered the NIM lane based on real-machine verification**):
 
 ```yaml
 profiles:
@@ -51,9 +51,9 @@ profiles:
     providers:
       - ollama-qwen-coder-7b       # 1. local (speed)
       - ollama-qwen-coder-14b      # 2. local (quality)
-      - nim-llama-3.3-70b          # 3. NIM free (primary; tool calls OK)
-      - nim-qwen3-coder-480b       # 4. NIM free (480B MoE, agentic coding)
-      - nim-kimi-k2                # 5. NIM free (strong tool calling)
+      - nim-qwen3-coder-480b       # 3. NIM free (primary; agentic-coding tuned)
+      - nim-kimi-k2                # 4. NIM free (second; strong tool calling)
+      - nim-llama-3.3-70b          # 5. NIM free (tail fallback; see §6.6)
       - openrouter-free            # 6. OpenRouter free (qwen3-coder:free)
       - openrouter-gpt-oss-free    # 7. OpenRouter free (diff vendor, dodges 429)
       - openrouter-claude          # 8. paid Claude (only when ALLOW_PAID=true)
@@ -62,7 +62,8 @@ profiles:
 Design intent:
 
 - **Two local layers.** 7B for latency, 14B for quality. 95% of small edits finish in 1-2.
-- **Three NIM layers from *different model families*.** Meta / Qwen / Moonshot — one SKU deprecation or 429 burst never kills the whole NIM lane.
+- **Three NIM layers from *different model families*.** Qwen / Moonshot / Meta — one SKU deprecation or 429 burst never kills the whole NIM lane.
+- **Qwen3-Coder-480B leads.** It's purpose-trained for agentic coding and selects tools conservatively. Llama-3.3-70B is faster but over-eagerly invokes tools when fronted by Claude Code's system prompt (see [§6.6](#66-llama-3-3-70b-over-eager-tool-calling-in-claude-code)), so we demoted it to a tail fallback (v1.6.2 reordering).
 - **Two OpenRouter free layers from different vendors.** Qwen + OpenAI: quota pools are usually independent.
 - **Paid last.** Under the default `ALLOW_PAID=false`, that entry is skipped entirely.
 
@@ -71,9 +72,9 @@ No local GPU? Use `nim-first` instead:
 ```yaml
   - name: nim-first
     providers:
-      - nim-llama-3.3-70b
       - nim-qwen3-coder-480b
       - nim-kimi-k2
+      - nim-llama-3.3-70b
       - openrouter-free
       - openrouter-gpt-oss-free
       - openrouter-claude
@@ -89,27 +90,41 @@ No local GPU? Use `nim-first` instead:
 
 **OpenRouter**: [openrouter.ai/keys](https://openrouter.ai/keys) → generate `sk-or-v1-...`. No top-up needed if you only use `:free` SKUs.
 
-### 3.2 Put them in `.env`
+### 3.2 Put them in `.env` (**`export` keyword is required** — v1.6.2 convention)
 
 ```bash
 # Repo root, git-ignored
-NVIDIA_NIM_API_KEY=nvapi-...
-OPENROUTER_API_KEY=sk-or-v1-...
-ALLOW_PAID=false            # default; flip to true only when you want paid APIs
+# `source .env` only propagates to child processes when each line is `export`-ed.
+export NVIDIA_NIM_API_KEY=nvapi-...
+export OPENROUTER_API_KEY=sk-or-v1-...
+export ALLOW_PAID=false            # default; flip to true only when you want paid APIs
 ```
+
+Without `export`, upstream returns `Header of type 'authorization' was missing` 401 and the chain falls through silently. **v1.6.3 added `coderouter doctor --check-env .env` so you can audit this in one command** — see [`docs/troubleshooting.en.md` §1-2 / §5](./troubleshooting.en.md#1-2-env-requires-export).
+
+> **Using a secret manager (e.g. 1Password)?** You can keep `.env` off disk entirely with `op run --env-file=.env.tpl -- coderouter serve ...`. Recipes in [`docs/troubleshooting.en.md` §5-3](./troubleshooting.en.md#5-3-1password-cli-integration-recommended).
 
 ### 3.3 Copy the sample config and start
 
 ```bash
 cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
-coderouter start --profile claude-code-nim
+coderouter serve --mode claude-code-nim --port 8088
 ```
+
+> Subcommand is `serve` (the older `start` was a typo); the profile flag is `--mode` (not `--profile`); pass `--port` so it matches your `ANTHROPIC_BASE_URL`. These were tidied up in the v1.6.2 hygiene pass.
 
 Now `http://localhost:8088/v1/messages` (Claude Code ingress) and `http://localhost:8088/v1/chat/completions` (OpenAI ingress) are both up.
 For Claude Code:
 
 ```bash
-ANTHROPIC_BASE_URL=http://localhost:8088 claude
+ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
+```
+
+Or via 1Password:
+
+```bash
+op run --env-file=.env.tpl -- \
+  coderouter serve --mode claude-code-nim --port 8088
 ```
 
 ---
@@ -120,11 +135,15 @@ Live-probed on 2026-04-23 against `integrate.api.nvidia.com/v1` with both a chat
 
 ### 4.1 Shipped with `tools: true`
 
-| Model ID | chat (pong) | tool_calls | YAML name |
-|---|---|---|---|
-| `meta/llama-3.3-70b-instruct` | 540 ms | ✅ | `nim-llama-3.3-70b` |
-| `qwen/qwen3-coder-480b-a35b-instruct` | 634 ms | ✅ | `nim-qwen3-coder-480b` |
-| `moonshotai/kimi-k2-instruct` | 2,838 ms | ✅ | `nim-kimi-k2` |
+Recommended ordering for the `claude-code-nim` profile:
+
+| Priority | Model ID | chat (pong) | tool_calls | YAML name | Claude Code fitness |
+|---|---|---|---|---|---|
+| ★ Primary | `qwen/qwen3-coder-480b-a35b-instruct` | 634 ms | ✅ | `nim-qwen3-coder-480b` | **◎** purpose-built for agentic coding |
+| Secondary | `moonshotai/kimi-k2-instruct` | 2,838 ms | ✅ | `nim-kimi-k2` | ○ stable tool selection, slower first byte |
+| Tail fallback | `meta/llama-3.3-70b-instruct` | 540 ms | ✅ | `nim-llama-3.3-70b` | △ see [§6.6](#66-llama-3-3-70b-over-eager-tool-calling-in-claude-code) |
+
+**Llama-3.3-70B passes raw chat / tool_calls probes cleanly, but in live Claude Code traffic (with the full system prompt) it over-eagerly invokes Skill / AskUserQuestion tools** — a `こんにちは` greeting got rewritten as `Skill(hello)`. The profile order was changed to Qwen-first in v1.6.2 to dodge this. Direct API clients without Claude Code's prompt are fine on Llama.
 
 ### 4.2 Shipped with `tools: false` (chat-only)
 
@@ -149,7 +168,32 @@ Live-probed on 2026-04-23 against `integrate.api.nvidia.com/v1` with both a chat
 
 `moonshotai/kimi-k2-thinking` returns its answer wrapped in `<think>...</think>` inside `reasoning_content`, not `content`.
 The YAML ships with `output_filters: [strip_thinking]` — a no-op today but a safety net if a future NIM build bleeds the tags into the content channel.
-First-byte latency is ≈4s, so select `--profile nim-reasoning` only when you actually want reasoning traces.
+First-byte latency is ≈4s, so select `--mode nim-reasoning` only when you actually want reasoning traces.
+
+### 4.5 Candidate models worth probing (NIM roster, not yet adopted)
+
+The NIM roster carries several SKUs that look promising for tool calling but **haven't been live-probed by us** yet, so we haven't shipped them in the default chain. If you want vendor diversity beyond Qwen / Moonshot / Meta, add the entry to `providers.yaml` and run `coderouter doctor --check-model <name>` to confirm auth / tool_calls / reasoning-leak before promoting it.
+
+| Model ID | Why investigate | Caveats |
+|---|---|---|
+| `qwen/qwen3-235b-a22b-instruct` | Smaller / faster Qwen3 alternative (235B MoE / 22B active) | Confirm presence in your account roster + tool_calls behavior |
+| `mistralai/mixtral-8x22b-instruct-v0.1` | Adds Mistral — diversifies away from Qwen / Llama / Moonshot | Older SKU, deprecation candidate; doctor first |
+| `mistralai/codestral-latest` | Mistral coding-specialized | tool_calls support unverified |
+| `nv-mistralai/mistral-nemo-12b-instruct` | NVIDIA + Mistral collab, low-latency small model | tool_calls stability unknown |
+| `nvidia/usdcode-llama3-70b-instruct` | NVIDIA coding-specialized Llama | Test tool_calls behavior under Claude Code |
+| `deepseek-ai/deepseek-v3.1` | If v3.2 times out but v3.1 responds, this is a candidate | Long cold-start; expect first request to time out |
+
+> Once adopted, place new entries in `providers.nvidia-nim.yaml` between Qwen and Kimi in the `claude-code-nim` profile so existing fallback ordering survives. **Hitting four+ verified vendors** is where NIM-lane availability really shines (single-vendor stacks share failure modes).
+
+Adoption workflow:
+
+```bash
+# 1. Add a nim-mixtral-8x22b entry to providers.nvidia-nim.yaml
+# 2. Probe three things at once
+coderouter doctor --check-model nim-mixtral-8x22b
+# 3. If tool_calls is [OK] and reasoning-leak is [OK], promote it
+# 4. Insert into the profile and restart serve
+```
 
 ---
 
@@ -167,7 +211,7 @@ When introducing a new `:free` SKU, insert it in the **middle** of the chain, no
 
 ---
 
-## 6. Five common footguns
+## 6. Six common footguns
 
 ### 6.1 NIM "free" consumes credits
 
@@ -194,6 +238,34 @@ The `claude-code-nim` chain — NIM upstream of OpenRouter — is the easiest wa
 Slugs get retired on a quarterly cadence (we just lost `deepseek-r1`).
 Whenever you add a new NIM model to the YAML, run `coderouter doctor --check-model nim-<name>` to probe auth, tool_calls, and reasoning-leak before shipping.
 
+### 6.6 Llama-3.3-70B over-eager tool calling in Claude Code
+
+`doctor` reports all probes green and a raw API call returns `tool_calls` cleanly — yet **fronted by Claude Code (with its 15-20K-token system prompt declaring Skill / AskUserQuestion tools), Llama-3.3-70B rewrites even harmless utterances as tool calls**. Live samples:
+
+```
+❯ こんにちは
+⏺ Skill(hello)
+  ⎿  Initializing…
+  ⎿  Error: Unknown skill: hello. Did you mean help?
+```
+
+or:
+
+```
+❯ こんにちは
+[ AskUserQuestion: What is your name? ]
+  1. John
+  2. Jane
+  3. Type something
+  4. Chat about this
+```
+
+Likely cause: aggressive agentic tuning that overfits "user message → must invoke a tool" (v1.6.2 retrospective).
+
+**Mitigation**: the `claude-code-nim` profile demoted Llama-3.3-70B to the tail and put Qwen3-Coder-480B (purpose-built for agentic coding) and Kimi-K2 ahead of it. **Llama-3.3-70B is fine for raw API use, simple chat, translation, summarization** — define a separate profile (e.g. `chat-nim`) with Llama at the head if you have those workloads.
+
+Full diagnostic write-up in [`docs/troubleshooting.en.md` §4-1](./troubleshooting.en.md#4-1-greetings-get-rewritten-as-tool-calls-llama-3-3-70b-class).
+
 ---
 
 ## 7. Health-check with `coderouter doctor`
@@ -201,34 +273,48 @@ Whenever you add a new NIM model to the YAML, run `coderouter doctor --check-mod
 Run after config load, or whenever you add a new NIM model:
 
 ```bash
-coderouter doctor --check-model nim-llama-3.3-70b
+# Verify the primary
+coderouter doctor --check-model nim-qwen3-coder-480b
+
+# Run the whole NIM lane in one go
+for p in nim-qwen3-coder-480b nim-kimi-k2 nim-llama-3.3-70b; do
+  coderouter doctor --check-model "$p" || true
+done
 ```
 
 Six probes (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) run; on any declaration↔behavior mismatch the command prints a **copy-paste YAML patch**. Exit 0 means clean.
 
-Real output on 2026-04-23:
+Real output on 2026-04-24 for `nim-qwen3-coder-480b` (with env injected via 1Password):
 
 ```text
-provider:   nim-llama-3.3-70b
+$ op run --env-file=.env.tpl -- coderouter doctor --check-model nim-qwen3-coder-480b
+provider:   nim-qwen3-coder-480b
   kind:     openai_compat
   base_url: https://integrate.api.nvidia.com/v1
-  model:    meta/llama-3.3-70b-instruct
+  model:    qwen/qwen3-coder-480b-a35b-instruct
 
 Probes:
   [1/6] auth+basic-chat …… [OK]
-      200 OK (in=44, out=3)
+      200 OK (in=17, out=3)
   [3/6] tool_calls …… [OK]
       native `tool_calls` observed; matches declaration.
   [5/6] reasoning-leak …… [OK]
-      upstream emits non-standard `reasoning`; v0.5-C adapter strips it
-      before it reaches the client (expected — expect `capability-degraded`
-      log lines for this provider).
+      no `reasoning` field observed and no content-embedded markers — nothing to strip.
 Summary: all probes match declarations.
 Exit: 0
 ```
 
-`[5/6] reasoning-leak` intentionally shows `[OK]` because the YAML declaration (`reasoning_passthrough: false`) and the adapter behavior (strip) agree.
-Expect `capability-degraded` log lines for this provider — they're the expected signal that the strip fired, not a failure.
+`nim-llama-3.3-70b` clears the same checks too, but its `reasoning-leak` row notes "upstream emits non-standard `reasoning`; v0.5-C adapter strips it" — that's the expected signal that the strip fired, not a failure (`capability-degraded` log lines for this provider are likewise expected).
+
+### 7.1 `--check-env` (added in v1.6.3)
+
+To audit the **`.env` file's own hygiene** rather than the API keys, use the v1.6.3 `--check-env` flag:
+
+```bash
+coderouter doctor --check-env .env
+```
+
+Three checks: POSIX 0600 permissions, `.gitignore` coverage, git-tracking state. WARN / ERROR each come with a copy-paste fix. Details in [`docs/troubleshooting.en.md` §5](./troubleshooting.en.md#5-env-security-in-practice-added-in-v163).
 
 ---
 
@@ -236,6 +322,7 @@ Expect `capability-degraded` log lines for this provider — they're the expecte
 
 - [`docs/usage-guide.en.md`](./usage-guide.en.md) — general usage guide (hardware-tier model picks, `doctor` / `verify` usage, per-OS launch flow)
 - [`docs/quickstart.en.md`](./quickstart.en.md) — shortest path to Claude Code / codex + local Ollama
+- [`docs/troubleshooting.en.md`](./troubleshooting.en.md) — when things don't work (doctor, `.env` traps, Llama over-eager mitigation, 1Password recipe)
 - [`examples/providers.nvidia-nim.yaml`](../examples/providers.nvidia-nim.yaml) — the YAML referenced here, with every observed footgun documented inline
 - [`examples/providers.yaml`](../examples/providers.yaml) — standard sample without NIM (local + OpenRouter free + paid)
 - [`docs/openrouter-roster/CHANGES.md`](./openrouter-roster/CHANGES.md) — weekly diffs for OpenRouter `:free` SKUs (output of `scripts/openrouter_roster_diff.py`)
