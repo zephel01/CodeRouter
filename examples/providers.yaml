@@ -50,8 +50,24 @@
 # ============================================================
 
 allow_paid: false
-default_profile: default
+# v1.7-B: デフォルトを `multi` に。マルチモーダル対応 (vision-capable
+# モデルを fallback に持つ) かつ general purpose にも使える chain なので、
+# 用途未指定時の "迷ったらこれ" として最も無難。
+# 用途別に明示するなら `coderouter serve --mode coding|general|reasoning`、
+# または `coderouter serve --mode default` (これも multi の alias) で。
+default_profile: multi
 display_timezone: Asia/Tokyo
+
+# v1.7-B: 用途別 mode_aliases — 起動時 / リクエスト header で短い名前で
+# プロファイルを選べます。`coderouter serve --mode coding` または
+# クライアント側で `X-CodeRouter-Mode: coding` を投げると、
+# 内部的に「coding」プロファイルにルーティングされます。
+mode_aliases:
+  default: multi    # 「default」と書いたら multi を引く (旧 default profile からの移行用)
+  fast: general     # 短い応答が欲しいとき
+  vision: multi     # 画像入力をしたいとき
+  think: reasoning  # 長文推論したいとき
+  cheap: general    # 一番安く済ませたいとき
 
 # v1.5-E: timezone used to render timestamps in the dashboard header /
 # "Recent Events" list and in `coderouter stats` output. Must be an IANA
@@ -307,6 +323,424 @@ providers:
     # extra_body:
     #   anthropic_version: "2023-06-01"
 
+  # ============================================================
+  # v1.7-B: 用途別プロファイル (multi / coding / general / reasoning)
+  # 用のプロバイダ群。
+  #
+  # 設計思想 — Claude Code との挙動互換性を最優先に
+  # ----------------------------------------------------
+  # CodeRouter のメインユースケースは Claude Code の代替バックエンド。
+  # Sonnet/Opus と「意味合い」が乖離した応答が返ると、ユーザーは
+  # 「なんでだろ?」と混乱します。それを最小化するため、各プロファイル
+  # 側で 3 つのレバーを併用しています:
+  #
+  #   1. Claude 風モデルを優先選定 (Qwen3-Coder family が agentic
+  #      coding で Sonnet に最も近い、GLM が Opus 風 reasoning など)
+  #   2. プロファイル単位の append_system_prompt で Claude 風応答を
+  #      nudge (詳細は profiles: の各エントリ参照)
+  #   3. output_filters で <think> タグなど surface 差をクリーンアップ
+  #
+  # 各プロバイダのコメントに「Claude 互換性スコア (★1-5)」を載せて
+  # あります — 用途別プロファイルの fallback 順序を決める根拠です。
+  # ============================================================
+
+  # ------------------------------------------------------------
+  # ローカル — Qwen3-Coder family (coding 主軸、Claude Sonnet 互換 ★★★★★)
+  #
+  # Qwen3-Coder は Alibaba が agentic coding 専用設計で学習した coder
+  # series。Claude Sonnet の tool-call 行動に最も近いとコミュニティで
+  # 評価されており (note 記事: r/LocalLLaMA 2026-04 Megathread 等)、
+  # Claude Code 用途では最良のローカル代替。30B-A3B は MoE で
+  # active 約 3B、RTX 4090 / M-series 24GB+ で実用速度。
+  #
+  # Ollama tag が 2026-04 時点で利用可能か確認した上で active 化して
+  # ください。未公開なら下の HF-on-Ollama 経路 (commented stanza) で
+  # GGUF を直接ロードできます。
+  # ------------------------------------------------------------
+
+  # Qwen3-Coder 30B-A3B (MoE) — coding profile の最有力ローカル候補。
+  # 24GB+ VRAM 推奨、Q4_K_M なら 18GB 程度。
+  - name: ollama-qwen3-coder-30b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3-coder:30b-a3b
+    paid: false
+    # Qwen3 は thinking track を強く使うため、prompt eval は短めだが
+    # output が冗長になりがち。240s で大半の Claude Code ターンをカバー。
+    timeout_s: 240
+    # Qwen 系列共通: <think> リークと stop marker を念のため除去。
+    output_filters: [strip_thinking, strip_stop_markers]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # ローカル — Qwen3.6 family (coding / general 用、Claude Sonnet 互換 ★★★★★)
+  #
+  # 2026-04 リリースの Qwen3.6 シリーズ。Ollama 公式 tag (qwen3.6:27b /
+  # qwen3.6:35b) が並んでおり、全 variant が vision+tools+thinking 対応、
+  # context は 256K。note 記事 (r/LocalLLaMA 2026-04 Megathread) では
+  # 35B-A3B が「Claude Code 代替として最高」「local champ」と評価。
+  #
+  # ollama.com/library/qwen3.6 で公式 tag 確認:
+  #   qwen3.6:27b   17GB / 256K / vision+tools+thinking
+  #   qwen3.6:35b   24GB / 256K / vision+tools+thinking (= :latest, "35b a3b")
+  #   qwen3.6:27b-coding-mxfp8  31GB (MLX, Apple silicon, Text only)
+  #   qwen3.6:35b-a3b-coding-mxfp8  38GB (MLX, Apple silicon)
+  #   ...他 MLX coding variant 多数 (Apple silicon 用)
+  # ------------------------------------------------------------
+
+  # Qwen3.6 35B-A3B — note 記事の "local champ"。MoE で active 約 3B、
+  # M3 Ultra / RTX 4090 24GB+ で快適。Claude Sonnet 互換性が最も高い。
+  - name: ollama-qwen3-6-35b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6:35b
+    paid: false
+    # 256K context + thinking で長文出力もあり得るので余裕を持たせる
+    timeout_s: 240
+    output_filters: [strip_thinking, strip_stop_markers]
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # Qwen3.6 27B — 35B が動かない 16-20GB GPU 向け fallback。
+  - name: ollama-qwen3-6-27b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.6:27b
+    paid: false
+    timeout_s: 180
+    output_filters: [strip_thinking, strip_stop_markers]
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # ローカル — Gemma 4 family (general / multi 用、Claude Haiku 互換 ★★★)
+  #
+  # 2026-04 リリースの Gemma 4 シリーズ。Ollama 公式 tag が出揃い、
+  # 全 variant が vision+tools+thinking、E2B/E4B は audio もサポート。
+  # note 記事では「日常・バランスの王者」「26B-A4B が神」と評価。
+  #
+  # ollama.com/library/gemma4 で公式 tag 確認:
+  #   gemma4:e2b    7.2GB / 128K / vision+tools+thinking+audio (Effective 2B)
+  #   gemma4:e4b    9.6GB / 128K / vision+tools+thinking+audio (= :latest)
+  #   gemma4:26b   18GB  / 256K / vision+tools+thinking (MoE 25.2B/3.8B-active)
+  #   gemma4:31b   20GB  / 256K / vision+tools+thinking (Dense 30.7B)
+  #
+  # 推奨デフォルト:
+  #   軽量機 / laptop      → gemma4:e4b
+  #   16-20GB VRAM の GPU  → gemma4:26b   ← note 記事推奨の "26B-A4B"
+  #   24GB+ VRAM           → gemma4:31b
+  # ------------------------------------------------------------
+
+  # Gemma 4 26B-A4B — note 記事の "日常・バランスの王者"。
+  # MoE 25.2B total / 3.8B active、multi プロファイル primary 想定。
+  - name: ollama-gemma4-26b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:26b
+    paid: false
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # Gemma 4 E4B — laptop / iGPU 向け軽量 vision モデル。
+  # general プロファイルの軽量 primary としても、multi の軽量 fallback
+  # としても使える。応答が速く、Haiku 風のテンポ。
+  - name: ollama-gemma4-e4b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:e4b
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # Gemma 4 31B (Dense) — 24GB+ VRAM の品質重視 fallback。
+  # 26B (MoE) より一貫した出力だが速度は遅い。
+  - name: ollama-gemma4-31b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:31b
+    paid: false
+    timeout_s: 240
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # 有料クラウド — Z.AI / GLM coding plan (Claude 互換 ★★★★)
+  #
+  # Z.AI (Zhipu AI) の GLM family は note 記事で「intent 理解が
+  # Claude Opus 級」「agentic / coding で consumer hardware 最強」と
+  # 評価。OpenAI-compat エンドポイントで提供されているため kind:
+  # openai_compat でそのまま接続可能。
+  #
+  # 2 種類の base_url:
+  #
+  #   1. Coding Plan (subscription, 月額固定で prompt 量制限):
+  #      https://api.z.ai/api/coding/paas/v4
+  #      → Lite $18/月〜、Claude Code / Cursor / Cline 等の
+  #        公式サポートツール経由が前提
+  #
+  #   2. General API (pay-as-you-go):
+  #      https://api.z.ai/api/paas/v4
+  #      → CodeRouter / 自作ツール経由でも制限なく使える
+  #
+  # 重要 — Coding Plan の "unauthorized tool" 警告:
+  #   Z.AI Coding Plan は「公式サポートツールを通じた利用」を前提とし、
+  #   未認可のサードパーティツール経由のアクセスは benefit が制限される
+  #   可能性があると公式 docs に明記されています (docs.z.ai/devpack/overview)。
+  #   CodeRouter は Anthropic API 互換 ingress を提供するため、Claude Code
+  #   から見れば認可ツールに見えますが、Z.AI 側の検出ロジック次第で
+  #   "router 経由" と判定されるリスクは残ります。
+  #
+  #   推奨運用:
+  #     - Coding Plan 加入者で確実性を取りたい → Claude Code に Z.AI を
+  #       直結 (CodeRouter を経由しない) または zai-paas (General API) を使う
+  #     - General API (pay-as-you-go) は制限対象外なので CodeRouter 経由で
+  #       問題なし。料金は使用量比例 ($X/1M tokens)
+  #
+  # モデル名の slug は **大文字必須** (Cursor 等のドキュメント明記)。
+  #   GLM-5.1       — Opus 級フラッグシップ
+  #   GLM-5         — GLM-5 系
+  #   GLM-5-Turbo   — Opus 級、低 quota 消費
+  #   GLM-4.7       — Sonnet/Opus 級、Coding Plan のデフォルト
+  #   GLM-4.5-Air   — Haiku 級、軽量・高速応答
+  # ------------------------------------------------------------
+
+  # GLM Coding Plan 主力モデル (Sonnet 級、デフォルト)。
+  # Coding Plan 加入者向け。注意点は上のセクションコメント参照。
+  - name: zai-coding-glm-4-7
+    kind: openai_compat
+    base_url: https://api.z.ai/api/coding/paas/v4
+    model: GLM-4.7
+    api_key_env: Z_AI_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  # GLM Coding Plan フラッグシップ (Opus 級)。peak/off-peak で quota が
+  # 異なる (peak 3x, off-peak 2x 消費) ので reasoning profile 専用想定。
+  - name: zai-coding-glm-5-1
+    kind: openai_compat
+    base_url: https://api.z.ai/api/coding/paas/v4
+    model: GLM-5.1
+    api_key_env: Z_AI_API_KEY
+    paid: true
+    # GLM-5.1 + reasoning は応答が長くなりがち
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  # GLM Coding Plan 軽量モデル (Haiku 級)。
+  # general プロファイルの paid fallback として有効。
+  - name: zai-coding-glm-4-5-air
+    kind: openai_compat
+    base_url: https://api.z.ai/api/coding/paas/v4
+    model: GLM-4.5-Air
+    api_key_env: Z_AI_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+
+  # General API 経由の GLM-4.7 (pay-as-you-go、Coding Plan の "unauthorized
+  # tool" 制限対象外)。CodeRouter 経由で安心して使いたい場合はこちら。
+  # コメントアウト状態で配置 — Coding Plan 加入者は zai-coding-* を
+  # 優先して使う想定なので、必要になったら下のコメントを外す。
+  # - name: zai-paas-glm-4-7
+  #   kind: openai_compat
+  #   base_url: https://api.z.ai/api/paas/v4
+  #   model: GLM-4.7
+  #   api_key_env: Z_AI_API_KEY
+  #   paid: true
+  #   timeout_s: 60
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+  #     vision: true
+
+  # ------------------------------------------------------------
+  # 無料クラウド — Gemini Flash (multi / general、Claude Haiku 互換 ★★★)
+  #
+  # OpenRouter 経由の Gemini 2.5 Flash 無料枠 (2026-04 時点)。
+  # 1M context、vision 対応、応答が速い。free 階層 のレート制限は
+  # ~20 req/min / ~200 req/day。multi プロファイルの cloud fallback として
+  # local Gemma 3 の次に置く。
+  #
+  # 公式 slug が gemini-2.5 系から異動する可能性があるので、404 が
+  # 出たら https://openrouter.ai/api/v1/models で最新 slug を確認の上
+  # 上書き。
+  # ------------------------------------------------------------
+
+  - name: openrouter-gemini-flash-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: google/gemini-2.5-flash:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+  # ------------------------------------------------------------
+  # 有料クラウド — Claude Haiku / Opus (general / reasoning 終端)
+  #
+  # Sonnet (anthropic-direct above) の弟妹モデル。
+  # - Haiku 4-5: general 用の最速・最安 paid。Sonnet の 1/5 程度のコスト。
+  # - Opus 4-1: reasoning の終端。thinking 有効時の長文推論で別格。
+  #
+  # ALLOW_PAID=true のときのみ chain に乗ります。
+  # ------------------------------------------------------------
+
+  - name: anthropic-haiku-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-haiku-4-5
+    api_key_env: ANTHROPIC_API_KEY
+    paid: true
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+      # claude-haiku-4-* は thinking 対応 (capability registry が
+      # bundled YAML で先回り宣言済み、v0.5-A)
+
+  - name: anthropic-opus-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-opus-4-1
+    api_key_env: ANTHROPIC_API_KEY
+    paid: true
+    # Opus + thinking は応答が長くなりがち。Claude Code の auto-compact
+    # 経路に飲み込まれないよう余裕を持たせる。
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      vision: true
+      # claude-opus-4-* は thinking 対応 (registry 先回り済み)
+
+  # ============================================================
+  # HF-on-Ollama 経路: Ollama 公式 tag が無い trending モデル
+  # ============================================================
+  #
+  # 2026-04 時点で Ollama 公式 registry に未登録、または安定 tag が
+  # 提供されていない人気モデル群。Ollama 0.3.13+ は HuggingFace 上の
+  # GGUF を `ollama run hf.co/<user>/<repo>:<quant>` で直接実行できます。
+  #
+  # 登録手順 (詳細は docs/hf-ollama-models.md 参照):
+  #
+  #   1. ターゲット GGUF を ollama に download
+  #      ollama pull hf.co/unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M
+  #
+  #   2. (任意) ローカル alias を作る
+  #      ollama cp hf.co/unsloth/Qwen3-Coder-30B-A3B-GGUF:Q4_K_M qwen3-coder:30b
+  #
+  #   3. 該当 stanza のコメントを外して有効化、`model:` フィールドを
+  #      上記 (1) または (2) の名前に揃える。
+  #
+  #   4. `coderouter doctor --check-model <name>` で疎通 + capability 確認。
+  #      不一致が出たら `coderouter doctor --check-model <name> --apply`
+  #      で patch 自動反映 (v1.7-B #3)。
+  #
+  # 注: HF GGUF は同じモデル名で複数の量子化が並びます (Q4_K_M / Q5_K_M /
+  # Q6_K_M / Q8_0 等)。Q4_K_M がサイズと品質のバランス最良 — 24GB VRAM で
+  # 30B-A3B が動く。Q5/Q6 はメモリに余裕があれば品質向上。
+
+  # --- Qwen3-Coder 480B-A35B (HF) — coding の最強ローカル候補 ---
+  # MoE で active 35B、Q4_K_M で約 240GB。Mac M3 Ultra 192GB unified +
+  # 一部 swap、または NVIDIA H100 x2 級のハードウェアが必要。
+  # 動かせる環境では Sonnet 級の coding 体験。
+  # - name: ollama-qwen3-coder-480b-hf
+  #   kind: openai_compat
+  #   base_url: http://localhost:11434/v1
+  #   model: hf.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:Q4_K_M
+  #   paid: false
+  #   timeout_s: 300
+  #   output_filters: [strip_thinking, strip_stop_markers]
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+
+  # 注: Gemma 4 / GLM-4.5-Air は 2026-04 時点で:
+  # - Gemma 4: Ollama 公式 tag (gemma4:e4b/26b/31b) で利用可能 — 上の
+  #   ollama-gemma4-* stanza を参照
+  # - GLM-4.5-Air: Z.AI の cloud API 経由 (zai-coding-glm-4-5-air) で
+  #   利用可能 — または HF GGUF (unsloth/bartowski) 経由でローカルにも
+  #   展開可能。下の commented stanza を参照
+  #
+  # 以下は HF GGUF をローカルに展開したい場合の reference stanza:
+
+  # --- GLM-4.5-Air (HF GGUF) — ローカルで動かしたい場合 ---
+  # Z.AI cloud (zai-coding-glm-4-5-air) を使えば登録不要。ローカルで
+  # 動かす場合のみコメントを外してください。
+  # - name: ollama-glm-4-5-air-hf
+  #   kind: openai_compat
+  #   base_url: http://localhost:11434/v1
+  #   model: hf.co/unsloth/GLM-4.5-Air-GGUF:Q4_K_M
+  #   paid: false
+  #   timeout_s: 240
+  #   # GLM 系も <think> を出すので scrub 推奨
+  #   output_filters: [strip_thinking]
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+
+  # --- Qwen3.x Opus 蒸留モデル (HF) — reasoning の有力候補 ---
+  # Opus 風の応答スタイルを Qwen3 base に蒸留したコミュニティ fine-tune。
+  # 配布元・正式名は HF で「qwen3 opus distill」「claude-distill qwen3」
+  # で検索。下記モデル名はプレースホルダ — 実在の repo に置き換えて
+  # ください。
+  # - name: ollama-qwen3-opus-distill-hf
+  #   kind: openai_compat
+  #   base_url: http://localhost:11434/v1
+  #   # 実在の HF repo に書き換えてください (例:
+  #   # hf.co/<user>/qwen3-opus-distill-30b-GGUF:Q4_K_M )。
+  #   model: hf.co/REPLACE_ME/Qwen3-Opus-Distill-30B-GGUF:Q4_K_M
+  #   paid: false
+  #   timeout_s: 240
+  #   output_filters: [strip_thinking, strip_stop_markers]
+  #   capabilities:
+  #     chat: true
+  #     streaming: true
+  #     tools: true
+
   # ------------------------------------------------------------
   # v1.0 real-machine verify providers (v1.0-verify)
   #
@@ -390,7 +824,107 @@ providers:
       tools: true
 
 profiles:
+  # ==========================================================================
+  # v1.7-B: 用途別プロファイル 4 種
+  #
+  # すべてのプロファイルに `append_system_prompt` で「Claude 風応答」を
+  # nudge しています。Claude Code を主用途とするユーザーが、Sonnet/Opus
+  # と "意味合い" が乖離した応答に困らないようにするのが目的。
+  #
+  # 各プロファイルの fallback 順序:
+  #   1. ローカル (free, 最速、プライバシー)
+  #   2. 無料クラウド (NIM 40 req/min / OpenRouter free 〜200 req/day)
+  #   3. 有料クラウド (ALLOW_PAID=true 時のみ、Claude / GPT)
+  # ==========================================================================
+
+  # --------------------------------------------------------------------------
+  # multi — デフォルト。vision 対応 + general purpose、一番無難な chain。
+  # --------------------------------------------------------------------------
+  # 画像が来てもテキストだけでも動き、Sonnet vision 風の応答を目指す。
+  # 一番判断に迷ったときの "これでいい" 選択。
+  # local primary は Gemma 4 26B (note 記事の "日常・バランスの王者")。
+  - name: multi
+    append_system_prompt: |
+      You are a precise, concise assistant matching Claude Sonnet's style.
+      Describe images factually with no speculation beyond what is visible.
+      Answer questions directly without preamble.
+    providers:
+      - ollama-gemma4-26b              # local vision-capable primary (note 推奨)
+      - ollama-gemma4-31b              # local quality fallback (Dense)
+      - ollama-qwen3-6-35b             # local: Qwen3.6 vision で fallback
+      - openrouter-gemini-flash-free   # cloud free, vision, 1M ctx
+      - openrouter-free                # cloud free chat fallback
+      - anthropic-direct               # paid: Sonnet 4-6 with vision (★★★★★)
+
+  # --------------------------------------------------------------------------
+  # coding — Claude Code / agentic coding 用。Qwen3.6 / Qwen3-Coder 主軸。
+  # --------------------------------------------------------------------------
+  # Sonnet の tool-call 行動に最も近い Qwen3.6 35B-A3B を local primary に
+  # 置き、Qwen3-Coder family を量サイズ別の fallback、cloud は NIM/OR の
+  # qwen3-coder:free、最後に Sonnet または GLM-4.7 有料。
+  - name: coding
+    append_system_prompt: |
+      Match Claude Sonnet's coding style: terse, structured, tools used precisely.
+      Prefer code blocks over prose. Avoid filler explanations unless asked.
+      When using tools, batch independent operations in parallel.
+    providers:
+      - ollama-qwen3-6-35b             # local primary (note "local champ")
+      - ollama-qwen3-coder-30b         # local: agentic-coding 特化 fallback
+      - ollama-qwen-coder-14b          # local quality fallback
+      - ollama-qwen-coder-7b           # local fast fallback
+      - openrouter-free                # cloud: qwen3-coder:free (262K ctx)
+      - openrouter-gpt-oss-free        # cloud: vendor diversity (rate-limit 逃げ)
+      - zai-coding-glm-4-7             # paid: GLM-4.7 (Sonnet 級、Z.AI Coding Plan)
+      - anthropic-direct               # paid: Sonnet 4-6 (最終手段)
+
+  # --------------------------------------------------------------------------
+  # general — 雑用 / Q&A / 短い会話。Haiku 風のテンポを目指す。
+  # --------------------------------------------------------------------------
+  # 「応答が短くてサッと欲しい」用途。長い説明や深い推論は要らないとき。
+  - name: general
+    append_system_prompt: |
+      Match Claude Haiku's style: concise, direct, no preamble.
+      Aim for 1-3 sentence answers unless the question genuinely needs more.
+    providers:
+      - ollama-gemma4-e4b              # local primary (laptop/iGPU でも動く軽量)
+      - ollama-gemma4-26b              # local quality fallback
+      - openrouter-gemini-flash-free   # cloud free (1M ctx, 速い)
+      - openrouter-gpt-oss-free        # cloud free fallback
+      - zai-coding-glm-4-5-air         # paid: GLM-4.5-Air (Haiku 級)
+      - anthropic-haiku-direct         # paid: Haiku 4-5 (Sonnet の 1/5 コスト)
+
+  # --------------------------------------------------------------------------
+  # reasoning — 難問 / 長文推論 / "thinking" モード相当。
+  # --------------------------------------------------------------------------
+  # 注: このプロファイルは「応答が冗長になる」のがデフォルトの挙動です。
+  # Opus の thinking モードを意図したもので、サクッと答えが欲しいなら
+  # `general` または `multi` を使ってください。
+  #
+  # local primary は Qwen3.6 35B (vision+thinking 対応)。GLM 系は Z.AI
+  # cloud (zai-coding-glm-5-1) または HF-on-Ollama stanza を有効化して
+  # 引き寄せ可能。
+  - name: reasoning
+    append_system_prompt: |
+      Think carefully step by step. Show key reasoning steps but keep them
+      compact. State the final conclusion explicitly at the end of your answer.
+      Match Claude Opus's thinking-mode style.
+    providers:
+      - ollama-qwen3-6-35b             # local primary (thinking native)
+      - ollama-qwen3-coder-30b         # local: coding+reasoning 兼用 fallback
+      # ローカルで GLM-4.5-Air を使いたい場合は HF stanza を有効化:
+      # - ollama-glm-4-5-air-hf
+      - openrouter-free                # cloud free (Qwen3-Coder 480B reasoning)
+      - openrouter-gpt-oss-free        # cloud free (gpt-oss reasoning)
+      - zai-coding-glm-5-1             # paid: GLM-5.1 (Opus 級フラッグシップ)
+      - anthropic-opus-direct          # paid: Opus 4-1 with thinking (★★★★★)
+
+  # ==========================================================================
+  # Legacy / backward-compat profiles
+  # ==========================================================================
+
   # Generic chain — safe default for curl / OpenAI SDK / non-Claude-Code use.
+  # v1.7-B 以降の推奨は `multi` (default_profile)。`default` を明示指定する
+  # クライアントとの後方互換のため残置。
   - name: default
     providers:
       - ollama-qwen-coder-7b
@@ -428,14 +962,6 @@ profiles:
       - openrouter-free
       - openrouter-gpt-oss-free
       - anthropic-direct
-
-  # Alias — historically used for code-heavy tasks. Kept for backward compat.
-  - name: coding
-    providers:
-      - ollama-qwen-coder-7b
-      - openrouter-free
-      - openrouter-gpt-oss-free
-      - openrouter-claude
 
   # Strictly no paid providers, even if ALLOW_PAID=true.
   - name: free-only

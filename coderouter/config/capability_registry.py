@@ -102,6 +102,19 @@ class RegistryCapabilities(BaseModel):
             "doctor --check-model num_ctx probe (not consumed in v0.7-A)."
         ),
     )
+    claude_code_suitability: Literal["ok", "degraded"] | None = Field(
+        default=None,
+        description=(
+            "v1.7-B: hint for use behind Claude Code's agentic-coding "
+            "harness. ``degraded`` = the model over-eagerly invokes "
+            "tools/skills when given Claude Code's system prompt — e.g. "
+            "Llama-3.3-70B treating small talk like ``こんにちは`` as "
+            "``Skill(hello)`` invocations (see docs/troubleshooting.md "
+            "§4-1 for the symptom log). ``ok`` = explicitly verified "
+            "clean. ``None`` = no opinion (treated as ``ok`` at the "
+            "startup check)."
+        ),
+    )
 
 
 class CapabilityRule(BaseModel):
@@ -168,6 +181,7 @@ class ResolvedCapabilities:
     reasoning_passthrough: bool | None = None
     tools: bool | None = None
     max_context_tokens: int | None = None
+    claude_code_suitability: Literal["ok", "degraded"] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -218,11 +232,13 @@ class CapabilityRegistry:
         resolved_reasoning: bool | None = None
         resolved_tools: bool | None = None
         resolved_max_ctx: int | None = None
+        resolved_suitability: Literal["ok", "degraded"] | None = None
 
         thinking_locked = False
         reasoning_locked = False
         tools_locked = False
         max_ctx_locked = False
+        suitability_locked = False
 
         for rule in self._rules:
             if not rule.kind_matches(kind):
@@ -242,7 +258,16 @@ class CapabilityRegistry:
             if not max_ctx_locked and caps.max_context_tokens is not None:
                 resolved_max_ctx = caps.max_context_tokens
                 max_ctx_locked = True
-            if thinking_locked and reasoning_locked and tools_locked and max_ctx_locked:
+            if not suitability_locked and caps.claude_code_suitability is not None:
+                resolved_suitability = caps.claude_code_suitability
+                suitability_locked = True
+            if (
+                thinking_locked
+                and reasoning_locked
+                and tools_locked
+                and max_ctx_locked
+                and suitability_locked
+            ):
                 break
 
         return ResolvedCapabilities(
@@ -250,6 +275,7 @@ class CapabilityRegistry:
             reasoning_passthrough=resolved_reasoning,
             tools=resolved_tools,
             max_context_tokens=resolved_max_ctx,
+            claude_code_suitability=resolved_suitability,
         )
 
     # ------------------------------------------------------------------

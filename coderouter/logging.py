@@ -313,3 +313,89 @@ def log_output_filter_applied(
         "output-filter-applied",
         extra=payload,
     )
+
+
+# ---------------------------------------------------------------------------
+# v1.7-B: chain-claude-code-suitability-degraded log shape
+#
+# Motivation (plan.md §11.B.4 #2):
+#   v1.6.2 documented in docs/troubleshooting.md §4-1 that putting
+#   Llama-3.3-70B at the head of a Claude-Code-facing chain causes
+#   over-eager tool invocation (small talk like ``こんにちは`` getting
+#   rewritten to ``Skill(hello)`` calls). Docs alone require the operator
+#   to know to read troubleshooting.md; v1.7-B promotes that hint to a
+#   structured, automatic startup WARN whenever a profile whose name
+#   starts with ``claude-code`` contains a provider declared
+#   ``claude_code_suitability: degraded`` in the capability registry.
+#
+# Scope:
+#   - Fires ONCE per such profile at app startup (during the FastAPI
+#     lifespan), before any request is served.
+#   - Only fires for profiles whose name starts with ``claude-code``
+#     (case-sensitive prefix). A user with a ``writing`` profile
+#     containing Llama-3.3-70B stays quiet — the model is fine outside
+#     the agentic harness.
+#   - The operator can opt OUT by declaring
+#     ``claude_code_suitability: ok`` for the matching glob in
+#     ``~/.coderouter/model-capabilities.yaml`` (user rules win against
+#     bundled rules in the registry's first-match-per-flag walk).
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_CLAUDE_CODE_SUITABILITY_HINT: str = (
+    "move the degraded provider(s) to the tail of the chain or replace "
+    "with an agentic-coding-tuned model (e.g. qwen3-coder-480b-a35b-instruct); "
+    "see docs/troubleshooting.md §4-1"
+)
+
+
+class ChainClaudeCodeSuitabilityDegradedPayload(TypedDict):
+    """Structured shape of the ``chain-claude-code-suitability-degraded`` log.
+
+    Fields
+        profile: the profile name flagged. Always starts with
+            ``claude-code`` (the gate's prefix filter).
+        degraded_providers: provider ``name:`` values whose ``model:`` was
+            looked up in the capability registry and resolved to
+            ``claude_code_suitability == "degraded"``. Order matches their
+            position in the chain.
+        degraded_models: corresponding ``model:`` strings, parallel to
+            ``degraded_providers`` (same length, same order). Carried
+            separately so a log reader can grep for the model family
+            without having to cross-reference providers.yaml.
+        hint: a one-line remediation suggestion. Stable text so it can be
+            grepped, overridable at the call site if context warrants.
+    """
+
+    profile: str
+    degraded_providers: list[str]
+    degraded_models: list[str]
+    hint: str
+
+
+def log_chain_claude_code_suitability_degraded(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    degraded_providers: list[str],
+    degraded_models: list[str],
+    hint: str = _DEFAULT_CLAUDE_CODE_SUITABILITY_HINT,
+) -> None:
+    """Emit a ``chain-claude-code-suitability-degraded`` warn.
+
+    Single chokepoint mirroring :func:`log_chain_paid_gate_blocked`. Warn
+    level (not info) because mis-routing small talk to a Skill() call is
+    a user-visible behavior break that operators should see immediately
+    — but it does not block startup (the chain still works, just sub-
+    optimally for the agentic-coding harness).
+    """
+    payload: ChainClaudeCodeSuitabilityDegradedPayload = {
+        "profile": profile,
+        "degraded_providers": degraded_providers,
+        "degraded_models": degraded_models,
+        "hint": hint,
+    }
+    logger.warning(
+        "chain-claude-code-suitability-degraded",
+        extra=payload,
+    )

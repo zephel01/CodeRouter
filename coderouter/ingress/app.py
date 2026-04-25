@@ -17,6 +17,7 @@ from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
 from coderouter.metrics import install_collector
 from coderouter.routing import FallbackEngine
+from coderouter.routing.capability import check_claude_code_chain_suitability
 
 logger = get_logger(__name__)
 
@@ -63,6 +64,13 @@ def create_app(config_path: str | None = None) -> FastAPI:
                 "mode_source": mode_source,
             },
         )
+        # v1.7-B: scan ``claude-code-*`` profiles for providers whose
+        # registry-resolved ``claude_code_suitability`` is ``degraded``,
+        # emitting a structured warn per affected profile. Runs after the
+        # startup line so the operator's eye finds startup → warn in
+        # chronological order. Non-fatal — the chain still works, just
+        # potentially sub-optimally for the agentic harness.
+        check_claude_code_chain_suitability(config, logger=logger)
         yield
         logger.info("coderouter-shutdown")
 

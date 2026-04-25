@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
 import uvicorn
 
@@ -124,6 +125,40 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
             "./providers.yaml, or ~/.coderouter/providers.yaml."
+        ),
+    )
+    # v1.7-B (#3): --apply writes the doctor-emitted YAML patches back
+    # into providers.yaml / model-capabilities.yaml while preserving
+    # comments and key order. --dry-run is the same path minus the file
+    # write — prints a unified diff (``git apply``-compatible) for review.
+    # Bare ``--dry-run`` (without ``--apply``) is the canonical "preview"
+    # form; ``--apply --dry-run`` is also accepted as an explicit synonym
+    # so muscle-memory from ``git apply --dry-run`` works either way.
+    # Both flags are no-ops when --check-model is absent (--check-env
+    # has its own remediation surface and is not in scope for --apply).
+    # Implementation lives in coderouter/doctor_apply.py — round-trip
+    # via the optional ``ruamel.yaml`` dependency, see that module's
+    # docstring for the contract and shape invariants.
+    doctor.add_argument(
+        "--apply",
+        action="store_true",
+        help=(
+            "After --check-model, write the suggested patches back into "
+            "providers.yaml / model-capabilities.yaml. A `.bak` backup is "
+            "created next to each modified file. Idempotent: a re-run "
+            "after a successful apply is a no-op (no write, exit 0). "
+            "Requires the optional `ruamel.yaml` dependency — install "
+            "via `pip install coderouter-cli[doctor]`."
+        ),
+    )
+    doctor.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=(
+            "Preview --apply changes as a unified diff without writing "
+            "to disk. Implies --apply mode for diff generation. The "
+            "output is `git apply`-compatible so it can be saved and "
+            "applied later (or piped to `patch -p0`)."
         ),
     )
 
@@ -283,7 +318,14 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
 
 def _run_check_model(args: argparse.Namespace) -> int:
-    """v0.7-B: per-provider HTTP capability probe."""
+    """v0.7-B: per-provider HTTP capability probe.
+
+    v1.7-B (#3): when ``--apply`` or ``--dry-run`` is also set, we run
+    the same probes and then route the emitted patches through
+    :func:`coderouter.doctor_apply.apply_doctor_patches`. Bare probe
+    (no apply / dry-run flags) keeps the original behavior verbatim
+    so existing CI integrations don't change shape.
+    """
     from coderouter.config.loader import load_config
     from coderouter.doctor import (
         exit_code_for,
@@ -307,7 +349,131 @@ def _run_check_model(args: argparse.Namespace) -> int:
         return 1
 
     print(format_report(report))
-    return exit_code_for(report)
+    base_exit = exit_code_for(report)
+
+    apply_mode = bool(getattr(args, "apply", False))
+    dry_run_mode = bool(getattr(args, "dry_run", False))
+    if apply_mode or dry_run_mode:
+        # Resolve the same providers.yaml the loader picked up so the
+        # apply step writes back to the exact file that was probed
+        # (avoids a mismatch when CODEROUTER_CONFIG points elsewhere
+        # than the default path).
+        config_path = _resolve_config_path(args.config)
+        return _run_apply_or_dry_run(
+            report=report,
+            config_path=config_path,
+            write=apply_mode and not dry_run_mode,
+            base_exit=base_exit,
+        )
+
+    return base_exit
+
+
+def _resolve_config_path(explicit: str | None) -> Path:
+    """Mirror loader._candidate_paths and return the file actually used.
+
+    Used by ``--apply`` to write back to the same path the loader
+    picked up when it parsed providers.yaml. Falls through the same
+    search order so a ``CODEROUTER_CONFIG`` env or default-path lookup
+    matches the live config.
+    """
+    import os
+
+    candidates: list[Path] = []
+    if explicit:
+        candidates.append(Path(explicit))
+    if env_path := os.environ.get("CODEROUTER_CONFIG"):
+        candidates.append(Path(env_path))
+    candidates.append(Path.cwd() / "providers.yaml")
+    candidates.append(Path.home() / ".coderouter" / "providers.yaml")
+    for p in candidates:
+        if p.is_file():
+            return p
+    # Fall back to the last candidate even if absent — the apply step
+    # will surface a clearer error than this resolver would.
+    return candidates[-1]
+
+
+def _run_apply_or_dry_run(
+    *,
+    report: object,
+    config_path: Path,
+    write: bool,
+    base_exit: int,
+) -> int:
+    """v1.7-B (#3): drive ``apply_doctor_patches`` and render the result.
+
+    Returns 0 when the apply step itself is clean (regardless of
+    whether the underlying probes flagged ``NEEDS_TUNING``). The
+    rationale: once the operator has applied the patches, the next
+    ``doctor`` run is the right place to re-evaluate the chain — a
+    successful apply should not propagate the "exit 2 / needs tuning"
+    signal because the issue is now (presumably) addressed.
+    """
+    from coderouter.doctor_apply import (
+        DoctorApplyError,
+        MissingDependencyError,
+        apply_doctor_patches,
+    )
+
+    print()  # blank line between probe report and apply section
+    try:
+        result = apply_doctor_patches(
+            report=report,
+            config_path=config_path,
+            write=write,
+        )
+    except MissingDependencyError as exc:
+        print(f"doctor --apply: {exc}", file=sys.stderr)
+        return 1
+    except DoctorApplyError as exc:
+        print(f"doctor --apply: {exc}", file=sys.stderr)
+        return 1
+
+    label = "Apply" if write else "Dry-run"
+    print(f"{label}: {len(result.target_paths)} target file(s).")
+    if result.skipped_unknown_target:
+        print(
+            f"  warning: {len(result.skipped_unknown_target)} probe(s) "
+            f"emitted an unknown target_file value: "
+            f"{sorted(set(result.skipped_unknown_target))}",
+            file=sys.stderr,
+        )
+
+    if result.is_no_op:
+        # Distinguish "nothing to do because base_exit was 0" from
+        # "nothing to do because everything already applied":
+        if base_exit == 0:
+            print("  No NEEDS_TUNING patches to apply — chain is healthy.")
+        else:
+            print(
+                f"  All {result.no_op_patches} patch(es) already applied "
+                f"— providers.yaml is up to date."
+            )
+        return 0
+
+    print(
+        f"  {result.changes_applied} patch(es) applied"
+        + (f", {result.no_op_patches} already up to date" if result.no_op_patches else "")
+        + "."
+    )
+    for path in result.target_paths:
+        diff = result.diffs.get(str(path), "")
+        if not diff:
+            continue
+        print()
+        print(diff, end="" if diff.endswith("\n") else "\n")
+
+    if write:
+        for orig, bak in result.backups.items():
+            print(f"  Backup: {orig} → {bak}")
+    else:
+        print()
+        print("  (dry-run — no files were modified. Re-run with --apply to write.)")
+
+    return 0
+
+
 
 
 def _run_check_env(arg_value: str) -> int:

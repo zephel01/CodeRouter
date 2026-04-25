@@ -11,7 +11,7 @@
 # in plan.md §11.B; once granted, this name will become an alias and
 # `coderouter` will become the canonical distribution name.
 name = "coderouter-cli"
-version = "1.7.0"
+version = "1.8.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -45,6 +45,20 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# v1.7-B (#3): `coderouter doctor --check-model --apply` writes the
+# doctor-emitted YAML patches back into providers.yaml /
+# model-capabilities.yaml while preserving comments and key order. That
+# round-trip behavior requires ``ruamel.yaml`` — pyyaml does not preserve
+# comments or formatting on dump. Kept OPTIONAL (not in the strict 5 base
+# deps) because the typical user path (``serve``) never needs it; only
+# operators who actually run ``doctor --apply`` install it via
+# ``pip install coderouter-cli[doctor]`` (or ``uv tool install
+# coderouter-cli --with ruamel.yaml``). Lazy-imported in
+# ``coderouter.doctor_apply`` so the absence is invisible until the
+# feature is invoked.
+doctor = [
+    "ruamel.yaml>=0.18.6",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -52,6 +66,12 @@ dev = [
     "ruff>=0.7.0",
     "mypy>=1.13.0",
     "types-PyYAML>=6.0.12",
+    # tests for v1.7-B doctor --apply exercise the same round-trip path
+    # that operators use, so ruamel.yaml has to be available in the dev
+    # environment too. Kept here (in addition to the [doctor] extra) so
+    # ``uv sync --extra dev`` is enough for a full test run without
+    # remembering to also pass ``--extra doctor``.
+    "ruamel.yaml>=0.18.6",
 ]
 
 [project.scripts]

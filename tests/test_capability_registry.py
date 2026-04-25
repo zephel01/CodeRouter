@@ -295,6 +295,112 @@ def test_lookup_unmatched_flags_are_none() -> None:
     assert result.tools is None
     assert result.reasoning_passthrough is None
     assert result.max_context_tokens is None
+    assert result.claude_code_suitability is None
+
+
+# ======================================================================
+# v1.7-B: claude_code_suitability — schema + lookup
+# ======================================================================
+
+
+def test_registry_capabilities_accepts_claude_code_suitability_degraded() -> None:
+    """Literal["ok", "degraded"] | None — schema validation for the v1.7-B flag."""
+    caps = RegistryCapabilities.model_validate({"claude_code_suitability": "degraded"})
+    assert caps.claude_code_suitability == "degraded"
+
+
+def test_registry_capabilities_rejects_unknown_suitability_value() -> None:
+    """Literal narrows the value space — typos fail at load."""
+    with pytest.raises(ValidationError):
+        RegistryCapabilities.model_validate({"claude_code_suitability": "broken"})
+
+
+def test_lookup_returns_claude_code_suitability() -> None:
+    """A rule declaring suitability surfaces it in ResolvedCapabilities."""
+    reg = CapabilityRegistry(
+        [
+            CapabilityRule(
+                match="meta/llama-3.3-70b*",
+                kind="openai_compat",
+                capabilities=RegistryCapabilities(claude_code_suitability="degraded"),
+            )
+        ]
+    )
+    result = reg.lookup(kind="openai_compat", model="meta/llama-3.3-70b-instruct")
+    assert result.claude_code_suitability == "degraded"
+
+
+def test_lookup_user_rule_can_flip_suitability_to_ok() -> None:
+    """User rules win — opt-out path for operators with tuned Llama deployments."""
+    bundled = [
+        CapabilityRule(
+            match="*llama-3.3-70b*",
+            kind="openai_compat",
+            capabilities=RegistryCapabilities(claude_code_suitability="degraded"),
+        )
+    ]
+    user = [
+        CapabilityRule(
+            match="meta/llama-3.3-70b-instruct",
+            kind="openai_compat",
+            capabilities=RegistryCapabilities(claude_code_suitability="ok"),
+        )
+    ]
+    reg = CapabilityRegistry.from_rule_lists(user=user, bundled=bundled)
+    result = reg.lookup(kind="openai_compat", model="meta/llama-3.3-70b-instruct")
+    assert result.claude_code_suitability == "ok"
+
+
+def test_bundled_yaml_declares_llama_3_3_70b_degraded() -> None:
+    """Bundled rules cover the common slug variants for Llama-3.3-70B.
+
+    Verified glob coverage: NIM (``meta/llama-3.3-70b-instruct``),
+    OpenRouter (``meta-llama/llama-3.3-70b-instruct``), and bare local
+    server form (``Llama-3.3-70B-Instruct``). Case-sensitivity is
+    handled by declaring lower-case and capitalized variants.
+    """
+    reg = CapabilityRegistry.load_default()
+    for model in [
+        "meta/llama-3.3-70b-instruct",
+        "meta-llama/llama-3.3-70b-instruct",
+        "Llama-3.3-70B-Instruct",
+    ]:
+        result = reg.lookup(kind="openai_compat", model=model)
+        assert result.claude_code_suitability == "degraded", (
+            f"bundled YAML should declare claude_code_suitability=degraded for {model}"
+        )
+
+
+def test_bundled_yaml_does_not_flag_other_llama_families_as_degraded() -> None:
+    """Llama-3.1 / Llama-4 / different-size Llama-3.3 / Kimi must NOT
+    inherit the Llama-3.3-70B *degraded* flag — the glob is
+    intentionally narrow.
+
+    Note: Qwen3-Coder family IS positively flagged (``ok``) by the
+    v1.7-B registry update, so ``is None`` is the wrong assertion for
+    Qwen — we explicitly check ``!= 'degraded'`` instead.
+    """
+    reg = CapabilityRegistry.load_default()
+    for model in [
+        "meta/llama-3.1-70b-instruct",
+        "meta/llama-3.3-8b-instruct",  # different size
+        "moonshotai/kimi-k2-instruct",
+    ]:
+        result = reg.lookup(kind="openai_compat", model=model)
+        assert result.claude_code_suitability is None, (
+            f"bundled YAML must not flag {model} as degraded "
+            f"(got {result.claude_code_suitability!r})"
+        )
+
+    # Qwen3-Coder family is positively flagged as ``ok`` (v1.7-B);
+    # verify it specifically resolves to ``ok``, not ``degraded``.
+    qwen_result = reg.lookup(
+        kind="openai_compat", model="qwen/qwen3-coder-480b-a35b-instruct"
+    )
+    assert qwen_result.claude_code_suitability == "ok", (
+        f"Qwen3-Coder family should be flagged as 'ok' (v1.7-B), "
+        f"got {qwen_result.claude_code_suitability!r}"
+    )
 
 
 def test_lookup_any_kind_rule_matches_both_adapter_kinds() -> None:

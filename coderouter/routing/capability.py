@@ -37,15 +37,18 @@ Design decisions
 
 from __future__ import annotations
 
+import logging
+
 from coderouter.config.capability_registry import (
     CapabilityRegistry,
     ResolvedCapabilities,
 )
-from coderouter.config.schemas import ProviderConfig
+from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
 from coderouter.logging import (
     CapabilityDegradedPayload,
     CapabilityDegradedReason,
     log_capability_degraded,
+    log_chain_claude_code_suitability_degraded,
 )
 from coderouter.translation.anthropic import AnthropicRequest
 
@@ -54,12 +57,14 @@ from coderouter.translation.anthropic import AnthropicRequest
 # home is ``coderouter.logging`` — see that module's docstring for why
 # (short version: avoids a routing ↔ adapter import cycle).
 __all__ = [
+    "CLAUDE_CODE_PROFILE_PREFIX",
     "CapabilityDegradedPayload",
     "CapabilityDegradedReason",
     "CapabilityRegistry",
     "ResolvedCapabilities",
     "anthropic_request_has_cache_control",
     "anthropic_request_requires_thinking",
+    "check_claude_code_chain_suitability",
     "get_default_registry",
     "log_capability_degraded",
     "provider_supports_cache_control",
@@ -283,3 +288,110 @@ def anthropic_request_has_cache_control(request: AnthropicRequest) -> bool:
                     return True
 
     return False
+
+
+# ---------------------------------------------------------------------------
+# v1.7-B: claude_code_suitability startup check
+#
+# Motivation (plan.md §11.B.4 #2):
+#   v1.6.2 documented in docs/troubleshooting.md §4-1 the "Llama-3.3-70B
+#   over-eagerly invokes Skill() for small talk under Claude Code"
+#   symptom. v1.7-B promotes that hint from prose-only to a structured
+#   automatic startup WARN: at app startup we scan every profile whose
+#   name starts with ``claude-code`` and emit ONE warn per profile that
+#   contains a provider whose registry-resolved
+#   ``claude_code_suitability == "degraded"``.
+#
+# Design notes
+#   - Profile-name prefix gate, not request-time. Iterating all
+#     ``claude-code-*`` profiles at startup means the operator sees the
+#     warning regardless of whether they're currently routing to Claude
+#     Code or another mode (the chain might be activated later via
+#     ``X-CodeRouter-Mode``).
+#   - One log per profile (not one per provider). The payload carries the
+#     full list of degraded provider/model pairs so a single grep returns
+#     the actionable set.
+#   - Returns a structured list so callers (tests, future ``coderouter
+#     doctor`` subcommands) can introspect the result without parsing
+#     log lines.
+# ---------------------------------------------------------------------------
+
+
+CLAUDE_CODE_PROFILE_PREFIX: str = "claude-code"
+"""Profile-name prefix that triggers the suitability check at startup.
+
+Case-sensitive prefix match against ``FallbackChain.name``. Covers the
+canonical names used in ``examples/providers.nvidia-nim.yaml``
+(``claude-code-nim``) and ``examples/providers.yaml``
+(``claude-code-local``); operators with custom profile names that should
+trigger the same check should adopt the prefix or override per-provider
+in ``~/.coderouter/model-capabilities.yaml`` (declaring
+``claude_code_suitability: ok`` to opt out of the warn).
+"""
+
+
+def check_claude_code_chain_suitability(
+    config: CodeRouterConfig,
+    *,
+    logger: logging.Logger,
+    registry: CapabilityRegistry | None = None,
+) -> dict[str, list[tuple[str, str]]]:
+    """Scan ``claude-code-*`` profiles and warn about degraded providers.
+
+    Walks every profile whose name starts with
+    :data:`CLAUDE_CODE_PROFILE_PREFIX`. For each such profile, looks up
+    every provider in the chain in the capability registry; collects the
+    ``(provider_name, model)`` pairs whose
+    ``claude_code_suitability`` resolved to ``"degraded"``; and emits ONE
+    ``chain-claude-code-suitability-degraded`` warn per profile via
+    :func:`coderouter.logging.log_chain_claude_code_suitability_degraded`.
+
+    Profiles with zero degraded entries stay quiet. A profile that
+    references a provider name not declared in ``providers`` is skipped
+    silently here — the existing ``FallbackEngine`` validation will
+    catch that on first request with a clearer error.
+
+    The return value is a dict mapping ``profile_name`` →
+    ``[(provider_name, model), …]`` for every profile that had at least
+    one degraded entry. Empty dict means "no warnings emitted, all
+    claude-code chains look clean (or there are no such chains)". Tests
+    use this to assert the gate fires (or doesn't) without grepping
+    logs.
+
+    The ``registry`` kwarg is for tests — production callers (the
+    FastAPI lifespan in ``ingress.app``) pass nothing and get the
+    module-level default. The ``logger`` is required: callers pass the
+    logger of the module that should appear in the JSON-line ``logger``
+    field, matching the existing ``capability-degraded`` /
+    ``chain-paid-gate-blocked`` patterns.
+    """
+    reg = registry if registry is not None else get_default_registry()
+
+    # Cheap O(N) name → ProviderConfig lookup; profiles reference providers
+    # by name only. Skipping unknown names mirrors what FallbackEngine
+    # would do (the v0.6 startup validators already check structural
+    # integrity, so the lookup miss path here is purely defensive).
+    by_name: dict[str, ProviderConfig] = {p.name: p for p in config.providers}
+
+    flagged: dict[str, list[tuple[str, str]]] = {}
+    for profile in config.profiles:
+        if not profile.name.startswith(CLAUDE_CODE_PROFILE_PREFIX):
+            continue
+        degraded: list[tuple[str, str]] = []
+        for provider_name in profile.providers:
+            provider = by_name.get(provider_name)
+            if provider is None:
+                continue  # FallbackEngine validation will surface this
+            resolved = reg.lookup(kind=provider.kind, model=provider.model or "")
+            if resolved.claude_code_suitability == "degraded":
+                degraded.append((provider.name, provider.model or ""))
+        if not degraded:
+            continue
+        flagged[profile.name] = degraded
+        log_chain_claude_code_suitability_degraded(
+            logger,
+            profile=profile.name,
+            degraded_providers=[p for p, _ in degraded],
+            degraded_models=[m for _, m in degraded],
+        )
+    return flagged

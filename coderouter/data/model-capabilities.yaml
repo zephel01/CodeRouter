@@ -31,6 +31,11 @@
 #       reasoning_passthrough: bool   — opt OUT of the adapter's passive `reasoning` strip
 #       tools: bool                   — upstream reliably emits tool_calls
 #       max_context_tokens: int       — declared model context window
+#       claude_code_suitability: str  — "ok" | "degraded". Hint for use behind
+#                                       Claude Code's agentic-coding harness;
+#                                       "degraded" triggers a startup WARN when
+#                                       the provider is on a `claude-code-*`
+#                                       chain. See docs/troubleshooting.md §4-1.
 #
 # First-match semantics: rules within a file are evaluated top-to-bottom
 # per flag; the first rule whose glob matches AND declares that flag
@@ -84,3 +89,147 @@ rules:
     kind: anthropic
     capabilities:
       thinking: true
+
+  # ------------------------------------------------------------------
+  # Claude Code suitability — agentic harness compatibility hint (v1.7-B).
+  #
+  # "degraded" = the model over-eagerly invokes tools / skills when given
+  # Claude Code's system prompt, even for trivial small talk. Concretely,
+  # Llama-3.3-70B (verified 2026-04-24 against NVIDIA NIM) rewrites
+  # ``こんにちは`` into ``Skill(hello)`` invocations and fabricates
+  # ``AskUserQuestion("What is your name?")`` elicitations — see
+  # docs/articles/note-nvidia-nim.md §6-2 + docs/troubleshooting.md §4-1.
+  #
+  # Glob coverage: NIM uses ``meta/llama-3.3-70b-instruct``, OpenRouter
+  # uses ``meta-llama/llama-3.3-70b-instruct``, some local servers use
+  # ``Llama-3.3-70B-Instruct``. fnmatch is case-sensitive so we declare
+  # both common case-variants explicitly. The leading ``*`` wildcard
+  # absorbs any vendor-prefix slug (``meta/`` / ``meta-llama/`` / etc.).
+  #
+  # An operator who has tuned their Llama-3.3 deployment (custom system
+  # prompt, tool whitelist, etc.) can opt out via
+  # ``~/.coderouter/model-capabilities.yaml`` with the matching glob and
+  # ``claude_code_suitability: ok``.
+  # ------------------------------------------------------------------
+
+  - match: "*llama-3.3-70b*"
+    kind: openai_compat
+    capabilities:
+      claude_code_suitability: degraded
+
+  - match: "*Llama-3.3-70B*"
+    kind: openai_compat
+    capabilities:
+      claude_code_suitability: degraded
+
+  # ------------------------------------------------------------------
+  # Qwen3-Coder family — agentic coding 専用設計 (v1.7-B 追加)
+  #
+  # Alibaba の Qwen3-Coder series は agentic coding と tool use を
+  # 主目的に学習されており、Claude Sonnet の tool-call 行動に最も近い
+  # ローカル/オープン代替として知られています (note 記事 + r/LocalLLaMA
+  # 2026-04 Megathread コミュニティ評)。
+  #
+  # ここで `tools: true` を先回り宣言することで、providers.yaml 側で
+  # 個別に capabilities.tools: true を書かなくても tool-call 経路が
+  # 有効になります。`claude_code_suitability: ok` も併せて宣言、
+  # claude-code-* プロファイル startup check (v1.7-B) で degraded 警告が
+  # 出ないことを保証。
+  #
+  # glob 範囲 (case-sensitive — 大文字版も併記):
+  #   Ollama tag       : qwen3-coder:*       (例: qwen3-coder:30b-a3b)
+  #   NIM slug         : qwen/qwen3-coder-*  (例: qwen/qwen3-coder-480b-a35b-instruct)
+  #   OpenRouter slug  : qwen/qwen3-coder*   (例: qwen/qwen3-coder:free)
+  #   HF GGUF (Ollama) : hf.co/*/Qwen3-Coder-*-GGUF*  (大文字)
+  # ------------------------------------------------------------------
+
+  - match: "qwen3-coder:*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  - match: "qwen/qwen3-coder-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  - match: "qwen/qwen3-coder*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  - match: "*Qwen3-Coder-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  # ------------------------------------------------------------------
+  # Qwen3.6 family (v1.7-B 追加)
+  #
+  # 2026-04 リリースの Qwen3.6 シリーズ。Ollama 公式 tag は
+  # qwen3.6:27b / qwen3.6:35b、全 variant が tools+vision+thinking 対応、
+  # 256K context。note 記事 (r/LocalLLaMA 2026-04 Megathread) で
+  # 「Claude Code 代替として最高」「local champ」と評価。
+  # Qwen3-Coder と並んで Claude Sonnet 互換性が高い。
+  # ------------------------------------------------------------------
+
+  - match: "qwen3.6:*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  - match: "qwen/qwen3.6-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+      claude_code_suitability: ok
+
+  # ------------------------------------------------------------------
+  # Gemma 4 family (v1.7-B 追加)
+  #
+  # Google 公式 Gemma 4。Ollama 公式 tag は gemma4:e2b / e4b / 26b / 31b、
+  # 全 variant が tools+vision+thinking 対応、E2B/E4B は audio もサポート。
+  # MoE (26b は active 3.8B / total 25.2B)。note 記事で「日常・バランスの
+  # 王者」と評価。Claude Haiku 互換性に近い簡潔な応答スタイル。
+  # ------------------------------------------------------------------
+
+  - match: "gemma4:*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "google/gemma-4*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # ------------------------------------------------------------------
+  # GLM family (Z.AI / Zhipu AI、v1.7-B 追加)
+  #
+  # Z.AI の OpenAI-compat エンドポイントから利用する GLM-4.x / 5.x 系列。
+  # モデル名 slug は **大文字必須** (Cursor 等のドキュメント明記)。
+  # tools / vision 対応、Coding Plan の API 経由でも General API 経由でも
+  # 同じモデルが利用可能。
+  #
+  # GLM-5.1 / GLM-5-Turbo: Opus 級フラッグシップ
+  # GLM-4.7: Sonnet/Opus 級、Coding Plan のデフォルト
+  # GLM-4.5-Air: Haiku 級、軽量・高速
+  #
+  # note 記事は「intent 理解が Claude Opus 級」と評価。reasoning 用途に
+  # 特に向く。
+  # ------------------------------------------------------------------
+
+  - match: "GLM-5*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "GLM-4.[5-9]*"
+    kind: openai_compat
+    capabilities:
+      tools: true

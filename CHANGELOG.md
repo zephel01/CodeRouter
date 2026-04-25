@@ -6,6 +6,154 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.8.0] — 2026-04-26 (用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化)
+
+**Theme: 「Claude Code で意味合いがズレない代替モデル」を operator に渡す minor。** plan.md §11.B (v1.7-B umbrella) を 6 タスクで一気に消化:
+
+1. **PyPI Trusted Publishing** 自動化 — `git tag v* && git push` だけで release.yml が PyPI publish + GitHub Release 草稿を自動作成。API トークン不要 (OIDC)
+2. **`claude_code_suitability` hint** — capability registry に `Literal["ok", "degraded"] | None` フィールド新設、Llama-3.3-70B 系を `claude-code-*` profile に置くと startup で `chain-claude-code-suitability-degraded` warn を構造化 emit。v1.6.2 で docs 化した「`こんにちは` → `Skill(hello)` 暴走」罠の自動検出版
+3. **`coderouter doctor --check-model --apply` / `--dry-run`** — doctor 提案の YAML パッチを `providers.yaml` / `model-capabilities.yaml` に**非破壊**書き戻し (コメント・key 順序 100% 保持)。`--dry-run` は `git apply` 互換 unified diff、`--apply` は `.bak` バックアップ作成 + 冪等 (二回目は no-op)。`ruamel.yaml` を optional dep (`[doctor]` extras) で lazy import → base 5 deps streak 維持
+4. **`setup.sh` onboarding ウィザード** — RAM 自動検出 → 推奨ローカルモデル提案 → `ollama pull` → `~/.coderouter/providers.yaml` 生成。`--ram-gb N` / `--non-interactive` / `--no-pull` / `--dry-run` / `--force` のフラグ整備、bash 3.2 互換、新規依存ゼロ
+5. **examples/providers.yaml を 4 プロファイル構成に拡張** — `multi` (default) / `coding` / `general` / `reasoning`、各プロファイルに `append_system_prompt` で Claude 風応答を nudge、`mode_aliases` で `default/fast/vision/think/cheap` ショートカット
+6. **Gemma 4 / Qwen3.6 / Z.AI (GLM-4.7/5.1) を providers.yaml に登録** — Ollama 公式 tag 化された `gemma4:e4b/26b/31b` (note 推奨 26B-A4B 含む) と `qwen3.6:27b/35b` (note "local champ" 35b-a3b) を active stanza として登録、note 記事推奨モデルを各 profile primary に格上げ。Z.AI を OpenAI-compat で 2 base_url 提供 (Coding Plan / General API)、unauthorized-tool 警告込みで明文化。`bundled model-capabilities.yaml` に `qwen3.6:*` (claude_code_suitability=ok) / `gemma4:*` / `GLM-5*` / `GLM-4.[5-9]*` family を新規宣言
+
+- Tests: 651 → **710** (+59, +9.1%): `tests/test_claude_code_suitability.py` (6, walker + payload + opt-out), `tests/test_capability_registry.py` (+11 schema/lookup/bundled-yaml), `tests/test_doctor_apply.py` (25, parse/merge/apply/idempotent), `tests/test_setup_sh.py` (17 + 1 shellcheck-skip, RAM 推奨 / 既存ファイル衝突 / dry-run / parent dir 作成), `tests/test_examples_yaml.py` (+5, 4 profiles 存在 / append_system_prompt 必須 / mode_aliases / coding head 検証)
+- Runtime deps: 5 → 5 (18 sub-release 連続据え置き; `ruamel.yaml` は `[project.optional-dependencies].doctor` の optional)
+- Backward compat: `default_profile: default` → `default_profile: multi` への変更を伴うため、**`examples/providers.yaml` を ~/.coderouter/providers.yaml にコピーし直すと挙動が変わります**。手元の `providers.yaml` は触らない限り変化なし。`mode_aliases.default → multi` で旧 default 呼び出しは multi に解決される後方互換あり
+
+### Theme: 「意味合いがズレない代替モデル」を 3 段の対策で実現
+
+Claude Code を主用途とするユーザーが直面する核心問題は、ローカル/オープンモデルへ fallback したときに **応答の "性格"** が Claude Sonnet/Opus と乖離して「なんでだろ?」と混乱することでした。v1.8.0 はこれに 3 段で対処:
+
+1. **モデル選定を Claude 風に寄せる** — Qwen3.6 35B-A3B (note 記事 "local champ") と Qwen3-Coder family を coding 主軸に。Llama-3.3-70B は引き続き `claude_code_suitability: degraded` で claude-code chain から自動退避。Gemma 4 26B-A4B (note "日常の王者") を multi/general に
+2. **`append_system_prompt` で nudge** — 4 プロファイルすべてに「Match Claude Sonnet's coding style」「Match Claude Haiku's style」等の指示を載せ、非 Claude モデルでも応答スタイルが寄るように。プロファイル単位で適用 (v0.6-B 既実装機能)
+3. **`output_filters` で表面差をクリーンアップ** — Qwen 系の `<think>` リーク・stop marker は引き続き strip (v1.0-A)。Qwen3.6 / Qwen3-Coder 30B には `[strip_thinking, strip_stop_markers]` を default で付与
+
+### Z.AI (GLM family) — Coding Plan の落とし穴と回避策
+
+Z.AI の GLM-4.7 / 5.1 は note 記事で「intent 理解が Claude Opus 級」と評価される強力な選択肢。OpenAI 互換エンドポイントなので CodeRouter は `kind: openai_compat` でそのまま接続できますが、Coding Plan の規約に注意:
+
+公式 docs (docs.z.ai/devpack/overview) は「**未認可サードパーティツール経由のアクセスは benefit が制限される可能性**」と明記しています。CodeRouter は Anthropic API 互換 ingress を持つので Claude Code から見て認可ツールに見えるはずですが、Z.AI 側の検出ロジック次第で「router 経由」と判定されるリスクは残ります。
+
+`examples/providers.yaml` には 2 種類の base_url stanza を用意:
+
+- `zai-coding-glm-4-7/5-1/4-5-air`: Coding Plan 用 (`api/coding/paas/v4`) — 加入者向け、CodeRouter 経由でも Claude Code 直結に見えるはず
+- `zai-paas-glm-4-7` (commented): General API 用 (`api/paas/v4`) — pay-as-you-go、制限対象外。CodeRouter 経由で安心して使える
+
+**推奨運用**: Coding Plan 加入者で確実性を取るなら Claude Code に Z.AI を直結 (CodeRouter 経由しない) または General API stanza を有効化。General API は使用量比例課金。
+
+### Changes
+
+#### v1.8-A: Trusted Publishing 自動化 (ドキュメントのみ、PyPI 側 1 回登録)
+
+- PyPI 側で trusted publisher を登録 (Owner: zephel01, Repo: CodeRouter, Workflow: release.yml, Environment: pypi)
+- GitHub 側で `pypi` environment を作成 (protection rules なし、シークレットなし)
+- `docs/inside/release-pypi.md` §0-6 に登録手順 + 自動化後フローを追記、§11 のチェックリストを `[x]` 完了に
+
+#### v1.8-B: `claude_code_suitability` hint
+
+- `coderouter/config/capability_registry.py` の `RegistryCapabilities` / `ResolvedCapabilities` に `claude_code_suitability: Literal["ok", "degraded"] | None` フィールド追加。`lookup` メソッドの first-match-per-flag walk に新スロット
+- `coderouter/data/model-capabilities.yaml` に Llama-3.3-70B family (`*llama-3.3-70b*` / `*Llama-3.3-70B*`) を `claude_code_suitability: degraded` で宣言
+- `coderouter/logging.py` に `ChainClaudeCodeSuitabilityDegradedPayload` TypedDict + `log_chain_claude_code_suitability_degraded` helper 新設、msg は `chain-claude-code-suitability-degraded`
+- `coderouter/routing/capability.py` に `CLAUDE_CODE_PROFILE_PREFIX = "claude-code"` 定数 + `check_claude_code_chain_suitability(config, *, logger, registry=None)` 関数。プロファイル名 prefix gate + chain walk + プロファイル単位 aggregate WARN
+- `coderouter/ingress/app.py` の lifespan で startup 時に `check_claude_code_chain_suitability` を 1 行で呼び出し
+
+#### v1.8-C: `coderouter doctor --check-model --apply` / `--dry-run`
+
+- `coderouter/doctor_apply.py` 新設 — `parse_patch_yaml` (doctor の YAML literal をコメント strip + safe_load) / `deep_merge_dicts` (再帰マージ、idempotent 検出) / `merge_provider_patch_into_doc` / `merge_capabilities_rule_into_doc` / `apply_doctor_patches` (top-level entry, ApplyResult dataclass 返す) / `render_unified_diff` (stdlib `difflib.unified_diff`) / `DoctorApplyError` + `MissingDependencyError`
+- `pyproject.toml` `[project.optional-dependencies].doctor = ["ruamel.yaml>=0.18.6"]` 追加 (base 5 deps streak は維持、`[dev]` にも入れて test 用)
+- `coderouter/cli.py` の doctor subparser に `--apply` / `--dry-run` フラグ追加 + `_run_check_model` / `_resolve_config_path` / `_run_apply_or_dry_run` のヘルパ。doctor 提案の YAML パッチを 1 invocation で書き戻し可能に
+- 冪等性: 既に同じ値が入っていれば no-op (file mtime 不変、exit 0、"already up to date" メッセージ)
+- バックアップ: `--apply` 時に自動で `providers.yaml.bak` を作成 (overwriting 形式、git 派は git-diff で履歴管理)
+
+#### v1.8-D: `setup.sh` onboarding ウィザード
+
+- リポジトリルートに `setup.sh` 新設 (bash 3.2 互換、新規依存ゼロ)
+- macOS (`sysctl hw.memsize`) / Linux (`/proc/meminfo`) で RAM 自動検出
+- RAM → 推奨モデル: ≥24GB→qwen2.5-coder:14b / ≥12GB→qwen2.5-coder:7b / ≥6GB→qwen2.5-coder:1.5b / <6GB→cloud-only バイル + cloud hint
+- `ollama` 不在チェック: 実 pull モード時のみ強制、`--no-pull` / `--dry-run` 時は許容
+- 既存 `providers.yaml` 保護: デフォルトは `.new` sidecar に書き、`--force` 時のみ `.bak` 残して overwrite
+- 生成 YAML が live `CodeRouterConfig` Pydantic schema で round-trip すること、を回帰テストで pin
+
+#### v1.8-E: examples/providers.yaml の 4 プロファイル構成 + Gemma 4/Qwen3.6/Z.AI 登録
+
+- `default_profile: default` → `default_profile: multi` に変更 (新 default はマルチモーダル対応 chain)
+- 4 プロファイル新設:
+  - `multi` (default): vision-capable、Gemma 4 26B local primary → Sonnet 4-6 with vision paid 終端
+  - `coding`: Qwen3.6 35B-A3B (note "local champ") → Qwen3-Coder 30B → ... → GLM-4.7 → Sonnet 4-6
+  - `general`: Gemma 4 E4B (laptop でも動く軽量) → Gemini Flash free → GLM-4.5-Air → Haiku 4-5
+  - `reasoning`: Qwen3.6 35B (thinking native) → ... → GLM-5.1 → Opus 4-1 with thinking
+- 全プロファイルに `append_system_prompt` で Claude 風応答を nudge
+- `mode_aliases`: `default → multi`, `fast → general`, `vision → multi`, `think → reasoning`, `cheap → general`
+- 新規プロバイダ 11 種追加: Qwen3.6 (27b/35b), Gemma 4 (e4b/26b/31b), Z.AI (GLM-4.7/5.1/4.5-Air), Gemini Flash free, Claude Haiku/Opus direct
+- `coderouter/data/model-capabilities.yaml` に `qwen3.6:*` (tools=true, claude_code_suitability=ok), `gemma4:*` (tools=true), `GLM-5*` / `GLM-4.[5-9]*` (tools=true) family を新規登録
+- HF-on-Ollama コメント stanza は Gemma 4 / Qwen3.6 公式 tag 化に伴い縮小、GLM-4.5-Air は Z.AI cloud と HF GGUF の両方を案内
+- `docs/hf-ollama-models.md` 新設 (HF GGUF を Ollama に登録する手順、推奨モデル別レシピ、既知の落とし穴)
+
+### Migration
+
+`pyproject.toml version 1.7.0 → 1.8.0`、`coderouter --version` は 1.8.0 を返すように。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし** (新 example は `examples/providers.yaml` のみで、コピー操作は手動)。
+
+新 example を試したい場合:
+
+```bash
+# 既存 config をバックアップしつつ新 example をコピー
+cp ~/.coderouter/providers.yaml ~/.coderouter/providers.yaml.bak
+cp examples/providers.yaml ~/.coderouter/providers.yaml
+
+# Ollama に推奨モデルを pull (24GB+ VRAM の場合)
+ollama pull qwen3.6:35b
+ollama pull qwen3-coder:30b-a3b
+ollama pull gemma4:26b
+
+# Z.AI を使うなら API key を環境変数に
+echo 'export Z_AI_API_KEY="your-key-here"' >> ~/.zshrc
+source ~/.zshrc
+
+# 確認
+coderouter doctor --check-model local --apply  # 自動 patch も試せる
+coderouter serve --port 8088 --mode coding    # 用途別に明示
+```
+
+`--mode default` は新 example では `multi` (マルチモーダル chain) に解決されます。旧 example の意味合い (Qwen2.5-Coder + cloud chain) を維持したい場合は `--mode coding` を使うか、`mode_aliases` に独自 alias を追加してください。
+
+### Real-machine verification
+
+```
+$ pytest -q
+710 passed, 1 skipped in 1.81s
+
+$ ruff check coderouter/ tests/
+All checks passed!
+
+$ mypy --strict coderouter/doctor_apply.py coderouter/cli.py
+Success: no issues found in 4 source files
+```
+
+`coderouter doctor --check-model X --apply` の冪等性 + バックアップ作成を smoke test で確認:
+
+```
+$ coderouter doctor --check-model local --apply
+[probe report ...]
+Apply: 1 target file(s).
+  1 patch(es) applied.
+[diff 表示]
+  Backup: ~/.coderouter/providers.yaml → ~/.coderouter/providers.yaml.bak
+
+$ coderouter doctor --check-model local --apply  # 二回目は no-op
+Apply: 1 target file(s).
+  All 1 patch(es) already applied — providers.yaml is up to date.
+```
+
+### Out of scope / 次回送り (v1.9 候補)
+
+- v1.7-C 候補は引き続き需要待ち: `coderouter doctor --network`, `--check-config`/`--check-adapter` (引数なし全部回す mode), `recover_garbled_tool_json` 拡張, 起動時アップデートチェック
+- macOS `.command` / Linux `.sh` / Windows `.bat` launcher は `uvx coderouter-cli` で onboarding 摩擦が十分低くなったため再評価
+- PEP 541 reclamation (`coderouter` 名前空間) は引き続き審査待ち、進捗あれば plan.md §11.B に追記
+- Z.AI Coding Plan の "router 経由でも認可される" 保証取得 (Z.AI 側へのフィードバック)
+
+---
+
 ## [v1.7.0] — 2026-04-25 (PyPI 公開: `uvx coderouter-cli` 一発で動く)
 
 **Theme: 「git clone してから `uv tool install --from git+...`」の onboarding 摩擦をゼロにする minor リリース。** PyPI に **`coderouter-cli`** として公開、以降は `uvx coderouter-cli serve --port 8088` の 1 行で何処からでもインストール + 起動できるようになりました。配布インフラ整備のための小さなコード変更 (パッケージ名、`importlib.metadata` lookup 名追従) と、リリースを反復可能にする GitHub Actions workflow / `pyproject.toml` の sdist allowlist が同梱です。Runtime / API 挙動は v1.6.3 から完全に変化なし。

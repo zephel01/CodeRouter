@@ -60,6 +60,102 @@ def test_example_yaml_loads(yaml_path: Path) -> None:
 _NIM_BASE_URL = "https://integrate.api.nvidia.com/v1"
 
 
+# ======================================================================
+# v1.7-B: examples/providers.yaml — 用途別 4 プロファイル invariants
+# ======================================================================
+
+
+def test_curated_providers_yaml_has_four_use_case_profiles() -> None:
+    """examples/providers.yaml must declare the 4 v1.7-B use-case
+    profiles (multi / coding / general / reasoning) plus the legacy
+    backward-compat profiles.
+
+    The setup.sh wizard, README quickstart, and `coderouter serve
+    --mode` examples all reference these names — pin them so a rename
+    breaks CI before docs go out.
+    """
+    cfg = load_config(_EXAMPLES_DIR / "providers.yaml")
+
+    expected_v17b_profiles = {"multi", "coding", "general", "reasoning"}
+    profile_names = {p.name for p in cfg.profiles}
+    missing = expected_v17b_profiles - profile_names
+    assert not missing, (
+        f"examples/providers.yaml is missing v1.7-B use-case profile(s): "
+        f"{sorted(missing)}"
+    )
+
+
+def test_curated_providers_yaml_default_is_multi() -> None:
+    """``default_profile: multi`` is the v1.7-B contract (vision-capable
+    chain that also handles text-only requests cleanly). Pin it so a
+    well-meaning edit doesn't quietly revert to the v1.6 default."""
+    cfg = load_config(_EXAMPLES_DIR / "providers.yaml")
+    assert cfg.default_profile == "multi", (
+        f"examples/providers.yaml: default_profile should be 'multi' "
+        f"(v1.7-B), got {cfg.default_profile!r}"
+    )
+
+
+def test_curated_use_case_profiles_have_append_system_prompt() -> None:
+    """All 4 use-case profiles MUST set append_system_prompt to nudge
+    non-Claude models toward Claude-like response style. This is the
+    primary lever against the "意味合いが違う" UX problem.
+
+    Without this assertion, a future edit could silently strip the
+    nudges and users would see noticeably different responses across
+    providers without knowing why."""
+    cfg = load_config(_EXAMPLES_DIR / "providers.yaml")
+    for name in ("multi", "coding", "general", "reasoning"):
+        prof = cfg.profile_by_name(name)
+        assert prof.append_system_prompt, (
+            f"profile {name!r} must set append_system_prompt to nudge "
+            f"non-Claude models toward Claude-like style "
+            f"(see profile comment in examples/providers.yaml)"
+        )
+
+
+def test_curated_mode_aliases_match_use_case_profiles() -> None:
+    """``mode_aliases`` must point at declared profiles and cover the
+    documented short names (default / fast / vision / think / cheap).
+    The startup validator already enforces "alias targets exist", but
+    pinning the names here documents the contract for users wiring up
+    ``coderouter serve --mode <alias>``."""
+    cfg = load_config(_EXAMPLES_DIR / "providers.yaml")
+    expected_aliases = {"default", "fast", "vision", "think", "cheap"}
+    actual_aliases = set(cfg.mode_aliases.keys())
+    missing = expected_aliases - actual_aliases
+    assert not missing, (
+        f"examples/providers.yaml: mode_aliases is missing entries: "
+        f"{sorted(missing)} (got {sorted(actual_aliases)})"
+    )
+
+
+def test_curated_coding_profile_head_is_claude_compatible_qwen() -> None:
+    """The ``coding`` profile is the agentic-coding chain; the head
+    must be a Qwen family local provider (Qwen3.6 / Qwen3-Coder /
+    Qwen2.5-Coder). All three are flagged ``claude_code_suitability:
+    ok`` in the bundled registry and are the closest Claude Sonnet
+    behavioral match per docs/articles/note-* / the r/LocalLLaMA
+    Megathread quoted in note-2026-04. Lock the head so a re-ordering
+    edit doesn't silently degrade the Claude Code experience.
+
+    Accepted head patterns (any of these):
+      - ollama-qwen3-6-*  (Qwen3.6 series, e.g. 35b / 27b — note 推奨)
+      - ollama-qwen3-coder-*  (Qwen3-Coder series, agentic-coding 専用)
+      - ollama-qwen-coder-*  (Qwen2.5-Coder series, legacy)
+    """
+    cfg = load_config(_EXAMPLES_DIR / "providers.yaml")
+    coding = cfg.profile_by_name("coding")
+    assert coding.providers, "coding profile has no providers"
+    head = coding.providers[0]
+    accepted = ("qwen3-6", "qwen3-coder", "qwen-coder")
+    assert any(token in head for token in accepted), (
+        f"coding profile head must be a Qwen-family local provider "
+        f"(one of {accepted}), got {head!r}. See examples/providers.yaml "
+        f"comment block '用途別プロファイル' for rationale."
+    )
+
+
 def test_nvidia_nim_example_has_nim_providers() -> None:
     """Narrow guard for the NIM starter.
 
