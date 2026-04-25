@@ -237,6 +237,8 @@ ollama cp hf.co/unsloth/Qwen3-Coder-30B-A3B-Instruct-GGUF:Q4_K_M qwen3-coder:30b
 
 - Ollama HF integration: <https://huggingface.co/docs/hub/en/ollama>
 - Unsloth (高速量子化版の代表的アップローダー): <https://huggingface.co/unsloth>
+- **Unsloth: Tool calling guide for local LLMs (日本語)**: <https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms>
+  — Qwen / Llama / Gemma など local LLM で tool-call が動かない／壊れる原因と対策をモデル別に整理。CodeRouter で `tool_calls: NEEDS_TUNING` が出たときの背景理解にちょうど良い。
 - bartowski (品質重視の量子化版): <https://huggingface.co/bartowski>
 - Qwen3-Coder (Alibaba 公式): <https://huggingface.co/collections/Qwen/qwen3-coder>
 - Gemma 4 (Google 公式): <https://huggingface.co/collections/google/gemma-4>

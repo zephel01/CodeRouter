@@ -187,6 +187,8 @@ coderouter doctor --check-model <provider>
 
 With `tools: false` the chain moves on to the next provider when a tool-heavy request arrives. Pair this with a stronger model later in the chain (e.g. qwen2.5-coder:14b or a cloud fallback).
 
+> **Further reading**: Unsloth's [Tool calling guide for local LLMs](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) (Japanese) walks through per-model tool-call quirks (Qwen / Llama / Gemma) — a useful background read when CodeRouter's doctor flags `tool_calls: NEEDS_TUNING` and you want to understand why.
+
 **3. `<think>...</think>` tags leak into the UI.** Qwen3-distilled models, DeepSeek-R1 distills, and some HF GGUF variants emit chain-of-thought inside the regular content channel (not an Anthropic `thinking` block). The tags land in Claude Code's terminal verbatim.
 
 ```bash
@@ -277,6 +279,8 @@ profiles:
 ```
 
 `examples/providers.nvidia-nim.yaml` (v1.6.2 onwards) ships with the Qwen-first ordering. Llama-3.3-70B works fine for many things, but for Claude Code chat traffic specifically, Qwen3-Coder-480B / Kimi-K2 are operationally more stable.
+
+> **Background on per-model tool-call behavior**: Llama-3.3-70B's tendency to rewrite plain text into tool calls comes from its aggressive agentic-tuning RLHF signal interacting with Claude Code's system prompt. Unsloth's [Tool calling guide for local LLMs](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) (Japanese) covers this and other model-specific quirks well — useful background for the v1.8.0 `claude_code_suitability` heuristic.
 
 ### 4-2. `UserPromptSubmit hook error` (third-party Claude Code plugins)
 

@@ -187,6 +187,8 @@ coderouter doctor --check-model <provider>
 
 `tools: false` にすると、ツール要求リクエスト到来時にチェーンは次のプロバイダに進みます。強いモデル (qwen2.5-coder:14b やクラウドフォールバック) と組み合わせて使ってください。
 
+> **補足資料**: モデル別の tool-call 対応状況や、量子化 / システムプロンプト / chat template の落とし穴は Unsloth の [Tool calling guide for local LLMs (日本語)](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) にきれいにまとまっています。Qwen / Llama / Gemma 各系列で tool-call が動かない原因を踏み込んで知りたい人向け。
+
 **3. UI に `<think>...</think>` タグが漏れる。** Qwen3 蒸留モデル、DeepSeek-R1 蒸留、一部の HF GGUF 変種は chain-of-thought を Anthropic の `thinking` ブロックではなく通常のコンテンツチャネルに吐きます。タグが Claude Code のターミナルにそのまま出ます。
 
 ```bash
@@ -277,6 +279,8 @@ profiles:
 ```
 
 `examples/providers.nvidia-nim.yaml` (v1.6.2 以降) は Qwen-first の順序になっています。Llama-3.3-70B 自体は動作確認済みですが、Claude Code 単独の対話用途では Qwen3-Coder-480B / Kimi-K2 のほうが運用上は安定します。
+
+> **モデル別 tool-call 挙動の深掘り**: Llama-3.3-70B 系の「自然文を tool 呼び出しに変換しがち」性質は、agentic tuning の RLHF signal とシステムプロンプトの相性に起因します。各モデルの傾向と回避策は Unsloth の [Tool calling guide for local LLMs (日本語)](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) が読みやすく、CodeRouter v1.8.0 で導入した `claude_code_suitability` 判定の背景理解にも役立ちます。
 
 ### 4-2. `UserPromptSubmit hook error` が出る (第三者 Claude Code プラグイン)
 
