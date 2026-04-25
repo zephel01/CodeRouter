@@ -111,7 +111,7 @@ coderouter doctor --check-model ollama-qwen3-coder-30b-hf
 - `tool_calls`: OK
 - `streaming`: OK or NEEDS_TUNING
 
-NEEDS_TUNING が出たら、v1.7-B (#3) で実装した自動 patch 適用を使えます：
+NEEDS_TUNING が出たら、v1.8.0 で実装した自動 patch 適用を使えます：
 
 ```bash
 coderouter doctor --check-model ollama-qwen3-coder-30b-hf --apply

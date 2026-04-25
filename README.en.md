@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.7.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.8.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -45,7 +45,7 @@
 - `coderouter doctor --check-model <provider>` runs live probes against the provider and tells you whether it actually supports tool_calls / streaming / thinking — with a copy-paste YAML patch when declarations and behavior disagree
 - Scrubs reasoning leaks (`<think>...</think>` tags and six variants of `<|turn|>` / `<|eot_id|>` / `<|im_end|>` stop markers) across SSE chunk boundaries
 - Automatic fallback from local → free cloud (OpenRouter free / NVIDIA NIM 40 req/min free tier) → paid APIs, with `ALLOW_PAID=false` as the default so billing is opt-in
-- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 651 tests green
+- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 710 tests green
 
 → **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
 
@@ -59,7 +59,7 @@
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.7.0 — PyPI publish, `uvx coderouter-cli` in one line) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.0 — use-case-aware 4 profiles + GLM/Gemma 4/Qwen3.6 official tags + apply automation) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [Security](./docs/security.md)
@@ -75,7 +75,7 @@ Concretely, it takes care of things most beginners hit the hard way:
 - **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
 - **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
 - **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
-- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 651 tests passing.
+- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 710 tests passing.
 
 ```
 Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -134,7 +134,7 @@ Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friend
 
 ## Quickstart (2 commands)
 
-**v1.7.0 ships on PyPI** — `uvx` installs and runs in one shot (Python 3.12+ required):
+**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**. `uvx` installs and runs in one shot (Python 3.12+ required):
 
 ```bash
 # 1. Drop a sample config
@@ -163,6 +163,8 @@ uv run coderouter serve --port 8088
 ```
 
 > **Note**: the PyPI distribution name is `coderouter-cli`, but the command and Python import name are both `coderouter`. See [CHANGELOG `[v1.7.0]`](./CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) for details.
+>
+> **For the v1.8.0 `--apply` automation**: install `ruamel.yaml` as the optional dependency (`pip install 'coderouter-cli[doctor]'` or `uv pip install ruamel.yaml`). Not required for the base feature set.
 
 Then point any OpenAI client at `http://127.0.0.1:8088`:
 
@@ -200,7 +202,7 @@ Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs
 
 ## Status — v1.0 stable (2026-04)
 
-**651 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+**710 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
 
 What CodeRouter can do for you today:
 
@@ -214,7 +216,7 @@ What CodeRouter can do for you today:
 
 **Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
 
-**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`. v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM free tier + troubleshooting doc split + `--env-file` / `doctor --check-env`. v1.7-A ✅ PyPI publish (`uvx coderouter-cli`). Remaining for v1.7-B+: `setup.sh` wizard, `coderouter doctor --network` (CI), launcher scripts, opt-in update check, `claude_code_suitability` hint in the capability registry.
+**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`. v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM free tier + troubleshooting doc split + `--env-file` / `doctor --check-env`. v1.7 ✅ PyPI publish (`uvx coderouter-cli`). v1.8 ✅ Use-case-aware 4 profiles (multi/coding/general/reasoning) + Gemma 4 / Qwen3.6 / Z.AI (GLM) registration + `setup.sh` wizard + `coderouter doctor --check-model --apply` (non-destructive YAML write-back) + `claude_code_suitability` startup check + Trusted Publishing automation. Remaining for v1.9+: `coderouter doctor --network` (CI), launcher scripts, opt-in update check.
 
 ### Use it with Claude Code
 
@@ -391,7 +393,8 @@ Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
 - v1.0 ✅ — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
 - v1.5 ✅ — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
 - v1.6 ✅ — `auto_router` (task-aware routing; `default_profile: auto` dispatches by image attachment / code-fence ratio / else) + NVIDIA NIM free-tier 8-step chain + doc language swap (JA primary) + troubleshooting page split + `--env-file` / `doctor --check-env`
-- v1.7 — **v1.7-A shipped**: PyPI publish (`uvx coderouter-cli` one-line bootstrap). Remaining for v1.7-B+: `setup.sh` setup wizard, `coderouter doctor --network` (CI-friendly), launcher scripts (`.command` / `.sh` / `.bat`), opt-in startup update check, `claude_code_suitability` hint in the capability registry
+- v1.7 ✅ — PyPI publish (`uvx coderouter-cli` one-line bootstrap) + Trusted Publishing path (release.yml auto-publish on tag push)
+- v1.8 ✅ — **Use-case-aware 4 profiles + GLM/Gemma 4/Qwen3.6 official tags + apply automation**: `multi` (default) / `coding` / `general` / `reasoning` profiles + `append_system_prompt` per profile to nudge non-Claude models toward Claude-style replies + `mode_aliases` (default/fast/vision/think/cheap), Ollama-official `gemma4:e4b/26b/31b` and `qwen3.6:27b/35b` promoted to active stanzas, Z.AI provided as OpenAI-compat with two base URLs (Coding Plan / General API), `coderouter doctor --check-model --apply` writes YAML patches non-destructively (`ruamel.yaml` round-trip preserves comments + key order; idempotent), `setup.sh` onboarding wizard, `claude_code_suitability` startup check (Llama-3.3-70B in `claude-code-*` profiles emits a structured WARN). Remaining for v1.9+: `coderouter doctor --network` (CI-friendly), launcher scripts (`.command` / `.sh` / `.bat`), opt-in startup update check
 
 ## Choosing `kind: openai_compat` vs `kind: anthropic`
 
