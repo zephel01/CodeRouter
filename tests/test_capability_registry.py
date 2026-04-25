@@ -403,6 +403,52 @@ def test_bundled_yaml_does_not_flag_other_llama_families_as_degraded() -> None:
     )
 
 
+# ======================================================================
+# v1.8.0: Unsloth tool-calling guide 掲載モデル群の registry 反映
+# ======================================================================
+
+
+@pytest.mark.parametrize(
+    "model_slug",
+    [
+        # Kimi K2 family — NIM で実機検証済み
+        "moonshotai/kimi-k2-instruct",
+        "moonshotai/kimi-k2-thinking",
+        "moonshotai/Kimi-K2-Instruct",
+        # gpt-oss — OpenRouter free で実機検証済み
+        "openai/gpt-oss-120b:free",
+        "openai/gpt-oss-20b",
+        "gpt-oss-120b",
+        # DeepSeek-V3.x — Unsloth ガイド掲載 (先回り宣言)
+        "deepseek-ai/DeepSeek-V3.1",
+        "deepseek-ai/DeepSeek-V3.2",
+        "deepseek/deepseek-v3.1",
+        # MiniMax — Unsloth ガイド掲載
+        "MiniMaxAI/MiniMax-M2",
+        "minimax/minimax-m2",
+        # NVIDIA Nemotron 3 — Unsloth ガイド掲載
+        "nvidia/nemotron-3-nano-9b",
+        "nvidia/Nemotron-3-Nano-12B",
+        # Devstral 2 — Unsloth ガイド掲載
+        "mistralai/Devstral-2-24B",
+        "mistral/devstral-2",
+    ],
+)
+def test_bundled_yaml_unsloth_listed_models_resolve_tools_true(model_slug: str) -> None:
+    """v1.8.0: Unsloth tool-calling guide 掲載 (Kimi K2 / gpt-oss / DeepSeek-V3 /
+    MiniMax / Nemotron / Devstral) の各 family が tools=true で解決される。
+
+    providers.yaml で個別に capabilities.tools: true を declare しなくても、
+    bundled registry がデフォルトで tool-call 対応として扱う。
+    """
+    reg = CapabilityRegistry.load_default()
+    result = reg.lookup(kind="openai_compat", model=model_slug)
+    assert result.tools is True, (
+        f"{model_slug}: Unsloth ガイド掲載 family は registry が "
+        f"tools=true を返すべき (got tools={result.tools!r})"
+    )
+
+
 def test_lookup_any_kind_rule_matches_both_adapter_kinds() -> None:
     """A rule with kind='any' applies regardless of the adapter kind."""
     reg = CapabilityRegistry(

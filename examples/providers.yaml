@@ -533,6 +533,13 @@ providers:
     api_key_env: Z_AI_API_KEY
     paid: true
     timeout_s: 60
+    # Unsloth tool-calling guide
+    # (https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms)
+    # の GLM 4.7 推奨値。Claude Code が temperature/top_p を明示的に
+    # 投げてくる場合はそちらが優先される (extra_body は default)。
+    extra_body:
+      temperature: 0.7
+      top_p: 1.0
     capabilities:
       chat: true
       streaming: true

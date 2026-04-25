@@ -233,3 +233,99 @@ rules:
     kind: openai_compat
     capabilities:
       tools: true
+
+  # ------------------------------------------------------------------
+  # Kimi K2 family (Moonshot AI、v1.8.0 追加)
+  #
+  # NVIDIA NIM 経由で実機検証済み (2026-04-23) の tool-capable モデル。
+  # examples/providers.nvidia-nim.yaml の `nim-kimi-k2` / `nim-kimi-k2-thinking`
+  # で運用実績あり。Unsloth tool-calling guide にも tool calling 対応モデル
+  # として掲載 (Kimi K2.5 / K2 Thinking)。providers.yaml 側で個別の
+  # `capabilities.tools: true` 宣言を省略可能にするのが目的。
+  # ------------------------------------------------------------------
+
+  - match: "moonshotai/kimi-k2*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "moonshotai/Kimi-K2*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # ------------------------------------------------------------------
+  # gpt-oss family (OpenAI 117B MoE オープンウェイト、v1.8.0 追加)
+  #
+  # OpenRouter free 経由で実機検証済み (`openai/gpt-oss-120b:free` を
+  # examples/providers.yaml の `openrouter-gpt-oss-free` で運用)。
+  # native tool calling 設計、131K context、Unsloth tool-calling guide
+  # にも tool calling 対応モデルとして掲載 (gpt-oss)。
+  # ------------------------------------------------------------------
+
+  - match: "openai/gpt-oss-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "gpt-oss-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # ------------------------------------------------------------------
+  # 先回り宣言 family (Unsloth tool-calling guide 掲載、v1.8.0 追加)
+  #
+  # Unsloth のローカル LLM tool-calling ガイド
+  # (https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms)
+  # で tool-calling 対応モデルとして掲載されているが、CodeRouter 側で
+  # 実機検証は未実施。tools=true の事前宣言だけ入れて、providers.yaml で
+  # これらを使う際の `capabilities.tools: true` 明示宣言を不要にする。
+  # claude_code_suitability は実機検証後に追加判断 — それまでは "意見なし"。
+  # 不具合があれば user-side の `~/.coderouter/model-capabilities.yaml` で
+  # `tools: false` を declare して上書き可能 (first-match-per-flag)。
+  # ------------------------------------------------------------------
+
+  # DeepSeek-V3.x — DeepSeek-AI の主力 (V3.1 / V3.2 等)
+  - match: "deepseek-ai/DeepSeek-V3*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "deepseek/deepseek-v3*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # MiniMax — MiniMaxAI の MoE 系
+  - match: "MiniMaxAI/MiniMax-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "minimax/minimax-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # NVIDIA Nemotron 3 — Nano 系の小型モデル
+  - match: "nvidia/nemotron-3-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "nvidia/Nemotron-3-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  # Devstral 2 — Mistral AI の coding 特化 fine-tune
+  - match: "mistralai/Devstral-*"
+    kind: openai_compat
+    capabilities:
+      tools: true
+
+  - match: "mistral/devstral*"
+    kind: openai_compat
+    capabilities:
+      tools: true
