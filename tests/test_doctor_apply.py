@@ -23,7 +23,6 @@ clearer error site.
 
 from __future__ import annotations
 
-import importlib.util
 import textwrap
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,7 +45,18 @@ from coderouter.doctor_apply import (
 # coderouter-cli`` without the ``[doctor]`` extra — the apply-stage
 # tests cleanly skip rather than fail. Parse / merge unit tests above
 # don't need ruamel and stay active in all environments.
-_RUAMEL_AVAILABLE = importlib.util.find_spec("ruamel.yaml") is not None
+#
+# Note: ``importlib.util.find_spec("ruamel.yaml")`` raises
+# ``ModuleNotFoundError`` (rather than returning ``None``) when the
+# parent ``ruamel`` package itself is missing — that's a Python quirk
+# documented since 3.4. Using try/import is the robust pattern that
+# handles both "parent missing" and "child missing" cases.
+try:
+    import ruamel.yaml  # noqa: F401
+    _RUAMEL_AVAILABLE = True
+except ImportError:
+    _RUAMEL_AVAILABLE = False
+
 _requires_ruamel = pytest.mark.skipif(
     not _RUAMEL_AVAILABLE,
     reason=(
