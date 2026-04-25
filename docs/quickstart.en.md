@@ -44,6 +44,31 @@ ollama pull qwen2.5-coder:1.5b
 ollama serve &   # skip if it's already running
 ```
 
+> **Want a better model** if your machine has the headroom?
+>
+> ```bash
+> # 48 GB+ unified memory / VRAM — the r/LocalLLaMA "local champ"
+> ollama pull qwen3.6:35b           # 24 GB / 256K ctx / vision+tools+thinking
+>
+> # 24-47 GB — Gemma 4 26B-A4B (note 記事 "balanced king"), vision capable
+> ollama pull gemma4:26b            # 18 GB / 256K ctx / vision+tools+thinking
+>
+> # 8-15 GB laptop / iGPU
+> ollama pull gemma4:e4b            # 9.6 GB / 128K ctx / vision+tools+thinking+audio
+> ```
+>
+> **Headroom rule of thumb**: budget GGUF size + 8-10 GB for OS / browser /
+> IDE. A 32 GB Mac running a 24 GB GGUF will swap and crawl; that's why the
+> default tier is conservative.
+>
+> Want it auto-detected based on RAM? Run [`./setup.sh`](../setup.sh) — it
+> picks a safe model for your RAM tier, pulls it, and writes
+> `~/.coderouter/providers.yaml`. To upgrade to a larger model later,
+> either edit the YAML manually or rerun with
+> `./setup.sh --ram-gb <larger> --force`. See v1.8.0's
+> [examples/providers.yaml](../examples/providers.yaml) and
+> [docs/hf-ollama-models.md](./hf-ollama-models.md) for the full picture.
+
 ### 2. Install CodeRouter
 
 **v1.7.0 ships on PyPI as `coderouter-cli`** (Python 3.12+ required). Three install paths depending on how you'll use it:
@@ -88,6 +113,8 @@ uv run coderouter serve --port 8088
 Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use direnv for auto-activation).
 
 > **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
+>
+> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) and [`examples/providers.yaml`](../examples/providers.yaml) comments for the rationale.
 
 ### 3. Drop in a `providers.yaml`
 

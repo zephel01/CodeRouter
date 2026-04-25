@@ -243,29 +243,58 @@ detect_ram_gb() {
 }
 
 # ----------------------------------------------------------------------------
-# RAM → recommended model mapping.
+# RAM → recommended model mapping (v1.8.0、実用ヘッドルーム重視).
 #
-# Values verified against examples/providers.yaml comments (2026-04):
-#   ≥ 24 GB → qwen2.5-coder:14b   (claude-code primary on M-series with 24+)
-#   ≥ 12 GB → qwen2.5-coder:7b    (sweet spot for interactive coding)
-#   ≥  6 GB → qwen2.5-coder:1.5b  (small footprint; tools are weak)
-#   <  6 GB → unsupported          (the wizard prints a hint to use cloud
-#                                   fallback only; no Ollama recommendation)
+# 設計方針: 各 tier に **8-10 GB のヘッドルーム**を残す。OS / ブラウザ /
+# IDE / Slack 等で実機 8-12 GB は常時消費されるため、GGUF が unified
+# memory / VRAM の上限ギリギリに乗ると swap 多発で遅くなる。「先頭の 1 本
+# は安全側に倒し、後で `--force` 等で上げる」運用を推奨。
 #
-# We deliberately do NOT recommend Qwen-Coder-32B (would suggest 48 GB+),
-# Qwen3-Coder, or DeepSeek variants from the wizard — they're better
-# served by the user copying examples/ + reading docs/free-tier-guide.md.
-# Keeping the wizard's table small means a beginner sees one obvious
-# next step instead of a configuration matrix.
+# 推奨テーブル:
+#   ≥ 48 GB → qwen3.6:35b       24 GB GGUF / 256K ctx / vision+tools+thinking
+#                               (note 記事 "local champ"、Sonnet 互換性最高)
+#   ≥ 24 GB → gemma4:26b        18 GB GGUF / 256K ctx / vision+tools+thinking
+#                               (MoE 25.2B/3.8B-active、note "日常の王者")
+#   ≥ 16 GB → qwen2.5-coder:14b ~9 GB / 32K ctx / tools (laptop でも他
+#                                アプリと並走可、Claude Code 用に枯れた選択)
+#   ≥ 10 GB → qwen2.5-coder:7b   ~5 GB / 32K ctx / tools
+#   ≥  4 GB → qwen2.5-coder:1.5b ~1 GB / 32K ctx / text only (tools 弱め)
+#   <  4 GB → unsupported        wizard 停止 + cloud-only 案内
+#
+# Tier の選定理由 — 「先頭は重くしない」原則:
+#   - 32 GB Mac でも qwen3.6:35b (24 GB GGUF) はキツい (OS で 10-12 GB
+#     使うので残 20-22 GB しかなく swap 発生で遅くなる)。48 GB+ tier に
+#     繰り上げ、32 GB は gemma4:26b で快適に動かす。
+#   - 24 GB Mac (M1/M2/M3 24GB) は gemma4:26b 18 GB GGUF + 6 GB ヘッドルーム
+#     でちょうど良い。
+#   - 16 GB Mac は qwen2.5-coder:14b (~9 GB GGUF) を default に。
+#     gemma4:e4b (9.6 GB) も同等だが、tool-call の枯れ具合と note 互換性で
+#     14b が無難。後で gemma4:e4b に上げる選択肢は出力ヒントで案内。
+#   - 10-15 GB は qwen2.5-coder:7b。Claude Code の sweet spot。
+#   - 4-9 GB は qwen2.5-coder:1.5b。tools 不安定だが起動はする。
+#
+# 「もっと良いモデルにしたい」運用は main の最後で hint を表示:
+#   1. `ollama pull <larger-model>` でモデル取得
+#   2. `~/.coderouter/providers.yaml` を手動編集 OR
+#      `./setup.sh --ram-gb <larger> --force` で上書き再生成
+#
+# Qwen3-Coder 30B-A3B / Qwen3.6 27B / Gemma 4 31B などは敢えて先頭で
+# 勧めていない。examples/providers.yaml の chain で fallback に並んで
+# いるので、ユーザーが追加 pull した後に providers.yaml に手書きで足す
+# 想定。
 # ----------------------------------------------------------------------------
 
 recommend_model() {
     local ram_gb="$1"
-    if [ "$ram_gb" -ge 24 ]; then
+    if [ "$ram_gb" -ge 48 ]; then
+        echo "qwen3.6:35b"
+    elif [ "$ram_gb" -ge 24 ]; then
+        echo "gemma4:26b"
+    elif [ "$ram_gb" -ge 16 ]; then
         echo "qwen2.5-coder:14b"
-    elif [ "$ram_gb" -ge 12 ]; then
+    elif [ "$ram_gb" -ge 10 ]; then
         echo "qwen2.5-coder:7b"
-    elif [ "$ram_gb" -ge 6 ]; then
+    elif [ "$ram_gb" -ge 4 ]; then
         echo "qwen2.5-coder:1.5b"
     else
         echo ""  # unsupported
@@ -273,26 +302,70 @@ recommend_model() {
 }
 
 # Per-model timeout_s — bigger models prefill slower under Claude Code's
-# 15-20K-token system prompt (see examples/providers.yaml comments).
-# 7b ≈ 30 s prefill / 14b ≈ 100 s prefill on M-series; defaults give the
-# new user the same headroom the curated examples do.
+# 15-20K-token system prompt. examples/providers.yaml の各 stanza に
+# 揃える: qwen3.6:35b → 240, gemma4:26b → 180, qwen2.5-coder:14b → 300,
+# qwen2.5-coder:7b → 120, qwen2.5-coder:1.5b → 60。
 recommend_timeout_s() {
     case "$1" in
-        *":1.5b") echo 60 ;;
-        *":7b")   echo 120 ;;
-        *":14b")  echo 300 ;;
-        *)        echo 60 ;;
+        qwen3.6:35b)        echo 240 ;;
+        qwen3.6:27b)        echo 180 ;;
+        gemma4:26b)         echo 180 ;;
+        gemma4:31b)         echo 240 ;;
+        gemma4:e4b)         echo 60 ;;
+        gemma4:e2b)         echo 60 ;;
+        qwen2.5-coder:14b)  echo 300 ;;
+        qwen2.5-coder:7b)   echo 120 ;;
+        qwen2.5-coder:1.5b) echo 60 ;;
+        *)                  echo 60 ;;
     esac
 }
 
 # Whether to enable tool_calls capability for this model.
-# 1.5b is below the reliable tool-calling threshold per
-# examples/providers.yaml; flip to false so Claude Code clients fall
-# back to text completion instead of failing on bad tool_calls.
+# qwen2.5-coder:1.5b は reliable tool-calling threshold 以下なので false。
+# それ以外 (qwen3.6:* / gemma4:* / qwen2.5-coder:7b+) は true で OK。
+# bundled model-capabilities.yaml にも v1.8.0 で qwen3.6:* / gemma4:*
+# を tools=true で declare 済みなので、ここの値は providers.yaml レベル
+# の冗長な明示宣言として動く。
 recommend_tools() {
     case "$1" in
-        *":1.5b") echo "false" ;;
-        *)        echo "true" ;;
+        qwen2.5-coder:1.5b) echo "false" ;;
+        *)                  echo "true" ;;
+    esac
+}
+
+# 「先頭は安全側 → 必要なら上げる」運用のためのアップグレードヒント。
+# ユーザーが pull した model に応じて、1〜2 ランク上のモデルを suggest
+# する。setup.sh の最後に呼んで stdout に表示。
+suggest_upgrade_path() {
+    local current="$1"
+    local ram_gb="$2"
+    case "$current" in
+        qwen2.5-coder:1.5b)
+            note "  ollama pull qwen2.5-coder:7b      # ~5 GB、tools 安定"
+            ;;
+        qwen2.5-coder:7b)
+            note "  ollama pull qwen2.5-coder:14b     # ~9 GB、Claude Code 用に枯れた選択"
+            note "  ollama pull gemma4:e4b            # 9.6 GB、vision+audio 対応"
+            ;;
+        qwen2.5-coder:14b)
+            if [ "$ram_gb" -ge 24 ]; then
+                note "  ollama pull gemma4:26b            # 18 GB、vision+tools+thinking、note '日常の王者'"
+            else
+                note "  ollama pull gemma4:e4b            # 9.6 GB、vision+audio 対応"
+            fi
+            ;;
+        gemma4:26b)
+            if [ "$ram_gb" -ge 48 ]; then
+                note "  ollama pull qwen3.6:35b           # 24 GB、note 'local champ'、Sonnet 互換性最高"
+            else
+                note "  ollama pull qwen3-coder:30b-a3b   # 18 GB、agentic coding 専用設計"
+                note "  ollama pull gemma4:31b            # 20 GB、Dense Gemma 4"
+            fi
+            ;;
+        qwen3.6:35b)
+            note "  ollama pull qwen3-coder:30b-a3b   # 18 GB、agentic coding 専用設計の fallback"
+            note "  ollama pull qwen3.6:27b           # 17 GB、軽量版"
+            ;;
     esac
 }
 
@@ -313,22 +386,43 @@ emit_providers_yaml() {
     local tools="$3"
     local provider_name="local"
 
-    # output_filters chain: strip_thinking is unconditional for Qwen2.5-Coder
-    # because the family intermittently leaks <think> blocks under tool-heavy
-    # prompts (examples/providers.yaml line 103 commentary).
+    # output_filters は Qwen 系のみ。Gemma 4 は <think> をコンテンツに
+    # リークしないので不要。
+    local output_filters_line=""
+    case "$model" in
+        qwen*)
+            # Qwen 系は <think>...</think> を content にリークすることが
+            # あるので strip_thinking を default で有効化。Qwen3.6 系は
+            # stop marker (<|im_end|> 等) もリークし得るので strip_stop_markers
+            # も併用。
+            output_filters_line="    output_filters: [strip_thinking, strip_stop_markers]"
+            ;;
+        *)
+            # Gemma 4 等は output_filters 不要 — Ollama の chat template が
+            # クリーンに終端する。
+            output_filters_line=""
+            ;;
+    esac
+
     cat <<YAML
 # ============================================================================
-# CodeRouter providers.yaml — generated by setup.sh (v1.7-B)
+# CodeRouter providers.yaml — generated by setup.sh (v1.8.0)
 #
 # This is a minimal config: ONE local Ollama provider, ONE profile.
 # Edit freely. To extend with cloud fallbacks (OpenRouter free, NVIDIA NIM,
-# paid Anthropic / OpenAI), copy stanzas from:
-#   examples/providers.yaml              (general)
+# paid Anthropic / Z.AI GLM), copy stanzas from:
+#   examples/providers.yaml              (full v1.8.0 4-profile setup —
+#                                         multi/coding/general/reasoning +
+#                                         Z.AI GLM + Gemini Flash 等)
 #   examples/providers.nvidia-nim.yaml   (NIM 40 req/min free tier)
 #   examples/providers.note-2026.yaml    (writing / free reasoning chain)
 #
 # Verify this config works against your local Ollama with:
 #   coderouter doctor --check-model ${provider_name}
+#
+# Need YAML auto-patching? install the [doctor] extra and use --apply:
+#   pip install 'coderouter-cli[doctor]'
+#   coderouter doctor --check-model ${provider_name} --apply
 # ============================================================================
 
 allow_paid: false
@@ -343,9 +437,7 @@ providers:
     model: ${model}
     paid: false
     timeout_s: ${timeout_s}
-    # Qwen2.5-Coder occasionally emits <think>...</think> in the content
-    # channel under tool-heavy prompting; strip at the adapter boundary.
-    output_filters: [strip_thinking]
+${output_filters_line}
     capabilities:
       chat: true
       streaming: true
@@ -420,7 +512,7 @@ main() {
     local model timeout_s tools
     model="$(recommend_model "$ram_gb")"
     if [ -z "$model" ]; then
-        warn "RAM (${ram_gb} GB) is below the local-Ollama threshold (6 GB)."
+        warn "RAM (${ram_gb} GB) is below the local-Ollama threshold (4 GB)."
         warn "We recommend cloud-only operation: copy examples/providers.nvidia-nim.yaml"
         warn "(NVIDIA NIM 40 req/min free tier) instead. setup.sh stops here."
         exit 1
@@ -485,6 +577,20 @@ main() {
     note "Need fallback / paid providers? See:"
     note "  docs/free-tier-guide.md"
     note "  examples/providers.nvidia-nim.yaml"
+
+    # v1.8.0: 先頭は安全側に倒している関係で、ユーザーが余裕があれば
+    # 「もっと大きいモデルに上げる」道を案内。手動 edit と --force 再生成
+    # の両方を出すことで、運用スタイルに合わせて選べるようにしておく。
+    note ""
+    note "もっと品質の良いモデルを試したい場合 (RAM に余裕があれば):"
+    suggest_upgrade_path "$model" "$ram_gb"
+    note ""
+    note "上げ方は 2 通り:"
+    note "  (a) ${CONFIG_PATH} の \`model:\` 行を直接書き換え"
+    note "  (b) \`./setup.sh --ram-gb <larger> --force\` で上書き再生成"
+    note ""
+    note "providers.yaml を手で書き換えた後の確認:"
+    note "  coderouter doctor --check-model local --apply  # 自動 patch (要 [doctor] extras)"
 }
 
 main "$@"

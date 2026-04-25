@@ -113,18 +113,27 @@ def test_unknown_flag_fails_with_pointer_to_help() -> None:
 @pytest.mark.parametrize(
     "ram_gb,expected_model,expected_timeout,expected_tools",
     [
-        # ≥24 GB → 14b, 300s timeout, tools enabled (claude-code primary
-        # tier per examples/providers.yaml comments).
-        (32, "qwen2.5-coder:14b", "timeout_s: 300", "tools: true"),
-        (24, "qwen2.5-coder:14b", "timeout_s: 300", "tools: true"),
-        # 12-23 GB → 7b, 120s timeout (the "sweet spot" for interactive
-        # coding; matches examples/providers.yaml line 102).
-        (16, "qwen2.5-coder:7b", "timeout_s: 120", "tools: true"),
+        # v1.8.0 (実用ヘッドルーム重視): ≥48 GB → qwen3.6:35b
+        # (note 記事 "local champ"、Sonnet 互換性最高、24 GB GGUF なので
+        # OS や他アプリと並走するなら 48 GB+ が現実的).
+        (64, "qwen3.6:35b", "timeout_s: 240", "tools: true"),
+        (48, "qwen3.6:35b", "timeout_s: 240", "tools: true"),
+        # 24-47 GB → gemma4:26b (18 GB GGUF + 6+ GB ヘッドルーム)
+        # MoE 25.2B/3.8B-active、note "日常の王者"、vision 対応.
+        (32, "gemma4:26b", "timeout_s: 180", "tools: true"),
+        (24, "gemma4:26b", "timeout_s: 180", "tools: true"),
+        # 16-23 GB → qwen2.5-coder:14b (~9 GB GGUF + 7 GB ヘッドルーム)
+        # laptop でも他アプリと並走可、Claude Code 用に枯れた選択.
+        (20, "qwen2.5-coder:14b", "timeout_s: 300", "tools: true"),
+        (16, "qwen2.5-coder:14b", "timeout_s: 300", "tools: true"),
+        # 10-15 GB → qwen2.5-coder:7b (~5 GB GGUF + 5 GB ヘッドルーム)
+        # Claude Code の sweet spot.
         (12, "qwen2.5-coder:7b", "timeout_s: 120", "tools: true"),
-        # 6-11 GB → 1.5b, 60s timeout, tools=false (1.5b is below the
-        # reliable tool-calling threshold per examples comments).
+        (10, "qwen2.5-coder:7b", "timeout_s: 120", "tools: true"),
+        # 4-9 GB → qwen2.5-coder:1.5b, 60s timeout, tools=false (1.5b は
+        # reliable tool-calling threshold 以下).
         (8, "qwen2.5-coder:1.5b", "timeout_s: 60", "tools: false"),
-        (6, "qwen2.5-coder:1.5b", "timeout_s: 60", "tools: false"),
+        (4, "qwen2.5-coder:1.5b", "timeout_s: 60", "tools: false"),
     ],
 )
 def test_ram_recommends_expected_model(
@@ -134,7 +143,13 @@ def test_ram_recommends_expected_model(
     expected_timeout: str,
     expected_tools: str,
 ) -> None:
-    """Wire RAM size → model + matching timeout + tools flag in the YAML."""
+    """Wire RAM size → model + matching timeout + tools flag in the YAML.
+
+    v1.8.0 で推奨モデルを qwen2.5-coder ベースから qwen3.6 / gemma4
+    ベースに切り替え。さらに「先頭は安全側に倒し、後で上げる」運用
+    のために各 tier に 8-10 GB のヘッドルームを残すよう調整。
+    examples/providers.yaml の primary local stanza との整合性を保つ。
+    """
     cfg = tmp_path / "providers.yaml"
     result = _run_setup(
         "--ram-gb", str(ram_gb),
@@ -149,10 +164,14 @@ def test_ram_recommends_expected_model(
 
 
 def test_ram_below_threshold_bails_with_cloud_only_hint(tmp_path: Path) -> None:
-    """RAM <6 GB → exit non-zero + cloud-only message, no YAML written."""
+    """RAM <4 GB → exit non-zero + cloud-only message, no YAML written.
+
+    v1.8.0 で qwen2.5-coder:1.5b を 4 GB tier に降格したのに合わせ、
+    bail threshold は 6 GB → 4 GB に変更。
+    """
     cfg = tmp_path / "providers.yaml"
     result = _run_setup(
-        "--ram-gb", "4",
+        "--ram-gb", "2",
         "--no-pull",
         "--config-path", str(cfg),
     )
@@ -192,14 +211,18 @@ def test_generated_yaml_validates_against_pydantic_schema(tmp_path: Path) -> Non
     assert result.returncode == 0
     raw = yaml.safe_load(cfg.read_text(encoding="utf-8"))
     config = CodeRouterConfig.model_validate(raw)
-    # And spot-check the wired values
+    # And spot-check the wired values (v1.8.0 ヘッドルーム重視:
+    # 16 GB → qwen2.5-coder:14b、~9 GB GGUF + 7 GB ヘッドルームで
+    # laptop でも他アプリと並走可)
     assert config.default_profile == "default"
     assert len(config.providers) == 1
     provider = config.providers[0]
     assert provider.name == "local"
     assert provider.kind == "openai_compat"
-    assert provider.model == "qwen2.5-coder:7b"
-    assert provider.output_filters == ["strip_thinking"]
+    assert provider.model == "qwen2.5-coder:14b"
+    # Qwen2.5-Coder 系は <think> リークするので output_filters で scrub する
+    # (setup.sh の emit_providers_yaml の qwen* ブランチ参照)
+    assert provider.output_filters == ["strip_thinking", "strip_stop_markers"]
 
 
 # ======================================================================
@@ -221,10 +244,11 @@ def test_existing_config_without_force_writes_new_sidecar(tmp_path: Path) -> Non
     assert result.returncode == 0
     # Original untouched
     assert cfg.read_text(encoding="utf-8") == "# user-curated content\nallow_paid: true\n"
-    # Sidecar carries the wizard's output
+    # Sidecar carries the wizard's output (v1.8.0 ヘッドルーム重視:
+    # 16 GB → qwen2.5-coder:14b)
     sidecar = tmp_path / "providers.yaml.new"
     assert sidecar.is_file()
-    assert "qwen2.5-coder:7b" in sidecar.read_text(encoding="utf-8")
+    assert "qwen2.5-coder:14b" in sidecar.read_text(encoding="utf-8")
 
 
 def test_existing_config_with_force_writes_bak_and_overwrites(tmp_path: Path) -> None:
@@ -239,9 +263,10 @@ def test_existing_config_with_force_writes_bak_and_overwrites(tmp_path: Path) ->
         "--config-path", str(cfg),
     )
     assert result.returncode == 0
-    # Original is overwritten (now contains wizard output)
+    # Original is overwritten (v1.8.0 ヘッドルーム重視:
+    # 16 GB → qwen2.5-coder:14b)
     new_text = cfg.read_text(encoding="utf-8")
-    assert "qwen2.5-coder:7b" in new_text
+    assert "qwen2.5-coder:14b" in new_text
     # .bak preserves the prior content verbatim
     bak = tmp_path / "providers.yaml.bak"
     assert bak.is_file()
@@ -301,7 +326,8 @@ def test_dry_run_does_not_write_anything(tmp_path: Path) -> None:
         "--config-path", str(cfg),
     )
     assert result.returncode == 0, result.stderr
-    assert "qwen2.5-coder:7b" in result.stdout
+    # v1.8.0 ヘッドルーム重視: 16 GB → qwen2.5-coder:14b
+    assert "qwen2.5-coder:14b" in result.stdout
     assert "[dry-run]" in result.stdout
     assert not cfg.exists(), "dry-run must not write the config file"
     assert not (tmp_path / "providers.yaml.new").exists()

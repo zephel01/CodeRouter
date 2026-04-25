@@ -44,6 +44,30 @@ ollama pull qwen2.5-coder:1.5b
 ollama serve &   # すでに動いていれば不要
 ```
 
+> **より良いモデル**を試したい場合（マシンに余裕があるなら）:
+>
+> ```bash
+> # 48 GB+ unified memory / VRAM — note 記事 "local champ"
+> ollama pull qwen3.6:35b           # 24 GB / 256K ctx / vision+tools+thinking
+>
+> # 24-47 GB — note 記事 "日常の王者"、画像入力にも対応
+> ollama pull gemma4:26b            # 18 GB / 256K ctx / vision+tools+thinking
+>
+> # 8-15 GB の laptop で vision を使いたい
+> ollama pull gemma4:e4b            # 9.6 GB / 128K ctx / vision+tools+thinking+audio
+> ```
+>
+> **ヘッドルーム目安** — OS / ブラウザ / IDE で 8-12 GB 取られるので、
+> GGUF サイズに +8-10 GB の余裕を持たせるのが現実的（32 GB Mac で
+> 24 GB GGUF を載せると swap で遅くなる）。
+>
+> RAM を見て自動推奨させたいときは [`./setup.sh`](../setup.sh) を実行
+> — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter/providers.yaml`
+> 生成まで一気にやってくれます。あとで上のような大きいモデルに上げるには
+> 手動編集 or `./setup.sh --ram-gb <larger> --force` で再生成。
+> 詳しくは v1.8.0 で出した [examples/providers.yaml](../examples/providers.yaml)
+> と [docs/hf-ollama-models.md](./hf-ollama-models.md) 参照。
+
 ### 2. CodeRouter をインストール
 
 **v1.7.0 から PyPI (`coderouter-cli`) で公開**しています。用途別に 3 経路:
@@ -88,6 +112,8 @@ uv run coderouter serve --port 8088
 毎回 `uv run` プレフィックスを付ければ venv activate は不要 (direnv や shell 起動フックでの自動 activate も一案)。
 
 > **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
+>
+> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../CHANGELOG.md) と [`examples/providers.yaml`](../examples/providers.yaml) のコメントを参照。
 
 ### 3. `providers.yaml` を配置
 
