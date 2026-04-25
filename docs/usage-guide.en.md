@@ -41,7 +41,7 @@ Quick decision rules:
 Known gaps:
 
 - `scripts/verify_v0_5.sh` and `scripts/verify_v1_0.sh` assume macOS `/bin/bash` 3.2+ (Linux bash 4+ is fine). They do not target Windows cmd/PowerShell.
-- No Docker image shipped yet — `plan.md §11` tracks this for v1.6 (originally planned as v1.1; re-scoped after v1.5 shipped ahead of the launcher block).
+- No Docker image shipped yet — `plan.md §11.B` tracks this for v1.7+ (originally v1.1 → v1.6, then re-scoped: v1.6 shipped `auto_router` / NIM / `--env-file`, v1.7-A landed the PyPI publish to fix onboarding first, Docker / launchers are v1.7-B+).
 
 ---
 

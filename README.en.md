@@ -59,7 +59,7 @@
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.6.3 — `--env-file` + `doctor --check-env`) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.7.0 — PyPI publish, `uvx coderouter-cli` in one line) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [Security](./docs/security.md)
@@ -214,7 +214,7 @@ What CodeRouter can do for you today:
 
 **Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
 
-**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ — metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh` (shipped). v1.6 — `coderouter doctor --network` for CI, plus launcher scripts (originally slated for v1.1; re-scoped after v1.5).
+**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`. v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM free tier + troubleshooting doc split + `--env-file` / `doctor --check-env`. v1.7-A ✅ PyPI publish (`uvx coderouter-cli`). Remaining for v1.7-B+: `setup.sh` wizard, `coderouter doctor --network` (CI), launcher scripts, opt-in update check, `claude_code_suitability` hint in the capability registry.
 
 ### Use it with Claude Code
 
@@ -388,9 +388,10 @@ The subcommand targets **one** provider per invocation by design: a doctor probe
 
 Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
 
-- v1.0 — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
-- v1.5 — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
-- v1.6 — `coderouter doctor --network` (explicit network-allowed runs for CI), launchers (originally scoped as v1.1; re-labelled to v1.6 after v1.5 shipped ahead of the launcher block)
+- v1.0 ✅ — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
+- v1.5 ✅ — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
+- v1.6 ✅ — `auto_router` (task-aware routing; `default_profile: auto` dispatches by image attachment / code-fence ratio / else) + NVIDIA NIM free-tier 8-step chain + doc language swap (JA primary) + troubleshooting page split + `--env-file` / `doctor --check-env`
+- v1.7 — **v1.7-A shipped**: PyPI publish (`uvx coderouter-cli` one-line bootstrap). Remaining for v1.7-B+: `setup.sh` setup wizard, `coderouter doctor --network` (CI-friendly), launcher scripts (`.command` / `.sh` / `.bat`), opt-in startup update check, `claude_code_suitability` hint in the capability registry
 
 ## Choosing `kind: openai_compat` vs `kind: anthropic`
 

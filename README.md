@@ -59,7 +59,7 @@
 | **要るか判断する** | [要否判定ガイド](./docs/when-do-i-need-coderouter.md) | エージェント × モデルの詳細マトリクスで「そもそも自分に必要か」を決める |
 | **詰まったとき** | [トラブルシューティング](./docs/troubleshooting.md) | `doctor` の使い方、`.env` の export 必須、Ollama サイレント失敗 5 症状、Claude Code 連携の罠 |
 | **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
-| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.6.3 — `--env-file` + `doctor --check-env`） |
+| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.7.0 — PyPI 公開 `uvx coderouter-cli` 一発で動く） |
 | **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
 
 English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [Security](./docs/security.en.md)
@@ -214,7 +214,7 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 **リリース単位の詳細が欲しい？** v0.x と v1.0-A/B/C の各スライス — 何が入り、何本のテストが増え、なぜ必要だったのか — は [CHANGELOG.md](./CHANGELOG.md) に揃っています。設計の不変項と今後のロードマップは [plan.md](./plan.md)。
 
-**次の予定**（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）: v1.5 ✅ — メトリクス / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh` (出荷済み)。v1.6 — CI 向け `coderouter doctor --network` とランチャースクリプト（当初は v1.1 に予定されていたが、v1.5 が先行出荷されたため v1.6 に繰り下げ）。
+**次の予定**（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）: v1.5 ✅ メトリクス / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`、v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM 無料枠 + トラブルシュートドキュメント分離 + `--env-file` / `doctor --check-env`、v1.7-A ✅ PyPI 公開 (`uvx coderouter-cli`)。残り (v1.7-B 以降) は `setup.sh` セットアップウィザード / `coderouter doctor --network` (CI 用) / launcher スクリプト / 起動時アップデートチェック / capability registry の `claude_code_suitability` ヒント。
 
 ### Claude Code と一緒に使う
 
@@ -386,9 +386,10 @@ suggested patch for ~/.coderouter/providers.yaml:
 
 予定（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）:
 
-- v1.0 — 14 ケースのリグレッションスイート、Code Mode (スリム版 Claude Code ハーネス); 出力クリーニングは **v1.0-A** で `output_filters` チェーンとして完了
-- v1.5 — **メトリクスダッシュボード（出荷済み）** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML 1 ページ) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` トラフィックジェネレータ + `display_timezone` 設定
-- v1.6 — `coderouter doctor --network` (CI 用の明示的ネット許可ラン)、ランチャー（当初 v1.1 に予定されていたが、v1.5 が先行出荷されたため v1.6 に繰り下げ）
+- v1.0 ✅ — 14 ケースのリグレッションスイート、Code Mode (スリム版 Claude Code ハーネス); 出力クリーニングは **v1.0-A** で `output_filters` チェーンとして完了
+- v1.5 ✅ — **メトリクスダッシュボード（出荷済み）** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML 1 ページ) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` トラフィックジェネレータ + `display_timezone` 設定
+- v1.6 ✅ — `auto_router` (task-aware routing、`default_profile: auto` で画像/コード濃度/その他を自動振り分け) + NVIDIA NIM 無料枠 8 段チェーン + ドキュメント言語スワップ (JA primary) + トラブルシュート独立ドキュメント + `--env-file` / `doctor --check-env`
+- v1.7 — **v1.7-A 出荷済み**: PyPI 公開 (`uvx coderouter-cli` で 1 行起動)。残り (v1.7-B 以降): `setup.sh` セットアップウィザード、`coderouter doctor --network` (CI 用)、launcher スクリプト (`.command` / `.sh` / `.bat`)、opt-in 起動時アップデートチェック、capability registry への `claude_code_suitability` hint
 
 ## `kind: openai_compat` と `kind: anthropic` の選び方
 
