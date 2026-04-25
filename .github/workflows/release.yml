@@ -25,6 +25,18 @@ on:
   push:
     tags:
       - "v*"
+  # v1.8.0+: 手動トリガーの逃げ道。tag push が一度も走らなかった
+  # トラブル時や、release.yml 自体の修正後に既存タグで再 publish したい
+  # ときに、GitHub UI の "Run workflow" ボタンから起動できる。
+  # OIDC は同じ `environment: pypi` を使うので Trusted Publisher 設定は
+  # そのまま流用可能。
+  #
+  # 注: workflow_dispatch で起動した場合、`github.ref_name` は branch 名
+  # (例: "main") になるため、`github-release` job が draft を "main" と
+  # して作る点にだけ注意 — PyPI publish 自体は pyproject.toml の version
+  # を読むので問題なし。手動 dispatch 後に GitHub Release ページ側で
+  # release name と tag を `vX.Y.Z` に直す運用想定。
+  workflow_dispatch:
 
 # Default to read-only; the publish job opts into id-token write.
 permissions:
