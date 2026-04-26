@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.8.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.8.2-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -59,7 +59,7 @@
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.0 — use-case-aware 4 profiles + GLM/Gemma 4/Qwen3.6 official tags + apply automation) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.2 — doctor probe gains thinking-model awareness, Gemma 4 false positive resolved) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [Security](./docs/security.md)
@@ -134,7 +134,7 @@ Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friend
 
 ## Quickstart (2 commands)
 
-**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**. `uvx` installs and runs in one shot (Python 3.12+ required):
+**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.8.2 made the `doctor` probe thinking-model-aware**. `uvx` installs and runs in one shot (Python 3.12+ required):
 
 ```bash
 # 1. Drop a sample config
@@ -164,7 +164,7 @@ uv run coderouter serve --port 8088
 
 > **Note**: the PyPI distribution name is `coderouter-cli`, but the command and Python import name are both `coderouter`. See [CHANGELOG `[v1.7.0]`](./CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) for details.
 >
-> **For the v1.8.0 `--apply` automation**: install `ruamel.yaml` as the optional dependency (`pip install 'coderouter-cli[doctor]'` or `uv pip install ruamel.yaml`). Not required for the base feature set.
+> **For the `--apply` automation** (v1.8.0+): install `ruamel.yaml` as the optional dependency (`pip install 'coderouter-cli[doctor]'` or `uv pip install ruamel.yaml`). Not required for the base feature set.
 
 Then point any OpenAI client at `http://127.0.0.1:8088`:
 

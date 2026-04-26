@@ -282,7 +282,28 @@ profiles:
 
 > **Background on per-model tool-call behavior**: Llama-3.3-70B's tendency to rewrite plain text into tool calls comes from its aggressive agentic-tuning RLHF signal interacting with Claude Code's system prompt. Unsloth's [Tool calling guide for local LLMs](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) (Japanese) covers this and other model-specific quirks well — useful background for the v1.8.0 `claude_code_suitability` heuristic.
 
-### 4-2. `UserPromptSubmit hook error` (third-party Claude Code plugins)
+### 4-2. Local Ollama known pitfalls (added in v1.8.1, revised in v1.8.2)
+
+A 2026-04-26 real-machine session (M3 Max 64GB / Ollama 0.21.2 / CodeRouter v1.8.0 → v1.8.2) surfaced three classes of "highly-rated on note / HF, doesn't actually work via Ollama" cases. The Japanese troubleshooting doc has the full breakdown — this is a brief summary for English readers.
+
+**4-2-A. Qwen3.6:27b / 35b — `tool_calls [NEEDS TUNING]` is the real issue.**
+After v1.8.2's thinking-aware probe budgets, `num_ctx` and `streaming` clear, but Ollama's Qwen3.6 chat-template / tool-spec is still immature and produces neither native `tool_calls` nor repairable JSON. Bundled `model-capabilities.yaml` withdrew the `claude_code_suitability: ok` declaration in v1.8.1; keep Qwen3.6 out of the `coding` profile primary slot until upstream tooling stabilizes.
+
+**4-2-B. Qwen3.5-based HF distillations (e.g. Qwopus3.5) won't load.**
+`ollama pull` succeeds but `ollama run` returns 500 with `unknown model architecture: 'qwen35'` because llama.cpp doesn't yet support Qwen3.5's hybrid Transformer-SSM architecture. Wait for upstream framework support; not addressable from CodeRouter.
+
+**4-2-C. Gemma 4 26B works end-to-end (confirmed in v1.8.2).**
+The doctor probe NEEDS_TUNING readings on `num_ctx` / `streaming` reported in v1.8.1 turned out to be **probe false positives** — Gemma 4 is a thinking model that emits a `reasoning` field, and the v1.8.1 probe budgets (`max_tokens=32` / `128`) were consumed entirely by the reasoning trace before any visible `content` could surface. Real-machine `/v1/messages` round-trip returns "Hello." in 2 seconds; `tool_calls` work natively. v1.8.2 widened the probe budget to 1024 tokens for thinking-flagged models.
+
+**4-2-D. Best practice — "boring models + observation tools."**
+Lead the `coding` chain with `qwen2.5-coder:14b` / `gemma4:26b`, run `coderouter doctor --check-model <name>` for a 6-probe sanity pass, and let the fallback chain pick up paid / cloud free for spillover.
+
+**4-2-E. Doctor probe limits — thinking model awareness (v1.8.2).**
+Pre-v1.8.2 `num_ctx` / `streaming` probes used `max_tokens=32` / `128`, sufficient for non-thinking models but consumed entirely by `reasoning` token output on thinking models. v1.8.2 introduced `_is_reasoning_model(provider, resolved)` which checks `provider.capabilities.thinking`, `provider.capabilities.reasoning_passthrough`, and the registry-resolved equivalents — when any signals true, the probe budget bumps to 1024. Bundled `model-capabilities.yaml` declares `thinking: true` for `gemma4:*` and `qwen3.6:*`, so users see the corrected behavior without editing their `providers.yaml`. **Meta lesson**: diagnostic tools themselves need to keep being diagnosed (a corollary of plan.md §5.4's "real-machine evidence first" principle).
+
+For full detail and curl reproductions see [`troubleshooting.md` §4-2](./troubleshooting.md#4-2).
+
+### 4-3. `UserPromptSubmit hook error` (third-party Claude Code plugins)
 
 ```
 ❯ hello
@@ -305,7 +326,7 @@ This is a structural mismatch on the plugin side, not a CodeRouter bug.
 
 If the error vanishes, it's the plugin. The proper fix is upstream — file feedback asking the plugin author to support OpenAI-compat / non-Anthropic backends.
 
-### 4-3. "Compacting conversation…" takes ages
+### 4-4. "Compacting conversation…" takes ages
 
 ```
 ✻ Compacting conversation… (34s)
@@ -315,7 +336,7 @@ Claude Code's auto-compact (summarize old turns to compress context) being slow 
 
 `DISABLE_CLAUDE_CODE_SM_COMPACT=1` disables the LLM-based smart compact, but a truncate-based fallback still runs. Manual `/compact` / `/clear` is the most reliable workaround.
 
-### 4-4. Open the dashboard, every gotcha becomes visible in 10 seconds
+### 4-5. Open the dashboard, every gotcha becomes visible in 10 seconds
 
 Open `http://localhost:8088/dashboard` in a separate tab while you work. All of the above become directly visible:
 
