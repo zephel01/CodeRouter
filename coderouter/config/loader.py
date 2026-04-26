@@ -49,8 +49,35 @@ def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     # fail can be rescued by an explicit env-set mode, and (b) the model-
     # validator's "default_profile must exist in profiles" check applies to the
     # *effective* mode the engine will see, not the pre-override YAML value.
+    #
+    # v1.8.0+: also resolve env_mode through ``mode_aliases`` before assigning,
+    # so that startup-time ``--mode coding`` (env CODEROUTER_MODE=coding)
+    # behaves symmetrically with the runtime ``X-CodeRouter-Mode: coding``
+    # header — both should accept short intent names like ``coding`` /
+    # ``general`` / ``reasoning`` and resolve them to the underlying profile
+    # (e.g. ``claude-code-nim`` in providers.nvidia-nim.yaml). Without this,
+    # users on the NIM example yaml hit
+    #   "default_profile 'coding' is not declared in profiles:
+    #    known=['claude-code-nim', ...]"
+    # because mode_aliases only fired at request time, not at startup.
     env_mode = os.environ.get("CODEROUTER_MODE", "").strip()
     if env_mode:
+        # Pre-validation alias resolution: if env_mode isn't directly a
+        # profile name but matches an entry in raw["mode_aliases"], swap it
+        # for the underlying profile name. This avoids forcing every example
+        # yaml to mirror the v1.8.0 four-profile names (multi/coding/general
+        # /reasoning) just to accept the canonical short --mode flags.
+        raw_profiles = raw.get("profiles", []) or []
+        profile_names = {
+            p.get("name") for p in raw_profiles if isinstance(p, dict)
+        }
+        raw_aliases = raw.get("mode_aliases", {}) or {}
+        if (
+            env_mode not in profile_names
+            and isinstance(raw_aliases, dict)
+            and env_mode in raw_aliases
+        ):
+            env_mode = raw_aliases[env_mode]
         raw["default_profile"] = env_mode
 
     config = CodeRouterConfig.model_validate(raw)

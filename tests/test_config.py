@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coderouter.config.loader import load_config, resolve_api_key
 from coderouter.config.schemas import CodeRouterConfig
@@ -71,6 +72,68 @@ def test_env_overrides_default_profile(
     monkeypatch.setenv("CODEROUTER_MODE", "no-such-profile")
     with pytest.raises(ValueError, match="no-such-profile"):
         load_config(yaml_config_path)
+
+
+def test_env_mode_resolves_through_mode_aliases_at_startup(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """v1.8.0: CODEROUTER_MODE goes through mode_aliases before validation.
+
+    Matches the runtime ``X-CodeRouter-Mode`` header semantics — startup
+    should accept canonical short intent names (``coding`` / ``general`` /
+    ``reasoning`` / ``multi`` / ``fast`` / ``cheap``) and resolve them to
+    the underlying profile via ``mode_aliases`` instead of failing
+    validation with "default_profile 'coding' is not declared".
+
+    Repro for the v1.8.0 NIM-yaml bug: the user's providers.yaml has
+    profiles=[claude-code-nim, ...] and mode_aliases={coding:claude-code-nim};
+    ``coderouter serve --mode coding`` (= env CODEROUTER_MODE=coding) used to
+    blow up because env_mode was assigned directly to default_profile
+    bypassing the alias map.
+    """
+    cfg_file = tmp_path / "providers.yaml"
+    cfg_file.write_text(
+        yaml.safe_dump(
+            {
+                "default_profile": "claude-code-nim",
+                "mode_aliases": {
+                    "coding": "claude-code-nim",
+                    "reasoning": "nim-reasoning",
+                },
+                "providers": [
+                    {
+                        "name": "p",
+                        "kind": "openai_compat",
+                        "base_url": "http://localhost:11434/v1",
+                        "model": "x",
+                    }
+                ],
+                "profiles": [
+                    {"name": "claude-code-nim", "providers": ["p"]},
+                    {"name": "nim-reasoning", "providers": ["p"]},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Alias should resolve: 'coding' → 'claude-code-nim'.
+    monkeypatch.setenv("CODEROUTER_MODE", "coding")
+    cfg = load_config(cfg_file)
+    assert cfg.default_profile == "claude-code-nim", (
+        f"CODEROUTER_MODE=coding should resolve through mode_aliases to "
+        f"'claude-code-nim', got {cfg.default_profile!r}"
+    )
+
+    # Direct profile names still work.
+    monkeypatch.setenv("CODEROUTER_MODE", "claude-code-nim")
+    cfg = load_config(cfg_file)
+    assert cfg.default_profile == "claude-code-nim"
+
+    # Unknown intent (not in profiles, not in aliases) → fast-fail.
+    monkeypatch.setenv("CODEROUTER_MODE", "totally-unknown")
+    with pytest.raises(ValueError, match="totally-unknown"):
+        load_config(cfg_file)
 
 
 def test_env_override_default_profile_ignores_empty_string(

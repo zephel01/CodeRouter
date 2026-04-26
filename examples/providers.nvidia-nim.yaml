@@ -112,6 +112,33 @@ allow_paid: false
 default_profile: claude-code-nim
 display_timezone: Asia/Tokyo
 
+# v1.8.0: NIM example でも `--mode coding|general|reasoning|multi` を
+# 受けられるように、メイン examples/providers.yaml と同じ短縮 alias を
+# 用意。ユーザーが「examples/providers.yaml の説明通りの mode を試したら
+# default_profile 'coding' is not declared」エラーで詰まるのを回避。
+#
+# alias 解決:
+#   coding    → claude-code-nim   (NIM 主軸の coding chain)
+#   general   → claude-code-nim   (NIM は general 専用 profile が無いので兼用)
+#   reasoning → nim-reasoning     (Kimi-K2-Thinking 起点の長文推論 chain)
+#   multi     → claude-code-nim   (NIM ネイティブ vision profile は未提供。
+#                                  画像が必要なら examples/providers.yaml の
+#                                  multi profile (Gemma 4 26B vision) を併用)
+#   default   → claude-code-nim
+#   fast      → free-only-nim     (有料を絶対に呼ばない安全重視)
+#   cheap     → free-only-nim
+#   think     → nim-reasoning
+mode_aliases:
+  default: claude-code-nim
+  coding: claude-code-nim
+  general: claude-code-nim
+  reasoning: nim-reasoning
+  multi: claude-code-nim
+  fast: free-only-nim
+  cheap: free-only-nim
+  think: nim-reasoning
+  vision: claude-code-nim
+
 providers:
   # ------------------------------------------------------------
   # Tier 1: local (same as the main examples/providers.yaml)
