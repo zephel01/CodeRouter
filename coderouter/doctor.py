@@ -531,9 +531,7 @@ def _is_reasoning_model(
         return True
     if resolved.thinking is True:
         return True
-    if resolved.reasoning_passthrough is True:
-        return True
-    return False
+    return resolved.reasoning_passthrough is True
 
 
 _PROBE_BASIC_USER_PROMPT = "Reply with exactly the single word: PONG"
