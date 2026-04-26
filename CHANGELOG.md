@@ -70,6 +70,18 @@ M  tests/test_doctor.py
 M  tests/test_reasoning_strip.py
 ```
 
+### Post-release docs followup (同 commit ではなく追加 commit で)
+
+llama.cpp 直叩き経路を canonical な救済路として正式採用したのを受け、関連ドキュメントを v1.8.3 後に整理:
+
+- **`docs/llamacpp-direct.md` / `.en.md` 新規** — `llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter 接続を 7 step + Troubleshooting で。M3 Max 64GB / Q4_K_M / Metal 想定の canonical recipe
+- **`setup.sh`**: 48 GB+ tier の推奨を旧 `qwen3.6:35b` → `gemma4:26b` に変更 (Ollama 経由詰みのため)。upgrade hint からも Qwen3.6 系を撤去、代わりに `docs/llamacpp-direct.md` への誘導を追加
+- **`docs/quickstart.md` / `.en.md`**: 「より良いモデル」セクションの `ollama pull qwen3.6:35b` を撤去、`docs/llamacpp-direct.md` への誘導追加
+- **`docs/hf-ollama-models.md`**: `ollama pull qwen3.6:35b` を「⚠️ Qwen3.6 系は Ollama 経由で詰みやすい」警告に置換、llama.cpp 直叩き経路の案内を追加
+- **`README.md` / `.en.md`**: ドキュメント目次に「llama.cpp 直叩きガイド」行を追加、英語版言語スイッチャーにも `llama.cpp direct` リンクを追加
+- **`examples/providers.yaml`**: `llamacpp-qwen3-6-35b-a3b` provider 例を追加 + `coding` profile chain primary に組み込み (詳細コメント付き)。Qwen3.6 系 Ollama 経路のコメントも v1.8.3 結果反映で更新
+- **`tests/test_setup_sh.py`**: 48 GB / 64 GB tier の expected_model assertion を `qwen3.6:35b` → `gemma4:26b` に追従更新
+
 ---
 
 ## [v1.8.2] — 2026-04-26 (doctor probe を thinking モデル対応に — Gemma 4 偽陽性の解消)

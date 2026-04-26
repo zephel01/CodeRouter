@@ -58,6 +58,7 @@
 | **Run for free** | [Free-tier guide](./docs/free-tier-guide.en.md) | Stacking NVIDIA NIM (40 req/min) with OpenRouter free: live-verified roster and five footguns |
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
+| **llama.cpp direct** | [llama.cpp direct guide](./docs/llamacpp-direct.en.md) | Rescue path for Qwen3.6 (Ollama is brittle). 7-step recipe: `llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter wiring. Real-machine verified in v1.8.3. |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
 | **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.3 — tool_calls probe also thinking-aware + adapter strips `reasoning_content` / llama.cpp direct backend supported) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |

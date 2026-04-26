@@ -250,26 +250,30 @@ detect_ram_gb() {
 # memory / VRAM の上限ギリギリに乗ると swap 多発で遅くなる。「先頭の 1 本
 # は安全側に倒し、後で `--force` 等で上げる」運用を推奨。
 #
-# 推奨テーブル:
-#   ≥ 48 GB → qwen3.6:35b       24 GB GGUF / 256K ctx / vision+tools+thinking
-#                               (note 記事 "local champ"、Sonnet 互換性最高)
-#   ≥ 24 GB → gemma4:26b        18 GB GGUF / 256K ctx / vision+tools+thinking
-#                               (MoE 25.2B/3.8B-active、note "日常の王者")
+# 推奨テーブル (v1.8.3 改訂、Ollama 経路前提):
+#   ≥ 48 GB → gemma4:26b        18 GB GGUF / 256K ctx / vision+tools+thinking
+#                               (MoE 25.2B/3.8B-active、note "日常の王者"、
+#                                v1.8.2 で実機検証で完全動作確認)
+#                               ※ Qwen3.6:35b-a3b を試したい場合は llama.cpp
+#                                 直叩き経路を別途参照: docs/llamacpp-direct.md
+#   ≥ 24 GB → gemma4:26b        同上、ヘッドルーム少なめ
 #   ≥ 16 GB → qwen2.5-coder:14b ~9 GB / 32K ctx / tools (laptop でも他
 #                                アプリと並走可、Claude Code 用に枯れた選択)
 #   ≥ 10 GB → qwen2.5-coder:7b   ~5 GB / 32K ctx / tools
 #   ≥  4 GB → qwen2.5-coder:1.5b ~1 GB / 32K ctx / text only (tools 弱め)
 #   <  4 GB → unsupported        wizard 停止 + cloud-only 案内
 #
-# Tier の選定理由 — 「先頭は重くしない」原則:
-#   - 32 GB Mac でも qwen3.6:35b (24 GB GGUF) はキツい (OS で 10-12 GB
-#     使うので残 20-22 GB しかなく swap 発生で遅くなる)。48 GB+ tier に
-#     繰り上げ、32 GB は gemma4:26b で快適に動かす。
+# Tier の選定理由 — 「先頭は重くしない + 動くものを上に」原則:
+#   - v1.8.1 〜 v1.8.3 の実機検証で **Qwen3.6 + Ollama はコミュニティ全体で
+#     詰みやすい** ことが判明 (chat template / tool 仕様未成熟、X / Reddit で
+#     多数報告、自分の実機でも 3 重 NEEDS_TUNING 確認)。Ollama 経路の
+#     setup.sh では Qwen3.6 を推奨せず、48 GB+ も gemma4:26b に統一。
+#     Qwen3.6 を使いたい場合は **Unsloth GGUF + llama.cpp 直叩き経路**
+#     (`docs/llamacpp-direct.md`) を別途案内。
 #   - 24 GB Mac (M1/M2/M3 24GB) は gemma4:26b 18 GB GGUF + 6 GB ヘッドルーム
 #     でちょうど良い。
 #   - 16 GB Mac は qwen2.5-coder:14b (~9 GB GGUF) を default に。
-#     gemma4:e4b (9.6 GB) も同等だが、tool-call の枯れ具合と note 互換性で
-#     14b が無難。後で gemma4:e4b に上げる選択肢は出力ヒントで案内。
+#     gemma4:e4b (9.6 GB) も同等だが、tool-call の枯れ具合で 14b が無難。
 #   - 10-15 GB は qwen2.5-coder:7b。Claude Code の sweet spot。
 #   - 4-9 GB は qwen2.5-coder:1.5b。tools 不安定だが起動はする。
 #
@@ -277,18 +281,19 @@ detect_ram_gb() {
 #   1. `ollama pull <larger-model>` でモデル取得
 #   2. `~/.coderouter/providers.yaml` を手動編集 OR
 #      `./setup.sh --ram-gb <larger> --force` で上書き再生成
+#   3. Qwen3.6 系を狙うなら llama.cpp 直叩き経路 (docs/llamacpp-direct.md)
 #
-# Qwen3-Coder 30B-A3B / Qwen3.6 27B / Gemma 4 31B などは敢えて先頭で
-# 勧めていない。examples/providers.yaml の chain で fallback に並んで
-# いるので、ユーザーが追加 pull した後に providers.yaml に手書きで足す
-# 想定。
+# Qwen3-Coder 30B-A3B / Gemma 4 31B などは敢えて先頭で勧めていない。
+# examples/providers.yaml の chain で fallback に並んでいるので、ユーザーが
+# 追加 pull した後に providers.yaml に手書きで足す想定。
 # ----------------------------------------------------------------------------
 
 recommend_model() {
     local ram_gb="$1"
-    if [ "$ram_gb" -ge 48 ]; then
-        echo "qwen3.6:35b"
-    elif [ "$ram_gb" -ge 24 ]; then
+    # v1.8.3: 48 GB+ tier を gemma4:26b に統一 (旧 qwen3.6:35b は Ollama 経由
+    # で詰みやすいため撤回、llama.cpp 直叩き経路に誘導)。実機検証で 24 GB
+    # tier から 48 GB+ tier まで gemma4:26b は安定動作。
+    if [ "$ram_gb" -ge 24 ]; then
         echo "gemma4:26b"
     elif [ "$ram_gb" -ge 16 ]; then
         echo "qwen2.5-coder:14b"
@@ -355,16 +360,21 @@ suggest_upgrade_path() {
             fi
             ;;
         gemma4:26b)
+            # v1.8.3: 48 GB+ で qwen3.6:35b を勧めていたが、Ollama 経由は
+            # 実機 / コミュニティ報告ともに詰みやすいため撤回。Qwen3.6 系を
+            # 狙う場合は Unsloth GGUF + llama.cpp 直叩き経路を案内。
             if [ "$ram_gb" -ge 48 ]; then
-                note "  ollama pull qwen3.6:35b           # 24 GB、note 'local champ'、Sonnet 互換性最高"
+                note "  ollama pull qwen3-coder:30b-a3b   # 18 GB、agentic coding 専用設計"
+                note "  ollama pull gemma4:31b            # 20 GB、Dense Gemma 4"
+                note ""
+                note "  Qwen3.6:35b-a3b を Sonnet 級として狙うなら Ollama では"
+                note "  なく llama.cpp 直叩きを推奨。手順は docs/llamacpp-direct.md"
+                note "  (Unsloth UD-Q4_K_M GGUF + llama-server、CodeRouter v1.8.3 で"
+                note "  実機検証済み、native tool_calls 完璧動作確認)。"
             else
                 note "  ollama pull qwen3-coder:30b-a3b   # 18 GB、agentic coding 専用設計"
                 note "  ollama pull gemma4:31b            # 20 GB、Dense Gemma 4"
             fi
-            ;;
-        qwen3.6:35b)
-            note "  ollama pull qwen3-coder:30b-a3b   # 18 GB、agentic coding 専用設計の fallback"
-            note "  ollama pull qwen3.6:27b           # 17 GB、軽量版"
             ;;
     esac
 }

@@ -137,9 +137,23 @@ ollama cp  hf.co/unsloth/Qwen3-Coder-480B-A35B-Instruct-GGUF:Q4_K_M qwen3-coder:
 ### 雑用 / 一般向け（note 記事推奨）
 
 > **2026-04 update**: Gemma 4 / Qwen3.6 は Ollama 公式 registry に
-> 登録されました。HF 経由は不要です。`ollama pull gemma4:26b` / `ollama
-> pull qwen3.6:35b` でそのまま使えます。providers.yaml の
-> `ollama-gemma4-*` / `ollama-qwen3-6-*` stanza は既に有効化されています。
+> 登録されました。HF 経由は不要です。`ollama pull gemma4:26b` でそのまま
+> 使えます。providers.yaml の `ollama-gemma4-*` stanza は既に有効化されて
+> います。
+
+> **⚠️ Qwen3.6 系 (qwen3.6:35b / qwen3.6:27b) は Ollama 経由で詰みやすい
+> (v1.8.1 〜 v1.8.3 の実機検証 + X / Reddit のコミュニティ報告で確認)**:
+>
+> - `tool_calls [NEEDS TUNING]` (Ollama の chat template / tool 仕様未成熟)
+> - hard crash / リブート / メモリ計算バグ等の幅広い報告 (主に Mac Metal)
+> - `qwen3.6:35b-a3b-coding-nvfp4` 等の variant は MLX backend で 500 エラー
+>
+> **Qwen3.6 を Sonnet 級として狙うなら Ollama ではなく llama.cpp 直叩きを
+> 推奨**: `Unsloth/Qwen3.6-35B-A3B-GGUF` (UD-Q4_K_M) + `llama-server` で
+> native `tool_calls` が完璧動作。手順は
+> [`docs/llamacpp-direct.md`](./llamacpp-direct.md) を参照
+> (CodeRouter v1.8.3 で実機検証済、`examples/providers.yaml` に
+> `llamacpp-qwen3-6-35b-a3b` provider 例も同梱)。
 
 ### Reasoning 向け（GLM / Opus 蒸留）
 

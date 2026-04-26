@@ -47,15 +47,20 @@ ollama serve &   # skip if it's already running
 > **Want a better model** if your machine has the headroom?
 >
 > ```bash
-> # 48 GB+ unified memory / VRAM — the r/LocalLLaMA "local champ"
-> ollama pull qwen3.6:35b           # 24 GB / 256K ctx / vision+tools+thinking
->
-> # 24-47 GB — Gemma 4 26B-A4B (note 記事 "balanced king"), vision capable
+> # 24 GB+ unified memory / VRAM — Gemma 4 26B-A4B (note "balanced king"), vision capable
 > ollama pull gemma4:26b            # 18 GB / 256K ctx / vision+tools+thinking
 >
 > # 8-15 GB laptop / iGPU
 > ollama pull gemma4:e4b            # 9.6 GB / 128K ctx / vision+tools+thinking+audio
 > ```
+>
+> **For Qwen3.6:35b-a3b (Sonnet-class candidate), use llama.cpp directly, not Ollama.**
+> The v1.8.1 → v1.8.3 real-machine sessions and the X / Reddit community reports
+> both confirm that Qwen3.6 over Ollama is currently brittle (immature chat
+> template / tool spec). Unsloth GGUF + llama.cpp `llama-server` produces native
+> `tool_calls` cleanly. Recipe in [docs/llamacpp-direct.en.md](./llamacpp-direct.en.md)
+> (real-machine verified in CodeRouter v1.8.3, sample provider entry in
+> `examples/providers.yaml`).
 >
 > **Headroom rule of thumb**: budget GGUF size + 8-10 GB for OS / browser /
 > IDE. A 32 GB Mac running a 24 GB GGUF will swap and crawl; that's why the

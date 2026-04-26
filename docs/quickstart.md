@@ -47,15 +47,19 @@ ollama serve &   # すでに動いていれば不要
 > **より良いモデル**を試したい場合（マシンに余裕があるなら）:
 >
 > ```bash
-> # 48 GB+ unified memory / VRAM — note 記事 "local champ"
-> ollama pull qwen3.6:35b           # 24 GB / 256K ctx / vision+tools+thinking
->
-> # 24-47 GB — note 記事 "日常の王者"、画像入力にも対応
+> # 24 GB+ unified memory / VRAM — note 記事 "日常の王者"、画像入力にも対応
 > ollama pull gemma4:26b            # 18 GB / 256K ctx / vision+tools+thinking
 >
 > # 8-15 GB の laptop で vision を使いたい
 > ollama pull gemma4:e4b            # 9.6 GB / 128K ctx / vision+tools+thinking+audio
 > ```
+>
+> **Qwen3.6:35b-a3b を Sonnet 級として狙う場合は Ollama ではなく llama.cpp 直叩き経路を推奨**
+> — v1.8.1 〜 v1.8.3 の実機検証 + コミュニティ報告 (X / Reddit) で、Qwen3.6 系
+> は **Ollama 経由の chat template / tool 仕様が未成熟**で詰みやすいことが判明。
+> Unsloth GGUF + llama.cpp `llama-server` で直叩きすると native `tool_calls` が
+> 完璧に動作する。手順は [docs/llamacpp-direct.md](./llamacpp-direct.md) を参照
+> (CodeRouter v1.8.3 で実機検証済、`examples/providers.yaml` に provider 例も追加済)。
 >
 > **ヘッドルーム目安** — OS / ブラウザ / IDE で 8-12 GB 取られるので、
 > GGUF サイズに +8-10 GB の余裕を持たせるのが現実的（32 GB Mac で

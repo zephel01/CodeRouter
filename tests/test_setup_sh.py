@@ -113,13 +113,13 @@ def test_unknown_flag_fails_with_pointer_to_help() -> None:
 @pytest.mark.parametrize(
     "ram_gb,expected_model,expected_timeout,expected_tools",
     [
-        # v1.8.0 (実用ヘッドルーム重視): ≥48 GB → qwen3.6:35b
-        # (note 記事 "local champ"、Sonnet 互換性最高、24 GB GGUF なので
-        # OS や他アプリと並走するなら 48 GB+ が現実的).
-        (64, "qwen3.6:35b", "timeout_s: 240", "tools: true"),
-        (48, "qwen3.6:35b", "timeout_s: 240", "tools: true"),
-        # 24-47 GB → gemma4:26b (18 GB GGUF + 6+ GB ヘッドルーム)
+        # v1.8.3 (Qwen3.6 + Ollama 詰み確定): 48 GB+ tier も gemma4:26b に
+        # 統一。Qwen3.6:35b-a3b を狙う場合は llama.cpp 直叩き経路を推奨
+        # (`docs/llamacpp-direct.md`) で、setup.sh の Ollama 一本道では扱わない。
         # MoE 25.2B/3.8B-active、note "日常の王者"、vision 対応.
+        (64, "gemma4:26b", "timeout_s: 180", "tools: true"),
+        (48, "gemma4:26b", "timeout_s: 180", "tools: true"),
+        # 24-47 GB → gemma4:26b (18 GB GGUF + 6+ GB ヘッドルーム)
         (32, "gemma4:26b", "timeout_s: 180", "tools: true"),
         (24, "gemma4:26b", "timeout_s: 180", "tools: true"),
         # 16-23 GB → qwen2.5-coder:14b (~9 GB GGUF + 7 GB ヘッドルーム)
