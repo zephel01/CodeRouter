@@ -89,7 +89,9 @@ ollama serve &   # すでに動いていれば不要
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 起動時に一緒にインストール + 実行される
-uvx coderouter-cli serve --port 8088
+# 注: PyPI 配布名 (coderouter-cli) と console script 名 (coderouter) が
+# 異なるため、uv 0.11+ では --from 形式が必須 (旧 uv でも動く)
+uvx --from coderouter-cli coderouter serve --port 8088
 ```
 
 PyPI のバージョンが常に取れるので、「最新で動かしたい、2 週間ぶりに触る」みたいな人に最適。
@@ -250,7 +252,7 @@ curl http://localhost:11434/api/version
 
 ### (4) `pip install` が `externally-managed-environment` で落ちる
 
-macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uvx coderouter-cli`) または (b) (`uv tool install coderouter-cli`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
+macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uvx --from coderouter-cli coderouter`) または (b) (`uv tool install coderouter-cli`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
 
 ---
 

@@ -90,8 +90,11 @@ ollama serve &   # skip if it's already running
 # Install uv if you don't have it yet
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
-# Install + run in one shot
-uvx coderouter-cli serve --port 8088
+# Install + run in one shot.
+# Note: PyPI distribution name (coderouter-cli) differs from the console
+# script name (coderouter), so uv 0.11+ requires the --from form. It also
+# works on older uv, so this is the canonical incantation.
+uvx --from coderouter-cli coderouter serve --port 8088
 ```
 
 Best for "I want the latest, I touch this once every couple weeks" usage.
@@ -252,7 +255,7 @@ Check that `providers.yaml` has `output_filters: [strip_thinking]` set on the mo
 
 ### (4) `pip install` errors with `externally-managed-environment`
 
-This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to step 2 path (a) (`uvx coderouter-cli`) or (b) (`uv tool install coderouter-cli`). Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
+This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to step 2 path (a) (`uvx --from coderouter-cli coderouter`) or (b) (`uv tool install coderouter-cli`). Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
 
 ---
 

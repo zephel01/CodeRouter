@@ -115,7 +115,9 @@ curl -fsSL -o ~/.coderouter/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx で起動 (PyPI から都度取得 + 実行)
-uvx coderouter-cli serve --mode claude-code-nim --port 8088
+# 注: PyPI 配布名 (coderouter-cli) と console script 名 (coderouter) が
+# 異なるため、uv 0.11+ では --from 形式が必須 (旧 uv でも動く)
+uvx --from coderouter-cli coderouter serve --mode claude-code-nim --port 8088
 ```
 
 恒久的にインストールしておく場合:

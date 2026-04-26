@@ -115,7 +115,10 @@ curl -fsSL -o ~/.coderouter/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx fetches and runs in one shot
-uvx coderouter-cli serve --mode claude-code-nim --port 8088
+# Note: PyPI distribution name (coderouter-cli) differs from the console
+# script name (coderouter), so uv 0.11+ requires the --from form. It also
+# works on older uv, so this is the canonical incantation.
+uvx --from coderouter-cli coderouter serve --mode claude-code-nim --port 8088
 ```
 
 For a permanent install:

@@ -144,7 +144,9 @@ curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/p
   > ~/.coderouter/providers.yaml
 
 # 2. uvx で起動 (インストール + 起動が 1 行)
-uvx coderouter-cli serve --port 8088
+#    PyPI 配布名 (coderouter-cli) と console script 名 (coderouter) が異なるため、
+#    uv 0.11+ では --from 形式が必須 (旧 uv でも動く canonical 形式)
+uvx --from coderouter-cli coderouter serve --port 8088
 ```
 
 恒久的にインストールしておきたい場合:
@@ -217,7 +219,7 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 **リリース単位の詳細が欲しい？** v0.x と v1.0-A/B/C の各スライス — 何が入り、何本のテストが増え、なぜ必要だったのか — は [CHANGELOG.md](./CHANGELOG.md) に揃っています。設計の不変項と今後のロードマップは [plan.md](./plan.md)。
 
-**次の予定**（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）: v1.5 ✅ メトリクス / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`、v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM 無料枠 + トラブルシュートドキュメント分離 + `--env-file` / `doctor --check-env`、v1.7 ✅ PyPI 公開 (`uvx coderouter-cli`)、v1.8 ✅ 用途別 4 プロファイル (multi/coding/general/reasoning) + Gemma 4 / Qwen3.6 / Z.AI (GLM) 登録 + `setup.sh` onboarding ウィザード + `coderouter doctor --check-model --apply` (非破壊 YAML 書き戻し) + `claude_code_suitability` startup チェック + Trusted Publishing 自動化。残り (v1.9 候補) は `coderouter doctor --network` (CI 用) / launcher スクリプト / 起動時アップデートチェック (opt-in)。
+**次の予定**（v1.0 は [plan.md §10](./plan.md)、v1.0+ は §18）: v1.5 ✅ メトリクス / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`、v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM 無料枠 + トラブルシュートドキュメント分離 + `--env-file` / `doctor --check-env`、v1.7 ✅ PyPI 公開 (`uvx --from coderouter-cli coderouter`)、v1.8 ✅ 用途別 4 プロファイル (multi/coding/general/reasoning) + Gemma 4 / Qwen3.6 / Z.AI (GLM) 登録 + `setup.sh` onboarding ウィザード + `coderouter doctor --check-model --apply` (非破壊 YAML 書き戻し) + `claude_code_suitability` startup チェック + Trusted Publishing 自動化。残り (v1.9 候補) は `coderouter doctor --network` (CI 用) / launcher スクリプト / 起動時アップデートチェック (opt-in)。
 
 ### Claude Code と一緒に使う
 
@@ -392,7 +394,7 @@ suggested patch for ~/.coderouter/providers.yaml:
 - v1.0 ✅ — 14 ケースのリグレッションスイート、Code Mode (スリム版 Claude Code ハーネス); 出力クリーニングは **v1.0-A** で `output_filters` チェーンとして完了
 - v1.5 ✅ — **メトリクスダッシュボード（出荷済み）** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML 1 ページ) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` トラフィックジェネレータ + `display_timezone` 設定
 - v1.6 ✅ — `auto_router` (task-aware routing、`default_profile: auto` で画像/コード濃度/その他を自動振り分け) + NVIDIA NIM 無料枠 8 段チェーン + ドキュメント言語スワップ (JA primary) + トラブルシュート独立ドキュメント + `--env-file` / `doctor --check-env`
-- v1.7 ✅ — PyPI 公開 (`uvx coderouter-cli` で 1 行起動) + Trusted Publishing 経路 (release.yml で自動 publish)
+- v1.7 ✅ — PyPI 公開 (`uvx --from coderouter-cli coderouter` で 1 行起動) + Trusted Publishing 経路 (release.yml で自動 publish)
 - v1.8 ✅ — **用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化**: `multi` (default) / `coding` / `general` / `reasoning` の 4 プロファイル + 全プロファイルに `append_system_prompt` で Claude 風応答 nudge + `mode_aliases` (default/fast/vision/think/cheap)、Ollama 公式 tag 化された `gemma4:e4b/26b/31b` / `qwen3.6:27b/35b` を active stanza に格上げ、Z.AI を OpenAI-compat で 2 base_url 提供 (Coding Plan / General API)、`coderouter doctor --check-model --apply` で YAML パッチを非破壊書き戻し (`ruamel.yaml` round-trip でコメント・key 順序保持、冪等)、`setup.sh` onboarding ウィザード、`claude_code_suitability` startup チェック (Llama-3.3-70B 系を `claude-code-*` profile で WARN)。残り (v1.9 以降): `coderouter doctor --network` (CI 用)、launcher スクリプト (`.command` / `.sh` / `.bat`)、opt-in 起動時アップデートチェック
 
 ## `kind: openai_compat` と `kind: anthropic` の選び方

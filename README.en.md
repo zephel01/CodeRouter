@@ -143,8 +143,11 @@ mkdir -p ~/.coderouter
 curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
   > ~/.coderouter/providers.yaml
 
-# 2. Install + run, in one line
-uvx coderouter-cli serve --port 8088
+# 2. Install + run, in one line.
+#    The PyPI distribution name (coderouter-cli) differs from the console
+#    script name (coderouter), so uv 0.11+ requires the --from form. (It
+#    also works on older uv, so this is the canonical incantation.)
+uvx --from coderouter-cli coderouter serve --port 8088
 ```
 
 Want a permanent install?
@@ -217,7 +220,7 @@ What CodeRouter can do for you today:
 
 **Want the per-release detail?** Every v0.x and v1.0-A/B/C slice — what shipped, how many tests it added, why it was needed — is in [CHANGELOG.md](./CHANGELOG.md). Design invariants and the forward roadmap live in [plan.md](./plan.md).
 
-**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`. v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM free tier + troubleshooting doc split + `--env-file` / `doctor --check-env`. v1.7 ✅ PyPI publish (`uvx coderouter-cli`). v1.8 ✅ Use-case-aware 4 profiles (multi/coding/general/reasoning) + Gemma 4 / Qwen3.6 / Z.AI (GLM) registration + `setup.sh` wizard + `coderouter doctor --check-model --apply` (non-destructive YAML write-back) + `claude_code_suitability` startup check + Trusted Publishing automation. Remaining for v1.9+: `coderouter doctor --network` (CI), launcher scripts, opt-in update check.
+**Coming next** (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+): v1.5 ✅ metrics / `/dashboard` / `coderouter stats` TUI / `scripts/demo_traffic.sh`. v1.6 ✅ `auto_router` (task-aware routing) + NVIDIA NIM free tier + troubleshooting doc split + `--env-file` / `doctor --check-env`. v1.7 ✅ PyPI publish (`uvx --from coderouter-cli coderouter`). v1.8 ✅ Use-case-aware 4 profiles (multi/coding/general/reasoning) + Gemma 4 / Qwen3.6 / Z.AI (GLM) registration + `setup.sh` wizard + `coderouter doctor --check-model --apply` (non-destructive YAML write-back) + `claude_code_suitability` startup check + Trusted Publishing automation. Remaining for v1.9+: `coderouter doctor --network` (CI), launcher scripts, opt-in update check.
 
 ### Use it with Claude Code
 
@@ -394,7 +397,7 @@ Coming next (see [plan.md §10](./plan.md) for v1.0, §18 for v1.0+):
 - v1.0 ✅ — 14-case regression suite, Code Mode (slim Claude Code harness); output cleaning shipped in **v1.0-A** (`output_filters` chain, done)
 - v1.5 ✅ — **Metrics dashboard (shipped)** — `MetricsCollector` + `GET /metrics.json` + `GET /metrics` (Prometheus) + `GET /dashboard` (HTML one-pager) + `coderouter stats` curses TUI + `scripts/demo_traffic.sh` traffic generator + `display_timezone` config
 - v1.6 ✅ — `auto_router` (task-aware routing; `default_profile: auto` dispatches by image attachment / code-fence ratio / else) + NVIDIA NIM free-tier 8-step chain + doc language swap (JA primary) + troubleshooting page split + `--env-file` / `doctor --check-env`
-- v1.7 ✅ — PyPI publish (`uvx coderouter-cli` one-line bootstrap) + Trusted Publishing path (release.yml auto-publish on tag push)
+- v1.7 ✅ — PyPI publish (`uvx --from coderouter-cli coderouter` one-line bootstrap) + Trusted Publishing path (release.yml auto-publish on tag push)
 - v1.8 ✅ — **Use-case-aware 4 profiles + GLM/Gemma 4/Qwen3.6 official tags + apply automation**: `multi` (default) / `coding` / `general` / `reasoning` profiles + `append_system_prompt` per profile to nudge non-Claude models toward Claude-style replies + `mode_aliases` (default/fast/vision/think/cheap), Ollama-official `gemma4:e4b/26b/31b` and `qwen3.6:27b/35b` promoted to active stanzas, Z.AI provided as OpenAI-compat with two base URLs (Coding Plan / General API), `coderouter doctor --check-model --apply` writes YAML patches non-destructively (`ruamel.yaml` round-trip preserves comments + key order; idempotent), `setup.sh` onboarding wizard, `claude_code_suitability` startup check (Llama-3.3-70B in `claude-code-*` profiles emits a structured WARN). Remaining for v1.9+: `coderouter doctor --network` (CI-friendly), launcher scripts (`.command` / `.sh` / `.bat`), opt-in startup update check
 
 ## Choosing `kind: openai_compat` vs `kind: anthropic`
