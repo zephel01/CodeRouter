@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.8.2-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.8.3-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -59,7 +59,7 @@
 | **Decide if you need it** | [Decision guide](./docs/when-do-i-need-coderouter.en.md) | Agent × model matrix to figure out whether CodeRouter fits your setup at all |
 | **When stuck** | [Troubleshooting](./docs/troubleshooting.en.md) | How to use `doctor`, why `.env` needs `export`, the 5 Ollama silent-fail symptoms, Claude Code integration gotchas |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.2 — doctor probe gains thinking-model awareness, Gemma 4 false positive resolved) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.3 — tool_calls probe also thinking-aware + adapter strips `reasoning_content` / llama.cpp direct backend supported) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [Security](./docs/security.md)

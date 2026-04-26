@@ -458,6 +458,18 @@ _NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256
 _NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024
 _STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512
 _STREAMING_PROBE_MAX_TOKENS_THINKING = 1024
+# v1.8.3: tool_calls probe also needs thinking-aware budget. The
+# pre-v1.8.3 default of 64 was tight even for non-thinking models
+# (the assistant often emits a brief preamble before the JSON tool
+# call), and on thinking models (Qwen3.6, Gemma 4, gpt-oss, deepseek-r1)
+# the entire 64-token budget gets consumed by ``reasoning_content``
+# before any ``tool_calls`` can surface — producing a false-positive
+# NEEDS_TUNING with the WRONG remediation (suggested patch flips
+# ``tools`` to false even though the model supports them perfectly).
+# 256/1024 brings the budget into line with the num_ctx / streaming
+# probes (same _is_reasoning_model gate).
+_TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT = 256
+_TOOL_CALLS_PROBE_MAX_TOKENS_THINKING = 1024
 # Default ``num_predict`` suggested in the emitted patch. -1 would be
 # optimal (uncapped) but "4096" communicates intent more clearly to
 # operators unfamiliar with Ollama's sentinel value, and covers Claude
@@ -1091,6 +1103,16 @@ async def _probe_tool_calls(
           If declaration says True → NEEDS_TUNING (flip to False). If
           False → OK.
     """
+    # v1.8.3: thinking-aware budget — the pre-v1.8.3 default of 64 was
+    # consumed by ``reasoning_content`` on thinking models (Qwen3.6,
+    # Gemma 4, gpt-oss, deepseek-r1) before any ``tool_calls`` could
+    # surface, producing a false-positive NEEDS_TUNING that recommended
+    # flipping ``tools`` to false — the exact opposite of what's needed.
+    max_tokens = (
+        _TOOL_CALLS_PROBE_MAX_TOKENS_THINKING
+        if _is_reasoning_model(provider, resolved)
+        else _TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT
+    )
     if provider.kind == "anthropic":
         # Anthropic native tools use a different wire shape; we probe
         # via the messages API. A capable model returns content blocks
@@ -1102,7 +1124,7 @@ async def _probe_tool_calls(
             "messages": [
                 {"role": "user", "content": _PROBE_TOOLS_USER_PROMPT},
             ],
-            "max_tokens": 64,
+            "max_tokens": max_tokens,
             "tools": [_PROBE_TOOL_SPEC_ANTHROPIC],
         }
     else:
@@ -1113,7 +1135,7 @@ async def _probe_tool_calls(
             "messages": [
                 {"role": "user", "content": _PROBE_TOOLS_USER_PROMPT},
             ],
-            "max_tokens": 64,
+            "max_tokens": max_tokens,
             "temperature": 0,
             "tools": [_PROBE_TOOL_SPEC_OPENAI],
         }
@@ -1437,7 +1459,12 @@ async def _probe_reasoning_leak(
         )
 
     msg = _extract_openai_assistant_choice(parsed)
-    has_reasoning = bool(msg and "reasoning" in msg)
+    # v1.8.3: detect llama.cpp's ``reasoning_content`` alongside Ollama /
+    # OpenRouter's ``reasoning`` — they're the same concept under different
+    # field names, and the openai_compat adapter strips both since v1.8.3.
+    has_reasoning = bool(
+        msg and ("reasoning" in msg or "reasoning_content" in msg)
+    )
 
     # v1.0-A: content-embedded marker detection.
     content = (msg.get("content") if isinstance(msg, dict) else None) or ""

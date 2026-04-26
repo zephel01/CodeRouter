@@ -303,6 +303,46 @@ v1.8.2 の偽陽性除去後、`coderouter doctor --check-model ollama-qwen3-6-2
 
 **回避**: `claude-code-nim` profile の primary に Qwen3.6 を置かず、**Gemma 4 26B または Qwen2.5-Coder 14b を上位に**。bundled `model-capabilities.yaml` も v1.8.1 で `qwen3.6:*` の `claude_code_suitability: ok` を撤回 (declaration 過信の例)、v1.8.2 で `thinking: true` 追加 (doctor probe 偽陽性除去のため)。
 
+> **コミュニティ証拠 (2026-04-26 偵察)**: X / Reddit (r/ollama, r/LocalLLaMA) で **Qwen3.6 + Ollama の組み合わせは現状コミュニティ全体で詰んでいる** ことが確認できた:
+>
+> - Qwen3.6 35B-A3B で hard crash / リブート (Mac Metal、複数報告)
+> - 「available memory 不足」でロード失敗 (Ollama 側の memory 計算バグ)、最新 Ollama で一部改善
+> - Claude Code / OpenCode 連携でタイムアウト・コンテキスト切れ・loop
+> - `think=False` 時の構造化出力バグ
+>
+> 回避策として複数経路：
+>
+> 1. **Modelfile `PARAMETER num_ctx 131072`** で context を焼き込み (Ollama 経由維持の最小変更)
+> 2. **Unsloth GGUF + llama.cpp / llama-server で直叩き** (最有力、複数の「これで解決した」報告あり) — CodeRouter は `kind: openai_compat` + `base_url: http://localhost:8080/v1` で接続可能
+> 3. 低 quant (Q4_K_M) / coding 特化 tag を試す
+> 4. Ollama 最新版へアップデート (memory bug 部分改善)
+>
+> CodeRouter として **Unsloth GGUF + llama.cpp 直叩きの providers.yaml 例** を追加するロードマップは plan.md 「v1.8.x patch 候補 — llama.cpp 直叩き backend 検証」に記録済 (実機検証で動いたら有効化)。
+
+> **v1.8.3 update (2026-04-26)**: 実機検証完了。**Qwen3.6:35b-a3b + llama.cpp 直叩きで native `tool_calls` 完璧動作確認**。`finish_reason: "tool_calls"` + 正規 OpenAI `tool_calls[]` array が返る。**Ollama 経由詰みの真因 = Ollama chat template / tool 仕様未成熟、モデル本体は健全** が完全確定。検証済み recipe:
+>
+> ```bash
+> # 1. llama.cpp build (Metal)
+> git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
+> cd ~/llama.cpp && cmake -B build -DGGML_METAL=ON -DLLAMA_CURL=ON
+> cmake --build build --config Release -j
+>
+> # 2. Unsloth Dynamic Quantization GGUF (~22GB)
+> huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
+>   --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
+>   --local-dir ~/models/qwen3.6-35b-a3b-unsloth
+>
+> # 3. llama-server 起動
+> ./build/bin/llama-server \
+>   --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+>   --port 8080 --ctx-size 32768 --n-predict 4096 \
+>   --jinja --threads 8 -ngl 999 --host 127.0.0.1
+> ```
+>
+> CodeRouter `providers.yaml` で `kind: openai_compat` + `base_url: http://localhost:8080/v1` で接続可能。`capabilities.thinking: true` を宣言すると doctor probe が thinking-aware budget (1024) を使うので `tool_calls [OK]` が出る。
+>
+> v1.8.3 では (a) **`tool_calls` probe も thinking 対応** (旧 `max_tokens=64` で偽陽性 NEEDS_TUNING、suggested patch も真逆 `tools: false` を出していた active-harmful 誤診断を解消)、(b) **adapter で `reasoning_content` (llama.cpp 命名) を `reasoning` と並んで strip** を実装。これで llama.cpp 直叩き経路が CodeRouter の正規サポート対象に。
+
 #### 4-2-B. **Qwen3.5 系の HF 蒸留モデル** (Qwopus3.5 等) は llama.cpp 未対応
 
 例えば `Jackrong/Qwopus3.5-9B-v3-GGUF` (Qwen3.5-VL ベース + Claude Opus 蒸留、Apache-2.0、Vision) を `ollama pull` すると **blob は完全に落ちてくる**が `ollama run` で：

@@ -117,6 +117,72 @@ def test_strip_helper_handles_multiple_choices() -> None:
     assert "reasoning" not in choices[2]["message"]
 
 
+def test_strip_helper_removes_reasoning_content_field() -> None:
+    """v1.8.3: llama.cpp's ``reasoning_content`` is treated the same as
+    ``reasoning`` — both are non-standard chain-of-thought fields with
+    different vendor naming.
+
+    Confirmed 2026-04-26 with Qwen3.6:35b-a3b on llama-server: the
+    response shape is::
+
+        {"message": {"role": "assistant", "content": "...",
+                     "reasoning_content": "<thinking trace>"}}
+
+    Strict OpenAI clients reject the unknown ``reasoning_content`` key
+    just as they would reject ``reasoning``.
+    """
+    choices = [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "Hello",
+                "reasoning_content": "Here's a thinking process: ...",
+            },
+            "finish_reason": "stop",
+        }
+    ]
+    stripped = _strip_reasoning_field(choices, delta_key=False)
+    assert stripped is True
+    assert choices[0]["message"] == {"role": "assistant", "content": "Hello"}
+
+
+def test_strip_helper_removes_both_reasoning_and_reasoning_content() -> None:
+    """When a single message carries both keys (defensive — unlikely in
+    practice but possible if a proxy merges OpenRouter + llama.cpp
+    upstreams), the strip removes both in one pass.
+    """
+    choices = [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "answer",
+                "reasoning": "ollama-style trace",
+                "reasoning_content": "llama-cpp-style trace",
+            },
+        }
+    ]
+    stripped = _strip_reasoning_field(choices, delta_key=False)
+    assert stripped is True
+    assert choices[0]["message"] == {"role": "assistant", "content": "answer"}
+
+
+def test_strip_helper_removes_reasoning_content_from_delta() -> None:
+    """Stream chunks may carry ``reasoning_content`` in ``delta`` too —
+    llama-server's streaming path emits it incrementally.
+    """
+    choices = [
+        {
+            "index": 0,
+            "delta": {"content": "tok", "reasoning_content": "thinking..."},
+        }
+    ]
+    stripped = _strip_reasoning_field(choices, delta_key=True)
+    assert stripped is True
+    assert choices[0]["delta"] == {"content": "tok"}
+
+
 # ======================================================================
 # Adapter tests — generate() (non-streaming)
 # ======================================================================
@@ -181,7 +247,9 @@ async def test_generate_strips_reasoning_from_message(
     ]
     assert len(recs) == 1
     assert recs[0].provider == "openrouter-gpt-oss-free"
-    assert recs[0].dropped == ["reasoning"]
+    # v1.8.3: log dropped now lists both Ollama/OpenRouter (`reasoning`)
+    # and llama.cpp (`reasoning_content`) since the same strip handles both.
+    assert recs[0].dropped == ["reasoning", "reasoning_content"]
 
 
 @pytest.mark.asyncio
@@ -357,7 +425,9 @@ async def test_stream_strips_reasoning_from_each_delta(
     ]
     assert len(recs) == 1
     assert recs[0].provider == "openrouter-gpt-oss-free"
-    assert recs[0].dropped == ["reasoning"]
+    # v1.8.3: log dropped now lists both Ollama/OpenRouter (`reasoning`)
+    # and llama.cpp (`reasoning_content`) since the same strip handles both.
+    assert recs[0].dropped == ["reasoning", "reasoning_content"]
 
 
 @pytest.mark.asyncio

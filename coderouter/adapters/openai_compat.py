@@ -48,14 +48,25 @@ logger = get_logger(__name__)
 _RETRYABLE_STATUSES = {404, 408, 425, 429, 500, 502, 503, 504}
 
 
-def _strip_reasoning_field(choices: list[dict[str, Any]] | None, *, delta_key: bool) -> bool:
-    """Remove non-standard ``reasoning`` keys from a choices list, in place.
+# v1.8.3: non-standard reasoning fields emitted by various upstreams.
+# Different runtimes use different field names for the same concept:
+#   * ``reasoning``         — OpenRouter free models (gpt-oss-120b:free
+#                             confirmed 2026-04-20), Ollama
+#   * ``reasoning_content`` — llama.cpp ``llama-server`` (Qwen3.6 etc.,
+#                             confirmed 2026-04-26 with Unsloth GGUF)
+# Strict OpenAI clients reject either as an unknown key. The strip
+# function below removes both at the adapter boundary so downstream
+# layers never see them, regardless of which runtime fronts the model.
+_NON_STANDARD_REASONING_KEYS = ("reasoning", "reasoning_content")
 
-    v0.5-C: Some OpenRouter free models (confirmed on
-    ``openai/gpt-oss-120b:free`` 2026-04-20) return a ``reasoning`` field
-    alongside ``content`` on each choice. The field is not in the OpenAI
-    Chat Completions spec and strict clients can reject the unknown key.
-    We strip it at the adapter boundary so downstream layers never see it.
+
+def _strip_reasoning_field(choices: list[dict[str, Any]] | None, *, delta_key: bool) -> bool:
+    """Remove non-standard reasoning keys from a choices list, in place.
+
+    v0.5-C originally targeted OpenRouter's ``reasoning`` field. v1.8.3
+    extends the strip to ``reasoning_content`` (llama.cpp ``llama-server``
+    naming) since both denote the same hidden chain-of-thought trace and
+    neither is part of the OpenAI Chat Completions spec.
 
     Args:
         choices: The ``choices`` list from the response body or stream chunk.
@@ -64,7 +75,7 @@ def _strip_reasoning_field(choices: list[dict[str, Any]] | None, *, delta_key: b
             ``False`` for non-streaming responses (look in ``choice["message"]``).
 
     Returns:
-        True iff at least one ``reasoning`` key was removed. Callers use
+        True iff at least one reasoning key was removed. Callers use
         this to decide whether to emit a one-shot log line.
     """
     if not choices:
@@ -75,9 +86,12 @@ def _strip_reasoning_field(choices: list[dict[str, Any]] | None, *, delta_key: b
         if not isinstance(choice, dict):
             continue
         inner = choice.get(inner_key)
-        if isinstance(inner, dict) and "reasoning" in inner:
-            inner.pop("reasoning", None)
-            stripped = True
+        if not isinstance(inner, dict):
+            continue
+        for key in _NON_STANDARD_REASONING_KEYS:
+            if key in inner:
+                inner.pop(key, None)
+                stripped = True
     return stripped
 
 
@@ -235,15 +249,17 @@ class OpenAICompatAdapter(BaseAdapter):
                 retryable=False,
             ) from exc
 
-        # v0.5-C: passive strip of non-standard `reasoning` field on choices.
-        # No-op when the provider opted into passthrough.
+        # v0.5-C / v1.8.3: passive strip of non-standard reasoning fields
+        # on choices (covers both Ollama/OpenRouter ``reasoning`` and
+        # llama.cpp ``reasoning_content``). No-op when the provider opted
+        # into passthrough.
         if not self.config.capabilities.reasoning_passthrough and _strip_reasoning_field(
             data.get("choices"), delta_key=False
         ):
             log_capability_degraded(
                 logger,
                 provider=self.name,
-                dropped=["reasoning"],
+                dropped=list(_NON_STANDARD_REASONING_KEYS),
                 reason="non-standard-field",
             )
 
@@ -344,7 +360,7 @@ class OpenAICompatAdapter(BaseAdapter):
                             log_capability_degraded(
                                 logger,
                                 provider=self.name,
-                                dropped=["reasoning"],
+                                dropped=list(_NON_STANDARD_REASONING_KEYS),
                                 reason="non-standard-field",
                             )
                             reasoning_logged = True

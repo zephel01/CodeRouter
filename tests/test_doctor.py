@@ -883,6 +883,84 @@ async def test_num_ctx_max_tokens_bumped_when_registry_says_thinking(
 
 
 @pytest.mark.asyncio
+async def test_tool_calls_max_tokens_bumped_for_thinking_provider(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v1.8.3: tool_calls probe uses thinking-aware budget too.
+
+    Pre-v1.8.3 the probe sent ``max_tokens=64``, which thinking models
+    (Qwen3.6, Gemma 4, gpt-oss, deepseek-r1) consume entirely on the
+    ``reasoning_content`` field before any ``tool_calls`` can surface —
+    producing a false-positive NEEDS_TUNING that recommended flipping
+    ``tools`` to false despite the model supporting tools perfectly
+    (observed 2026-04-26 with Qwen3.6:35b-a3b on llama-server).
+    """
+    thinking_caps = Capabilities(thinking=True, tools=True)
+    provider = _oa_provider(
+        name="llamacpp-qwen3-6-35b-a3b",
+        base_url="http://localhost:8080/v1",
+        model="qwen3.6",
+        caps=thinking_caps,
+    )
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if "tools" in body:
+            # tool_calls probe — return a native tool_calls structure.
+            return httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-probe",
+                    "object": "chat.completion",
+                    "created": 0,
+                    "model": "probe",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": "",
+                                "tool_calls": [
+                                    {
+                                        "id": "call_1",
+                                        "type": "function",
+                                        "function": {
+                                            "name": "echo",
+                                            "arguments": '{"message":"probe"}',
+                                        },
+                                    }
+                                ],
+                            },
+                            "finish_reason": "tool_calls",
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 8, "completion_tokens": 1},
+                },
+            )
+        return httpx.Response(200, json=_openai_ok_response(content="PONG"))
+
+    httpx_mock.add_callback(
+        _capture,
+        url="http://localhost:8080/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    # Identify the tool_calls probe request by the presence of ``tools``.
+    tool_calls_bodies = [
+        json.loads(req.content.decode("utf-8"))
+        for req in captured
+        if "tools" in json.loads(req.content.decode("utf-8"))
+    ]
+    assert len(tool_calls_bodies) == 1
+    assert tool_calls_bodies[0]["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
 async def test_streaming_max_tokens_bumped_for_thinking_provider(
     httpx_mock: HTTPXMock,
 ) -> None:

@@ -6,6 +6,72 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.8.3] — 2026-04-26 (tool_calls probe も thinking モデル対応 + adapter で `reasoning_content` strip — llama.cpp 直叩き対応)
+
+**Theme: v1.8.2 と同日リリースの第 2 弾 patch。Qwen3.6:35b-a3b on llama.cpp の実機検証で発見した 2 つの追加課題 — `tool_calls` probe の thinking モデル偽陽性 + llama.cpp が emit する `reasoning_content` フィールドの adapter strip 不足 — を解消。**
+
+v1.8.2 リリース直後、note 記事 v1.8.2「自分が作った診断ツールに自分が騙された話」の続編として **「Ollama 経由で詰んだ Qwen3.6 を Unsloth GGUF + llama.cpp 直叩きで動かしたら native tool_calls が完璧に出た」** を実機検証中、CodeRouter doctor で `tool_calls [NEEDS TUNING]` が依然として出る矛盾に直面。深掘りで `tool_calls` probe の `max_tokens=64` が thinking モデルで `reasoning_content` トークン消費に食い切られる **v1.8.2 で num_ctx / streaming に対して直したのと完全に同じバグ pattern が tool_calls probe にも残っていた** ことが判明。あわせて llama.cpp の `reasoning_content` フィールド (Ollama / OpenRouter は `reasoning`) が openai_compat adapter の strip 対象に入っていなかった事実も発見。両者を v1.8.3 として 1 patch に統合。
+
+**Ollama 経由詰みの真因が完全確定**: Ollama の chat template / tool 仕様未成熟、モデル本体は健全。llama.cpp 直叩きでは Qwen3.6 系の `tool_calls` が native で動作。
+
+- Tests: 733 → **737** (+4: tool_calls probe budget thinking variant / reasoning_content strip 3 件)
+- Runtime deps: 5 → 5 (21 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` 編集不要
+
+### Changes
+
+#### Doctor `tool_calls` probe: thinking モデル対応バジェット
+
+- **`coderouter/doctor.py`**: `_probe_tool_calls` の `max_tokens` を `64` 固定から **thinking 検出付きの動的選択** (256 default / 1024 thinking) に変更。`_TOOL_CALLS_PROBE_MAX_TOKENS_DEFAULT/_THINKING` 定数を新設、既存の `_is_reasoning_model(provider, resolved)` ヘルパで分岐。
+  - 旧 64 では Qwen3.6:35b-a3b on llama.cpp が `reasoning_content` で 64 token 食い切り → `tool_calls` 出力前に length cap → **NEEDS_TUNING + suggested patch 「`tools: false` にしろ」という真逆の推奨** を出していた
+  - 新 1024 で thinking + tool_call が両方収まる headroom
+
+#### Adapter: `reasoning_content` フィールド strip 追加
+
+- **`coderouter/adapters/openai_compat.py`**: `_strip_reasoning_field` を `_NON_STANDARD_REASONING_KEYS = ("reasoning", "reasoning_content")` の両方を strip するように拡張。
+  - `reasoning` (Ollama / OpenRouter 命名) と `reasoning_content` (llama.cpp `llama-server` 命名) は同じ概念で、ベンダー命名が違うだけ
+  - 厳格な OpenAI client はどちらも unknown key として reject するので、両方 strip するのが正しい
+  - `capability-degraded` log の `dropped` フィールドも `["reasoning", "reasoning_content"]` に更新 (両方 strip し得ることを表現)
+
+#### Doctor `reasoning-leak` probe: `reasoning_content` 検出
+
+- **`coderouter/doctor.py`**: `_probe_reasoning_leak` の `has_reasoning` 判定を `"reasoning" in msg or "reasoning_content" in msg` に拡張。llama.cpp 経由 provider でも reasoning leak を informational に検出可能に。
+
+#### Tests
+
+- **`tests/test_doctor.py`** + 1: `test_tool_calls_max_tokens_bumped_for_thinking_provider` (thinking provider で tool_calls probe が 1024 を要求、native tool_calls 応答で OK 判定)
+- **`tests/test_reasoning_strip.py`** + 3: `test_strip_helper_removes_reasoning_content_field` / `test_strip_helper_removes_both_reasoning_and_reasoning_content` / `test_strip_helper_removes_reasoning_content_from_delta` (各 layer で `reasoning_content` 除去確認)
+- 既存 `tests/test_reasoning_strip.py` の `recs[0].dropped == ["reasoning"]` を `["reasoning", "reasoning_content"]` に更新 (log の表現変更に追従)
+
+### Why
+
+v1.8.2 で「diagnostic ツール自身も diagnostic され続ける必要がある」というメタ教訓を書いた直後、まさにそのことを実証する形で残バグが発見された。`tool_calls` probe は num_ctx / streaming probe と同じ「thinking モデルの reasoning トークン消費を考慮していない `max_tokens=64`」問題を抱えていて、しかも doctor の出した suggested patch (`tools: false` に倒せ) は **完全に逆の対処を勧めていた** — false-positive どころか、誠実なユーザーが従うと healthy なモデルを抑制してしまう **active-harmful な誤診断**。
+
+これは v1.8.2 の patch を当てる時点で見つけるべきだった見落としで、note 記事 v1.8.2 のメタ教訓「diagnostic ツール自身も diagnostic され続ける」が現実に試された格好。素早く v1.8.3 で潰す。
+
+`reasoning_content` strip 追加は llama.cpp 直叩き経路を CodeRouter から綺麗に使えるようにする ergonomic 改善で、`v1.8.x` patch 候補で plan.md に記録済みだった項目を実機発見と同時に消化。
+
+### Migration
+
+`pyproject.toml version 1.8.2 → 1.8.3`、`coderouter --version` は 1.8.3 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+v1.8.2 で Qwen3.6 / Gemma 4 系 thinking provider に対して `tool_calls [NEEDS TUNING]` が出ていたユーザーは v1.8.3 で再実行すると **OK** 判定 (実機で動いていた provider が doctor 上でも妥当に評価される)。llama.cpp 直叩き provider を使っているユーザーは `reasoning_content` が client に流れることなく綺麗に strip される。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/adapters/openai_compat.py
+M  coderouter/doctor.py
+M  pyproject.toml
+M  plan.md
+M  docs/troubleshooting.md
+M  tests/test_doctor.py
+M  tests/test_reasoning_strip.py
+```
+
+---
+
 ## [v1.8.2] — 2026-04-26 (doctor probe を thinking モデル対応に — Gemma 4 偽陽性の解消)
 
 **Theme: v1.8.1 リリース直後の深掘りで `doctor` の `num_ctx` / `streaming` probe が thinking モデルに対して偽陽性 NEEDS_TUNING を出していた事実を発見、probe の `max_tokens` バジェットを reasoning トークン消費分込みで設計し直した patch。**
