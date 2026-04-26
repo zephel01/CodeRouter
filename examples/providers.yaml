@@ -864,21 +864,33 @@ profiles:
       - anthropic-direct               # paid: Sonnet 4-6 with vision (★★★★★)
 
   # --------------------------------------------------------------------------
-  # coding — Claude Code / agentic coding 用。Qwen3.6 / Qwen3-Coder 主軸。
+  # coding — Claude Code / agentic coding 用。
   # --------------------------------------------------------------------------
-  # Sonnet の tool-call 行動に最も近い Qwen3.6 35B-A3B を local primary に
-  # 置き、Qwen3-Coder family を量サイズ別の fallback、cloud は NIM/OR の
-  # qwen3-coder:free、最後に Sonnet または GLM-4.7 有料。
+  # 2026-04-26 実機検証 (M3 Max 32GB / Ollama 0.21.2) を反映:
+  #   - Gemma 4 26B が tool_calls を無加工で OK (Ollama 公式 tag、note "日常の王者")
+  #   - Qwen-Coder 14b/7b は v0.x からの実機検証済み (枯れた選択)
+  #   - Qwen3.6 27b/35b は num_ctx を Ollama が silent に縮める /
+  #     tool_calls が出ない / streaming 0 chars の三重課題で Ollama 経由
+  #     では実用厳しい (HF / vLLM 直なら可かもしれない、要再検証)
+  #   - Qwen3-Coder 30B は llama.cpp 対応モデルで、Qwen3.6 系列より安定
+  #
+  # 順序原則: 「枯れて確実に動くもの」を上、「note 推奨だが新しい」は
+  # その後に置く。Sonnet の tool-call 行動に最も近いのは依然として
+  # Qwen3-Coder family (agentic coding 専用設計)。
   - name: coding
     append_system_prompt: |
       Match Claude Sonnet's coding style: terse, structured, tools used precisely.
       Prefer code blocks over prose. Avoid filler explanations unless asked.
       When using tools, batch independent operations in parallel.
     providers:
-      - ollama-qwen3-6-35b             # local primary (note "local champ")
-      - ollama-qwen3-coder-30b         # local: agentic-coding 特化 fallback
-      - ollama-qwen-coder-14b          # local quality fallback
+      - ollama-qwen-coder-14b          # local primary (実機検証済み、枯れた選択)
+      - ollama-gemma4-26b              # local: tool_calls OK 実機確認 (note 推奨)
       - ollama-qwen-coder-7b           # local fast fallback
+      - ollama-qwen3-coder-30b         # local: agentic-coding 専用 (llama.cpp 対応)
+      # Qwen3.6 系は Ollama 経由で実用厳しいので末尾退避線。マシンに余裕
+      # ある + llama.cpp が後日対応強化されたら primary に戻す候補:
+      # - ollama-qwen3-6-27b
+      # - ollama-qwen3-6-35b
       - openrouter-free                # cloud: qwen3-coder:free (262K ctx)
       - openrouter-gpt-oss-free        # cloud: vendor diversity (rate-limit 逃げ)
       - zai-coding-glm-4-7             # paid: GLM-4.7 (Sonnet 級、Z.AI Coding Plan)

@@ -6,6 +6,79 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.8.1] — 2026-04-26 (実機検証反映 patch — mode_aliases 解決 + Gemma 4 第一候補化 + Ollama 既知問題ドキュメント化)
+
+**Theme: v1.8.0 出荷直後の実機検証 (M3 Max 32GB / Ollama 0.21.2) で踏んだ問題 3 件を patch で解消。**
+
+v1.8.0 の用途別 4 プロファイルが、NIM example yaml ベースで運用しているユーザーで `coderouter serve --mode coding` が **`default_profile 'coding' is not declared in profiles`** エラーで起動失敗する loader bug が判明。あわせて `coding` profile の primary に置いていた Qwen3.6:27b/35b が Ollama 経由で実用厳しい (num_ctx silent cap / tool_calls 0 / streaming 0 chars) ことも実機検証で確認。**「note 記事や HF 評判が高くても Ollama 経由ですぐ動くとは限らない」現実**を troubleshooting.md §4-2 として明文化。
+
+- Tests: 729 → **730** (+1: loader の mode_aliases 解決テスト)
+- Runtime deps: 5 → 5 (19 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` 編集不要 (loader が alias 経由で解決)
+
+### Changes
+
+#### Bug fixes (実機検証で踏んだもの)
+
+- **`coderouter/config/loader.py`**: `CODEROUTER_MODE` env (= `--mode` CLI) が **`mode_aliases` を解決せず直接 `default_profile` に代入** していた v0.6-A の素朴実装を修正。runtime の `X-CodeRouter-Mode` ヘッダ (v0.6-D) は alias 解決していたので、startup と runtime で semantic 非対称だった。v1.8.1 で env_mode を `mode_aliases` 経由で解決してから `default_profile` 代入する流れに揃え、両者を symmetric に。これで `cr serve --mode coding` が NIM example yaml (profiles=`[claude-code-nim, ...]`、mode_aliases=`{coding: claude-code-nim}`) でも validation エラーにならず起動する
+- **`examples/providers.nvidia-nim.yaml`**: v1.8.0 で main `providers.yaml` に追加した `mode_aliases` (default/coding/general/multi/reasoning/fast/cheap/think/vision) を NIM example yaml にも追加。NIM ユーザーも `--mode coding|general|reasoning|multi` を canonical な短縮 alias として使えるように
+
+#### `coding` profile primary を実機検証反映に調整
+
+- **`examples/providers.yaml`**: `coding` profile の providers リスト先頭を Qwen3.6:35b/27b → **`ollama-qwen-coder-14b` / `ollama-gemma4-26b` / `ollama-qwen-coder-7b` / `ollama-qwen3-coder-30b`** の順に変更。Qwen3.6 系は末尾退避線にコメントアウトで降格 (LM/llama.cpp が後日対応強化されたら primary に戻す候補として残置)。順序原則「枯れて確実に動くもの」を上に、note 推奨の新しいものは安定確認後に昇格、を反映
+- **`coderouter/data/model-capabilities.yaml`**: `qwen3.6:*` / `qwen/qwen3.6-*` の `claude_code_suitability: ok` を**撤回**。v1.7-B 追加時は note 記事の伝聞ベースで先回り宣言していたが、v1.8.1 実機検証で num_ctx / tool_calls / streaming すべて NEEDS_TUNING 確認、確証ない以上 `tools` 宣言だけ残して suitability は出さない方針に。実機で動いた人は `~/.coderouter/model-capabilities.yaml` で `claude_code_suitability: ok` を user-side override 可能 (registry の first-match-per-flag walk が user → bundled の順序なので)
+
+#### Documentation: 実機 Ollama 運用の Known Issues 追加
+
+- **`docs/troubleshooting.md` §4-2 新設「ローカル Ollama 経由で踏みやすい既知問題」**:
+  - **§4-2-A**: Qwen3.6:27b/35b が Ollama 0.21.2 経由で実用厳しい (num_ctx silent cap / tool_calls 0 / streaming 0)、`/no_think` でも改善せず。回避は Gemma 4 / Qwen2.5-Coder を上位に
+  - **§4-2-B**: Qwen3.5 系 HF 蒸留モデル (Qwopus3.5 等) は llama.cpp が `qwen35` architecture (hybrid Transformer-SSM) 未対応で `unable to load model` 500 エラー。フレームワーク本体の対応待ち
+  - **§4-2-C**: Gemma 4 26B が無加工で tool_calls OK 確認、note 記事「日常の王者」評価が裏付け
+  - **§4-2-D**: ベスト実践「枯れたモデル + 観測ツール (doctor)」、HF で見つけた新モデルは `ollama run` → server log で `unknown model architecture` 確認、出たら今は諦め
+
+### Why
+
+v1.8.0 出荷で「用途別 4 プロファイルで `--mode coding` が使える」と謳ったが、NIM example yaml ベースのユーザーが踏むことが分かった loader bug は**最初の実プロンプト到達前に validation で死ぬ**ので最重要修正。あわせて、v1.8.0 example の primary に置いていた Qwen3.6 系列が実機で 3 つの probe NEEDS_TUNING を出すこと、Qwen3.5 ベース HF 蒸留が llama.cpp 未対応であることは、**「先回り実装より実機 evidence」原則** (plan.md §5.4) を再確認させる結果。
+
+### Migration
+
+`pyproject.toml version 1.8.0 → 1.8.1`、`coderouter --version` は 1.8.1 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+NIM example ベースで `cr serve --mode coding` が動かなかったユーザーは、
+
+```bash
+# 最新 example をコピー (v1.8.1 で mode_aliases 追加済み)
+cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
+# あるいは手で mode_aliases セクションを既存ファイルに追加
+```
+
+または、`cr` をローカル開発版から再 install:
+
+```bash
+uv tool install --reinstall --force --from /path/to/CodeRouter coderouter-cli --with ruamel.yaml
+```
+
+### Real-machine verification
+
+```
+$ pytest -q
+730 passed, 1 skipped in 1.86s
+
+$ ruff check coderouter/ tests/
+All checks passed!
+
+$ cr serve --port 8088 --mode coding   # NIM example yaml でも起動成功
+$ cr doctor --check-model ollama-gemma4-26b --apply   # tool_calls OK 確認済み
+```
+
+### Out of scope / 次回送り
+
+- Qwen3.5 系 HF 蒸留 (Qwopus / 類似): llama.cpp が `qwen35` architecture を実装したら再評価
+- Qwen3.6:27b/35b の Ollama 経由動作: Ollama / llama.cpp 側の改善があれば再評価、`claude_code_suitability` を再付与の検討
+- v1.7-C 候補 (network audit / launcher / 起動時 update check) は引き続き需要待ち
+
+---
+
 ## [v1.8.0] — 2026-04-26 (用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化)
 
 **Theme: 「Claude Code で意味合いがズレない代替モデル」を operator に渡す minor。** plan.md §11.B (v1.7-B umbrella) を 6 タスクで一気に消化:

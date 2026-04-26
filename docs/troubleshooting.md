@@ -282,7 +282,62 @@ profiles:
 
 > **モデル別 tool-call 挙動の深掘り**: Llama-3.3-70B 系の「自然文を tool 呼び出しに変換しがち」性質は、agentic tuning の RLHF signal とシステムプロンプトの相性に起因します。各モデルの傾向と回避策は Unsloth の [Tool calling guide for local LLMs (日本語)](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) が読みやすく、CodeRouter v1.8.0 で導入した `claude_code_suitability` 判定の背景理解にも役立ちます。
 
-### 4-2. `UserPromptSubmit hook error` が出る (第三者 Claude Code プラグイン)
+### 4-2. ローカル Ollama 経由で踏みやすい既知問題 (v1.8.1 追記)
+
+2026-04-26 の実機検証 (M3 Max 32GB / Ollama 0.21.2 / CodeRouter v1.8.0) で、**note 記事や HF で評価が高いモデルでも Ollama 経由では動かないケース**が判明したのでまとめます。
+
+#### 4-2-A. **Qwen3.6:27b / 35b** が Claude Code で実用厳しい
+
+`coderouter doctor --check-model ollama-qwen3-6-27b` の結果：
+
+| Probe | 結果 | 症状 |
+|---|---|---|
+| auth+basic-chat | OK | 短い chat なら動く |
+| **num_ctx** | **NEEDS_TUNING** | `extra_body.options.num_ctx: 32768` を declare しても canary echo されない (Ollama が silent に縮めてる疑い) |
+| **tool_calls** | **NEEDS_TUNING** | native tool_calls / 修復可能 JSON のいずれも返さず |
+| **streaming** | **NEEDS_TUNING** | `finish_reason='length'` で 0 chars 打ち切り |
+
+`/no_think` を `append_system_prompt` に入れても改善せず。Ollama 0.21.2 / llama.cpp 側の Qwen3.6 family 対応がまだ完全でない可能性が高い。
+
+**回避**: `claude-code-nim` profile の primary に Qwen3.6 を置かず、**Gemma 4 26B または Qwen2.5-Coder 14b を上位に**。bundled `model-capabilities.yaml` も v1.8.1 で `qwen3.6:*` の `claude_code_suitability: ok` を撤回 (declaration 過信の例)。
+
+#### 4-2-B. **Qwen3.5 系の HF 蒸留モデル** (Qwopus3.5 等) は llama.cpp 未対応
+
+例えば `Jackrong/Qwopus3.5-9B-v3-GGUF` (Qwen3.5-VL ベース + Claude Opus 蒸留、Apache-2.0、Vision) を `ollama pull` すると **blob は完全に落ちてくる**が `ollama run` で：
+
+```
+Error: 500 Internal Server Error: unable to load model:
+  ...sha256-19d52ddc.../...
+```
+
+Ollama server log を見ると：
+
+```
+llama_model_load: error loading model: error loading model architecture:
+  unknown model architecture: 'qwen35'
+```
+
+**原因**: Qwen3.5 は新アーキテクチャ (hybrid Transformer-SSM、`qwen35.ssm.*` 系のキーが GGUF metadata に含まれる) で、llama.cpp / Ollama に **`qwen35` architecture 実装が未マージ**。Ollama version の問題ではなく、フレームワーク本体の対応待ち。
+
+**回避**: 現状は HF / Transformers / vLLM 直接ロード経由で使うしかない (CodeRouter は Ollama OpenAI-compat 経由なので非対応)。llama.cpp が `qwen35` を実装したら再評価。
+
+> **教訓**: HF で「Qwen3.5 + Opus 蒸留」のような新しい組み合わせは note / r/LocalLLaMA で評判が立っていても、**Ollama 経由ですぐ使えるとは限らない**。`ollama pull` → `ollama run` で 500 が出たら、まず Ollama server log で `unknown model architecture` を確認。出たら今は諦めて他のモデルに行くのが時間効率的に正解。
+
+#### 4-2-C. **Gemma 4 26B** は無加工で tool_calls OK
+
+同じ実機検証で `coderouter doctor --check-model ollama-gemma4-26b` の `tool_calls` probe が **無加工で `[OK]`**。`num_ctx` / `streaming` は patch (`--apply`) で解消可能。Ollama 経由 Claude Code 用途では **note 記事の「Gemma 4 が日常の王者」評価が裏付けられた**形。v1.8.1 で `coding` profile primary を Gemma 4 / Qwen-Coder 14b へ調整しています。
+
+#### 4-2-D. ベスト実践 — 「枯れたモデル + 観測ツール」
+
+実機運用での提案：
+
+1. **第一候補は枯れたもの**: `qwen2.5-coder:14b` / `qwen2.5-coder:7b` / `gemma4:26b` / `gemma4:e4b`
+2. **doctor で確認**: `cr doctor --check-model <provider>` で 6 probe を回す
+3. **`--apply` で patch 適用**: NEEDS_TUNING の YAML パッチを非破壊書き戻し (`pip install 'coderouter-cli[doctor]'` 必要)
+4. **新興モデルは慎重に**: HF で見つけた新モデルは Ollama 0.20+ でも未対応のことあり、`ollama run` → server log で確認
+5. **fallback chain で守る**: ローカル primary が落ちても NIM / OpenRouter free に流れるように chain を厚く
+
+### 4-3. `UserPromptSubmit hook error` が出る (第三者 Claude Code プラグイン)
 
 ```
 ❯ こんにちは

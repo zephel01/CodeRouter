@@ -168,26 +168,36 @@ rules:
       claude_code_suitability: ok
 
   # ------------------------------------------------------------------
-  # Qwen3.6 family (v1.7-B 追加)
+  # Qwen3.6 family (v1.7-B 追加、v1.8.1 で suitability 撤回)
   #
   # 2026-04 リリースの Qwen3.6 シリーズ。Ollama 公式 tag は
-  # qwen3.6:27b / qwen3.6:35b、全 variant が tools+vision+thinking 対応、
-  # 256K context。note 記事 (r/LocalLLaMA 2026-04 Megathread) で
-  # 「Claude Code 代替として最高」「local champ」と評価。
-  # Qwen3-Coder と並んで Claude Sonnet 互換性が高い。
+  # qwen3.6:27b / qwen3.6:35b、metadata 上は tools+vision+thinking 対応、
+  # 256K context を宣言。note 記事 (r/LocalLLaMA 2026-04 Megathread) で
+  # 「Claude Code 代替として最高」「local champ」と評価されている。
+  #
+  # ただし v1.8.0 までで `claude_code_suitability: ok` を declare していた
+  # のは note 記事の伝聞ベースの先回り宣言で、v1.8.1 (2026-04-26) の
+  # 実機検証 (M3 Max 32GB / Ollama 0.21.2) で次の課題が判明:
+  #   - num_ctx を declare 32768 しても Ollama 側で silent に縮められる
+  #     (canary echo-back probe 失敗)
+  #   - tool_calls probe が native tool_calls / 修復可能 JSON のいずれも
+  #     返さず NEEDS_TUNING
+  #   - streaming probe が finish_reason='length' で 0 chars 打ち切り
+  # これらは Ollama 経由特有の問題で、HF / vLLM 直接ロードなら違う可能性。
+  # 確証ない以上、`claude_code_suitability` は撤回し `tools` 宣言だけ残す。
+  # 実機で動いたユーザーは `~/.coderouter/model-capabilities.yaml` で
+  # `claude_code_suitability: ok` を上書きできる。
   # ------------------------------------------------------------------
 
   - match: "qwen3.6:*"
     kind: openai_compat
     capabilities:
       tools: true
-      claude_code_suitability: ok
 
   - match: "qwen/qwen3.6-*"
     kind: openai_compat
     capabilities:
       tools: true
-      claude_code_suitability: ok
 
   # ------------------------------------------------------------------
   # Gemma 4 family (v1.7-B 追加)
