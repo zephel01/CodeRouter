@@ -94,6 +94,59 @@ providers:
       streaming: true
       tools: false              # toggle true once your local model is reliable
 
+  # llama.cpp `llama-server` 経由で Qwen3.6:35b-a3b — v1.8.3 で実機検証済み
+  # (M3 Max 64GB / Unsloth UD-Q4_K_M GGUF / Ollama 経由で詰んだのを直叩きで復権)
+  #
+  # 採用理由:
+  #   * Qwen3.6 + Ollama はコミュニティ全体で chat template / tool 仕様が
+  #     未成熟 (X / Reddit / 自分の実機検証で 3 重 NEEDS_TUNING を確認)
+  #   * llama.cpp 直叩き + Unsloth Dynamic Quantization (UD-Q4_K_M) で
+  #     native `tool_calls` が完璧に動作 (`finish_reason: "tool_calls"` +
+  #     正規 OpenAI `tool_calls[]` array)、`reasoning_content` も別フィールドに
+  #     綺麗に分離されて adapter で strip (v1.8.3)
+  #   * MoE で active 3.8B / total 35B、推論速度 3B 相当・品質 35B クラス、
+  #     M3 Max 32GB+ で快適 (active 3.8B + GGUF 22GB + KV cache + headroom)
+  #
+  # 事前準備 (3 step / 約 15-20 分):
+  #   # 1. llama.cpp build (Metal 付き)
+  #   git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
+  #   cd ~/llama.cpp
+  #   cmake -B build -DGGML_METAL=ON -DLLAMA_CURL=ON
+  #   cmake --build build --config Release -j
+  #
+  #   # 2. Unsloth Dynamic Quantization GGUF を取得 (~22GB)
+  #   huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
+  #     --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
+  #     --local-dir ~/models/qwen3.6-35b-a3b-unsloth
+  #
+  #   # 3. llama-server 起動 (port 8080)
+  #   ~/llama.cpp/build/bin/llama-server \
+  #     --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
+  #     --port 8080 --ctx-size 32768 --n-predict 4096 \
+  #     --jinja --threads 8 -ngl 999 --host 127.0.0.1
+  #
+  # `--jinja` で GGUF metadata 埋め込みの chat template を使う (Unsloth GGUF は
+  # 通常埋め込み済)。`-ngl 999` で全 layer GPU offload (Metal)。
+  #
+  # CodeRouter doctor で 6 probe 全 OK 確認:
+  #   coderouter doctor --check-model llamacpp-qwen3-6-35b-a3b
+  - name: llamacpp-qwen3-6-35b-a3b
+    kind: openai_compat
+    base_url: http://localhost:8080/v1
+    model: qwen3.6                # llama-server は任意の model 名を受ける
+    paid: false
+    api_key_env: null              # llama-server は無認証 default
+    timeout_s: 120                 # thinking モデルなので generous に
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true                  # native `tool_calls` 動作確認済 (v1.8.3)
+      thinking: true               # Qwen3.6 は thinking モデル、doctor が 1024 token budget を使う
+    output_filters:
+      - strip_thinking             # `<think>...</think>` ブロックは念のため除去
+    # llama.cpp は `extra_body.options` を受けない (Ollama 専用)、context /
+    # max_tokens は server 起動引数 (--ctx-size / --n-predict) で確定済
+
   # Ollama — convenient for trying multiple models
   # Small & fast (1-2s/turn on M-series for non-Claude-Code traffic,
   # but tool selection is weak — not recommended as Claude Code's primary).
@@ -883,12 +936,18 @@ profiles:
       Prefer code blocks over prose. Avoid filler explanations unless asked.
       When using tools, batch independent operations in parallel.
     providers:
+      # llama-server で Qwen3.6:35b-a3b を直叩きできる人はこれが top-tier。
+      # v1.8.3 実機検証で native tool_calls 完璧動作確認、Unsloth UD-Q4_K_M
+      # GGUF + llama.cpp Metal で M3 Max 64GB なら余裕で動く。事前準備が
+      # 不要なら下の枯れた選択 (ollama-qwen-coder-14b) からで OK。
+      - llamacpp-qwen3-6-35b-a3b       # local: Qwen3.6 + llama.cpp 直叩き (要事前準備)
       - ollama-qwen-coder-14b          # local primary (実機検証済み、枯れた選択)
       - ollama-gemma4-26b              # local: tool_calls OK 実機確認 (note 推奨)
       - ollama-qwen-coder-7b           # local fast fallback
       - ollama-qwen3-coder-30b         # local: agentic-coding 専用 (llama.cpp 対応)
-      # Qwen3.6 系は Ollama 経由で実用厳しいので末尾退避線。マシンに余裕
-      # ある + llama.cpp が後日対応強化されたら primary に戻す候補:
+      # Qwen3.6 系は Ollama 経由だと chat template / tool 仕様が未成熟で
+      # 実用厳しい。Unsloth GGUF + llama.cpp 直叩き経路 (上の
+      # llamacpp-qwen3-6-35b-a3b) を使うこと:
       # - ollama-qwen3-6-27b
       # - ollama-qwen3-6-35b
       - openrouter-free                # cloud: qwen3-coder:free (262K ctx)
