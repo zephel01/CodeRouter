@@ -770,7 +770,169 @@ async def test_num_ctx_request_body_merges_extra_body_options(
     # And the probe's own fields must be present and dominate over any
     # extra_body collisions on top-level keys.
     assert num_ctx_body["model"] == provider.model
-    assert num_ctx_body["max_tokens"] == 32
+    # v1.8.2: default probe budget bumped 32 → 256. Thinking-flagged
+    # models bump further to 1024 (covered by a dedicated test below).
+    # The provider here has no `capabilities.thinking`, so the default
+    # baseline applies.
+    assert num_ctx_body["max_tokens"] == 256
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_max_tokens_bumped_for_thinking_provider_declaration(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v1.8.2: provider declared ``capabilities.thinking: true`` →
+    num_ctx probe budget is the thinking variant (1024) instead of the
+    256 baseline.
+
+    Thinking models (Gemma 4 26B, Qwen3-with-/think, gpt-oss, deepseek-r1)
+    burn output tokens on a hidden ``reasoning`` trace before any visible
+    ``content`` is emitted. The pre-v1.8.2 default of 32 caused
+    ``finish_reason='length'`` with empty content, producing a
+    false-positive NEEDS_TUNING. Bumping the budget to 1024 gives the
+    reasoning trace + canary echo room to surface.
+    """
+    thinking_caps = Capabilities(thinking=True, tools=True)
+    provider = _oa_provider(
+        name="ollama-gemma4-26b",
+        base_url="http://localhost:11434/v1",
+        model="gemma4:26b",
+        caps=thinking_caps,
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if body.get("stream") is True:
+            return httpx.Response(
+                200,
+                content=_sse_stream_count_body(),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    # auth → captured[0], num_ctx → captured[1]
+    num_ctx_body = json.loads(captured[1].content.decode("utf-8"))
+    assert num_ctx_body["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_num_ctx_max_tokens_bumped_when_registry_says_thinking(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v1.8.2: provider declares no thinking but registry says thinking=true
+    for the (kind, model) → still bump to 1024.
+
+    This mirrors the production path: bundled model-capabilities.yaml
+    declares ``thinking: true`` for ``gemma4:*`` / ``qwen3.6:*`` so
+    operators don't have to repeat the flag in every providers.yaml.
+    """
+    provider = _oa_provider(
+        name="ollama-gemma4-26b",
+        base_url="http://localhost:11434/v1",
+        model="gemma4:26b",
+        # capabilities.thinking left at the default (False)
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    registry = CapabilityRegistry(
+        [
+            CapabilityRule(
+                match="gemma4:*",
+                kind="openai_compat",
+                capabilities=RegistryCapabilities(thinking=True),
+            )
+        ]
+    )
+    captured: list[httpx.Request] = []
+
+    def _capture(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if body.get("stream") is True:
+            return httpx.Response(
+                200,
+                content=_sse_stream_count_body(),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
+        )
+
+    httpx_mock.add_callback(
+        _capture,
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(_config_for([provider]), provider.name, registry=registry)
+    num_ctx_body = json.loads(captured[1].content.decode("utf-8"))
+    assert num_ctx_body["max_tokens"] == 1024
+
+
+@pytest.mark.asyncio
+async def test_streaming_max_tokens_bumped_for_thinking_provider(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """v1.8.2: streaming probe also uses the thinking-aware budget — same
+    rationale as num_ctx (reasoning trace burns through the small default).
+
+    Pre-v1.8.2 streaming used ``max_tokens=128`` and Gemma 4 reported
+    ``finish_reason='length'`` after 0 chars of content. Bumping to 1024
+    lets the reasoning prefix + the "1..30" answer fit.
+    """
+    thinking_caps = Capabilities(thinking=True, tools=True)
+    provider = _oa_provider(
+        name="ollama-gemma4-26b",
+        base_url="http://localhost:11434/v1",
+        model="gemma4:26b",
+        caps=thinking_caps,
+        extra_body={"options": {"num_ctx": 32768}},
+    )
+    captured: list[httpx.Request] = []
+
+    def _route(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        body = json.loads(request.content.decode("utf-8"))
+        if body.get("stream") is True:
+            return httpx.Response(
+                200,
+                content=_sse_stream_count_body(),
+                headers={"content-type": "text/event-stream"},
+            )
+        return httpx.Response(
+            200, json=_openai_ok_response(content=_NUM_CTX_PROBE_CANARY)
+        )
+
+    httpx_mock.add_callback(
+        _route,
+        url="http://localhost:11434/v1/chat/completions",
+        method="POST",
+        is_reusable=True,
+    )
+    await check_model(
+        _config_for([provider]), provider.name, registry=_empty_registry()
+    )
+    # The streaming probe runs last; identify it by ``stream: true``.
+    stream_bodies = [
+        json.loads(req.content.decode("utf-8"))
+        for req in captured
+        if json.loads(req.content.decode("utf-8")).get("stream") is True
+    ]
+    assert len(stream_bodies) == 1
+    assert stream_bodies[0]["max_tokens"] == 1024
 
 
 @pytest.mark.asyncio
@@ -1767,6 +1929,11 @@ async def test_streaming_request_body_carries_stream_true_and_merges_extra_body(
     }
     # Top-level probe fields must win over any extra_body collision.
     assert streaming_body["model"] == provider.model
+    # v1.8.2: streaming probe baseline budget bumped 128 → 512 to absorb
+    # short stylistic preambles. Thinking models bump further to 1024
+    # (covered by ``test_streaming_max_tokens_bumped_for_thinking_provider``).
+    # Provider here has no thinking declaration, so baseline applies.
+    assert streaming_body["max_tokens"] == 512
 
 
 @pytest.mark.asyncio

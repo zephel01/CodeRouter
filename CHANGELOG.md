@@ -6,6 +6,66 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.8.2] — 2026-04-26 (doctor probe を thinking モデル対応に — Gemma 4 偽陽性の解消)
+
+**Theme: v1.8.1 リリース直後の深掘りで `doctor` の `num_ctx` / `streaming` probe が thinking モデルに対して偽陽性 NEEDS_TUNING を出していた事実を発見、probe の `max_tokens` バジェットを reasoning トークン消費分込みで設計し直した patch。**
+
+v1.8.1 で `coding` profile primary に置いた Gemma 4 26B の doctor 結果が `tool_calls [OK]` + `num_ctx [NEEDS TUNING]` + `streaming [NEEDS TUNING]` で「中途半端に動く」と判定されていたが、実機で curl 直叩きすると **Ollama OpenAI-compat 経由でも 5K トークンの canary echo-back に成功** することが判明。原因切り分けの結果、Gemma 4 が emit する非標準 `reasoning` フィールドが doctor probe の `max_tokens=32` (num_ctx) / `max_tokens=128` (streaming) を**思考トークンで食い切って `content=""` で `finish_reason='length'`** を返していた偽陽性と確定。実機検証 (M3 Max 64GB / Ollama 0.21.2) で Anthropic 互換 `/v1/messages` 経由 Gemma 4 26B が "Hello." を 2 秒で返すことも確認、**Gemma 4 26B は実用 OK** と最終判定。
+
+- Tests: 730 → **733** (+3: thinking provider declaration / registry-based / streaming の 3 件)
+- Runtime deps: 5 → 5 (20 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` 編集不要
+
+### Changes
+
+#### Doctor probe: thinking モデル対応バジェット選択
+
+- **`coderouter/doctor.py`**: `_probe_num_ctx` / `_probe_streaming` の `max_tokens` を thinking 検出付きの動的選択に変更。新 helper `_is_reasoning_model(provider, resolved)` が provider declaration / registry resolved の両方から `thinking` / `reasoning_passthrough` の真偽を見て、reasoning モデルのときだけ大きいバジェットを選ぶ。
+  - `_NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256` (旧 32)、`_NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024`
+  - `_STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512` (旧 128)、`_STREAMING_PROBE_MAX_TOKENS_THINKING = 1024`
+  - 非 thinking モデルは natural stop で早期終了するので無駄消費なし、thinking モデルは reasoning trace + 答えが収まる headroom
+
+#### Registry: 既知 thinking モデルに `thinking: true` 宣言
+
+- **`coderouter/data/model-capabilities.yaml`**: `gemma4:*` / `google/gemma-4*` / `qwen3.6:*` / `qwen/qwen3.6-*` に `thinking: true` を追加。これらは Ollama 経由で `reasoning` フィールドにかなりのトークンを吐く設計と確認済み。registry 経由で渡るので user は `providers.yaml` を触らなくても doctor の thinking バジェットが効く
+- **Qwen3.6 セクションのコメント更新**: v1.8.1 時点で「Ollama silent cap」と書いていた part を「**v1.8.2 で num_ctx / streaming は doctor 偽陽性と判明、tool_calls [NEEDS TUNING] が真の課題として残る**」に整理。`claude_code_suitability` 撤回判断は維持 (Qwen3.6 の tool_calls 不全は thinking 起因ではない別の真の課題)
+
+#### Tests
+
+- **`tests/test_doctor.py`**: 3 件追加
+  - `test_num_ctx_max_tokens_bumped_for_thinking_provider_declaration`: `provider.capabilities.thinking=True` → 1024
+  - `test_num_ctx_max_tokens_bumped_when_registry_says_thinking`: provider 宣言なし + registry 宣言あり → 1024
+  - `test_streaming_max_tokens_bumped_for_thinking_provider`: streaming probe も同経路で 1024 になる
+- 既存 `test_num_ctx_request_body_merges_extra_body_options` の `max_tokens == 32` assertion を `== 256` に更新 (新 baseline)
+- 既存 `test_streaming_request_body_carries_stream_true_and_merges_extra_body` に `max_tokens == 512` assertion を追加 (streaming baseline)
+
+### Why
+
+v1.8.1 article 執筆中に「note の流行モデル → ollama pull → 動かない」のうち Gemma 4 だけ `tool_calls [OK]` の **逆転勝利** だったはずが、`num_ctx [NEEDS TUNING]` も出ていて記事として煮え切らない状態だった。深掘りの結果、`/v1/chat/completions` 経由でも options は効く / `ollama ps` で context length 262144 が出る / **でも doctor は失敗** という矛盾を観測。`.choices[0].message.reasoning` フィールドに思考トークンが流れて `max_tokens=32` を消費していた事実を確認、**doctor 側の probe 設計が thinking モデル時代に追いついていない**ことが判明。
+
+これは「実機 evidence first」原則 (plan.md §5.4) の更に一段下のメタ教訓：**diagnostic ツール自身も diagnostic され続ける必要がある**。
+
+### Migration
+
+`pyproject.toml version 1.8.1 → 1.8.2`、`coderouter --version` は 1.8.2 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+v1.8.1 で Gemma 4 26B を `claude_code_suitability` 抑え目に運用していたユーザーは v1.8.2 で doctor 再実行すると `num_ctx [OK]` + `streaming [OK]` まで通るはず。Qwen3.6 系の `tool_calls [NEEDS TUNING]` は本物 (thinking 起因ではない) なので引き続き coding chain primary には推奨しない。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/data/model-capabilities.yaml
+M  coderouter/doctor.py
+M  pyproject.toml
+M  plan.md
+M  docs/troubleshooting.md
+M  docs/articles/note-v1-8-1-reality-check.md   (or new file v1-8-2)
+M  tests/test_doctor.py
+```
+
+---
+
 ## [v1.8.1] — 2026-04-26 (実機検証反映 patch — mode_aliases 解決 + Gemma 4 第一候補化 + Ollama 既知問題ドキュメント化)
 
 **Theme: v1.8.0 出荷直後の実機検証 (M3 Max 32GB / Ollama 0.21.2) で踏んだ問題 3 件を patch で解消。**

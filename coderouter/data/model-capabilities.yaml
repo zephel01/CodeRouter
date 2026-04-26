@@ -176,47 +176,59 @@ rules:
   # 「Claude Code 代替として最高」「local champ」と評価されている。
   #
   # ただし v1.8.0 までで `claude_code_suitability: ok` を declare していた
-  # のは note 記事の伝聞ベースの先回り宣言で、v1.8.1 (2026-04-26) の
-  # 実機検証 (M3 Max 32GB / Ollama 0.21.2) で次の課題が判明:
-  #   - num_ctx を declare 32768 しても Ollama 側で silent に縮められる
-  #     (canary echo-back probe 失敗)
+  # のは note 記事の伝聞ベースの先回り宣言で、v1.8.1 〜 v1.8.2
+  # (2026-04-26) の実機検証 (M3 Max 64GB / Ollama 0.21.2) で:
+  #   - num_ctx と streaming の NEEDS_TUNING は v1.8.2 で thinking モデル
+  #     用 probe バジェット拡大により偽陽性と判明 (doctor 側の課題)
   #   - tool_calls probe が native tool_calls / 修復可能 JSON のいずれも
-  #     返さず NEEDS_TUNING
-  #   - streaming probe が finish_reason='length' で 0 chars 打ち切り
-  # これらは Ollama 経由特有の問題で、HF / vLLM 直接ロードなら違う可能性。
-  # 確証ない以上、`claude_code_suitability` は撤回し `tools` 宣言だけ残す。
+  #     返さない真の課題が残る (Qwen3.6 系の Ollama 経由 tool 仕様未成熟)
+  # tool_calls 不全が解消されるまで `claude_code_suitability` は撤回。
   # 実機で動いたユーザーは `~/.coderouter/model-capabilities.yaml` で
   # `claude_code_suitability: ok` を上書きできる。
   # ------------------------------------------------------------------
 
+  # v1.8.2: thinking: true は doctor probe (num_ctx / streaming) が reasoning
+  # トークン消費分の max_tokens 余裕を確保するためのヒント。Qwen3 系は
+  # /think モードで thinking トークンを吐く設計なので true 宣言。
   - match: "qwen3.6:*"
     kind: openai_compat
     capabilities:
       tools: true
+      thinking: true
 
   - match: "qwen/qwen3.6-*"
     kind: openai_compat
     capabilities:
       tools: true
+      thinking: true
 
   # ------------------------------------------------------------------
-  # Gemma 4 family (v1.7-B 追加)
+  # Gemma 4 family (v1.7-B 追加、v1.8.2 で thinking: true 宣言)
   #
   # Google 公式 Gemma 4。Ollama 公式 tag は gemma4:e2b / e4b / 26b / 31b、
   # 全 variant が tools+vision+thinking 対応、E2B/E4B は audio もサポート。
   # MoE (26b は active 3.8B / total 25.2B)。note 記事で「日常・バランスの
   # 王者」と評価。Claude Haiku 互換性に近い簡潔な応答スタイル。
+  #
+  # v1.8.2 (2026-04-26): 実機検証 (M3 Max 64GB / Ollama 0.21.2 / gemma4:26b)
+  # で `reasoning` フィールドにかなりの量のトークンを吐く thinking モデル
+  # と確認。doctor probe の max_tokens=32 / 128 が thinking トークンに
+  # 食い切られて偽陽性 NEEDS_TUNING を出していた。registry で
+  # `thinking: true` を宣言すると doctor が probe バジェットを 1024 まで
+  # 引き上げて偽陽性を回避する。
   # ------------------------------------------------------------------
 
   - match: "gemma4:*"
     kind: openai_compat
     capabilities:
       tools: true
+      thinking: true
 
   - match: "google/gemma-4*"
     kind: openai_compat
     capabilities:
       tools: true
+      thinking: true
 
   # ------------------------------------------------------------------
   # GLM family (Z.AI / Zhipu AI、v1.7-B 追加)

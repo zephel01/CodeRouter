@@ -282,24 +282,26 @@ profiles:
 
 > **モデル別 tool-call 挙動の深掘り**: Llama-3.3-70B 系の「自然文を tool 呼び出しに変換しがち」性質は、agentic tuning の RLHF signal とシステムプロンプトの相性に起因します。各モデルの傾向と回避策は Unsloth の [Tool calling guide for local LLMs (日本語)](https://unsloth.ai/docs/jp/ji-ben/tool-calling-guide-for-local-llms) が読みやすく、CodeRouter v1.8.0 で導入した `claude_code_suitability` 判定の背景理解にも役立ちます。
 
-### 4-2. ローカル Ollama 経由で踏みやすい既知問題 (v1.8.1 追記)
+### 4-2. ローカル Ollama 経由で踏みやすい既知問題 (v1.8.1 追記、v1.8.2 改訂)
 
-2026-04-26 の実機検証 (M3 Max 32GB / Ollama 0.21.2 / CodeRouter v1.8.0) で、**note 記事や HF で評価が高いモデルでも Ollama 経由では動かないケース**が判明したのでまとめます。
+2026-04-26 の実機検証 (M3 Max 64GB / Ollama 0.21.2 / CodeRouter v1.8.0 → v1.8.2) で、**note 記事や HF で評価が高いモデルでも Ollama 経由では動かないケース**が判明したのでまとめます。
+
+> **v1.8.2 重要更新**: 当初 v1.8.1 で「Qwen3.6 / Gemma 4 ともに num_ctx silent cap」「streaming 0 chars 打ち切り」と判定していた問題は、深掘りの結果 **doctor の `num_ctx` / `streaming` probe が thinking モデルの reasoning トークン消費分を見ていない `max_tokens=32` / `128` バジェットで偽陽性 NEEDS_TUNING を出していた** ことが判明。v1.8.2 で probe バジェットを reasoning モデル時に 1024 まで拡大、registry で `gemma4:*` / `qwen3.6:*` に `thinking: true` 宣言を追加。**Gemma 4 26B は実機で完全動作確定** (`/v1/messages` Anthropic 互換で "Hello." を 2 秒応答)、**Qwen3.6 系の `tool_calls [NEEDS TUNING]` だけが真の課題として残る** (thinking 起因とは別の Ollama tool 仕様未成熟)。
 
 #### 4-2-A. **Qwen3.6:27b / 35b** が Claude Code で実用厳しい
 
-`coderouter doctor --check-model ollama-qwen3-6-27b` の結果：
+v1.8.2 の偽陽性除去後、`coderouter doctor --check-model ollama-qwen3-6-27b` の結果：
 
 | Probe | 結果 | 症状 |
 |---|---|---|
 | auth+basic-chat | OK | 短い chat なら動く |
-| **num_ctx** | **NEEDS_TUNING** | `extra_body.options.num_ctx: 32768` を declare しても canary echo されない (Ollama が silent に縮めてる疑い) |
-| **tool_calls** | **NEEDS_TUNING** | native tool_calls / 修復可能 JSON のいずれも返さず |
-| **streaming** | **NEEDS_TUNING** | `finish_reason='length'` で 0 chars 打ち切り |
+| num_ctx | OK or NEEDS_TUNING (model依存) | thinking バジェット 1024 で偽陽性は解消 |
+| **tool_calls** | **NEEDS_TUNING** ← 残る真の課題 | native tool_calls / 修復可能 JSON のいずれも返さず |
+| streaming | OK or NEEDS_TUNING | thinking バジェット 1024 で偽陽性は解消 |
 
-`/no_think` を `append_system_prompt` に入れても改善せず。Ollama 0.21.2 / llama.cpp 側の Qwen3.6 family 対応がまだ完全でない可能性が高い。
+`/no_think` を `append_system_prompt` に入れても tool_calls は改善せず。Ollama 0.21.2 / llama.cpp 側の Qwen3.6 family の **tool 仕様** がまだ完全でない (chat template / tool スキーマ整合) 可能性が高い。
 
-**回避**: `claude-code-nim` profile の primary に Qwen3.6 を置かず、**Gemma 4 26B または Qwen2.5-Coder 14b を上位に**。bundled `model-capabilities.yaml` も v1.8.1 で `qwen3.6:*` の `claude_code_suitability: ok` を撤回 (declaration 過信の例)。
+**回避**: `claude-code-nim` profile の primary に Qwen3.6 を置かず、**Gemma 4 26B または Qwen2.5-Coder 14b を上位に**。bundled `model-capabilities.yaml` も v1.8.1 で `qwen3.6:*` の `claude_code_suitability: ok` を撤回 (declaration 過信の例)、v1.8.2 で `thinking: true` 追加 (doctor probe 偽陽性除去のため)。
 
 #### 4-2-B. **Qwen3.5 系の HF 蒸留モデル** (Qwopus3.5 等) は llama.cpp 未対応
 
@@ -323,9 +325,13 @@ llama_model_load: error loading model: error loading model architecture:
 
 > **教訓**: HF で「Qwen3.5 + Opus 蒸留」のような新しい組み合わせは note / r/LocalLLaMA で評判が立っていても、**Ollama 経由ですぐ使えるとは限らない**。`ollama pull` → `ollama run` で 500 が出たら、まず Ollama server log で `unknown model architecture` を確認。出たら今は諦めて他のモデルに行くのが時間効率的に正解。
 
-#### 4-2-C. **Gemma 4 26B** は無加工で tool_calls OK
+#### 4-2-C. **Gemma 4 26B** は実機で完全動作 (v1.8.2 で確定)
 
-同じ実機検証で `coderouter doctor --check-model ollama-gemma4-26b` の `tool_calls` probe が **無加工で `[OK]`**。`num_ctx` / `streaming` は patch (`--apply`) で解消可能。Ollama 経由 Claude Code 用途では **note 記事の「Gemma 4 が日常の王者」評価が裏付けられた**形。v1.8.1 で `coding` profile primary を Gemma 4 / Qwen-Coder 14b へ調整しています。
+`coderouter doctor --check-model ollama-gemma4-26b` の `tool_calls` probe が無加工で `[OK]`。v1.8.2 で thinking モデル対応 probe バジェット (1024) を入れた後は **`num_ctx` / `streaming` も `[OK]`** で 6 probe 全クリア。`/v1/messages` Anthropic 互換経由で "Hello." を 2 秒応答 (M3 Max 64GB)、`tool_calls native OK`、`reasoning strip` 動作。
+
+ただし **interactive UX は若干重い** — Gemma 4 は thinking モデルなので `reasoning` フィールドにも応答時間を使う + 26B サイズ + Claude Code の agent loop (1 プロンプトで 3〜6 round-trip) で総応答時間が 30〜90 秒 / プロンプトになる。daily driver には `qwen2.5-coder:14b` のほうが速い。**Gemma 4 は tool_calls native + 高品質が要るときの選択肢**。
+
+note 記事の「Gemma 4 が日常の王者」評価は **Claude Code agentic 用途でも裏付けられた**形。v1.8.1 で `coding` profile primary を Gemma 4 / Qwen-Coder 14b へ調整、v1.8.2 で registry に `thinking: true` を宣言。
 
 #### 4-2-D. ベスト実践 — 「枯れたモデル + 観測ツール」
 
@@ -336,6 +342,20 @@ llama_model_load: error loading model: error loading model architecture:
 3. **`--apply` で patch 適用**: NEEDS_TUNING の YAML パッチを非破壊書き戻し (`pip install 'coderouter-cli[doctor]'` 必要)
 4. **新興モデルは慎重に**: HF で見つけた新モデルは Ollama 0.20+ でも未対応のことあり、`ollama run` → server log で確認
 5. **fallback chain で守る**: ローカル primary が落ちても NIM / OpenRouter free に流れるように chain を厚く
+
+#### 4-2-E. doctor probe 自体の限界 — thinking モデル対応 (v1.8.2)
+
+v1.8.2 までの doctor `num_ctx` / `streaming` probe は **`max_tokens=32` / `128`** で出力を要求していた。これは canary token (~5 tokens) や "1..30" (~40 tokens) を返すには十分だったが、**thinking モデル** (Gemma 4、Qwen3 系、gpt-oss、deepseek-r1) は `reasoning` フィールドに思考トークンを吐く設計のため、可視 `content` が出る前に max_tokens に到達して `finish_reason='length'` で打ち切られる **偽陽性 NEEDS_TUNING** を出していた。
+
+v1.8.2 で：
+
+- `_NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256` (旧 32)、`_NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024`
+- `_STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512` (旧 128)、`_STREAMING_PROBE_MAX_TOKENS_THINKING = 1024`
+- `provider.capabilities.thinking` / `provider.capabilities.reasoning_passthrough` / registry の `thinking` / `reasoning_passthrough` のいずれかが true なら thinking バジェットを採用
+
+つまり **provider 宣言不要**: bundled `model-capabilities.yaml` で `gemma4:*` / `qwen3.6:*` などに `thinking: true` を宣言してあれば、user の providers.yaml には何も書かなくても doctor が自動的に正しいバジェットを使う。
+
+**メタ教訓**: diagnostic ツール自身も diagnostic され続ける必要がある (plan.md §5.4 「実機 evidence first」原則の補強)。
 
 ### 4-3. `UserPromptSubmit hook error` が出る (第三者 Claude Code プラグイン)
 

@@ -433,6 +433,31 @@ _STREAMING_PROBE_USER_PROMPT = (
 # truncated". "1\n2\n...\n30" is ~80 chars; 40 chars covers the halfway
 # mark (1..20) which is already obviously-truncated territory.
 _STREAMING_PROBE_MIN_EXPECTED_CHARS = 40
+
+# v1.8.2: probe response budgets.
+#
+# Both num_ctx and streaming probes ask the model for a *short* answer
+# (the canary token / "1..30"). The original budgets (32 / 128 tokens)
+# assumed a non-thinking model that emits the answer immediately. On a
+# thinking model — Gemma 4 26B, Qwen3.6, gpt-oss, deepseek-r1 — the
+# upstream burns the entire budget on a hidden ``reasoning`` field
+# *before* emitting any visible ``content``, producing a false-positive
+# NEEDS_TUNING (canary missing / 0 chars streamed). Bumping the budget
+# is the cleanest fix: non-thinking models stop early at their natural
+# stop token (no waste), thinking models get headroom for the reasoning
+# trace plus the actual answer.
+#
+# Numbers picked from the v1.8.1 reality-check session
+# (docs/articles/note-v1-8-1-reality-check.md):
+#   * Gemma 4 26B reasoning prefix observed at ~150-300 tokens before
+#     content starts → 1024 covers reasoning + 30-line count comfortably.
+#   * Non-thinking baseline kept conservative-but-non-tight (256/512) to
+#     absorb stylistic preambles ("Sure, the answer is...") without
+#     burning extra cloud quota when the operator probes a paid endpoint.
+_NUM_CTX_PROBE_MAX_TOKENS_DEFAULT = 256
+_NUM_CTX_PROBE_MAX_TOKENS_THINKING = 1024
+_STREAMING_PROBE_MAX_TOKENS_DEFAULT = 512
+_STREAMING_PROBE_MAX_TOKENS_THINKING = 1024
 # Default ``num_predict`` suggested in the emitted patch. -1 would be
 # optimal (uncapped) but "4096" communicates intent more clearly to
 # operators unfamiliar with Ollama's sentinel value, and covers Claude
@@ -473,6 +498,42 @@ def _declared_num_ctx(provider: ProviderConfig) -> int | None:
         return None
     val = options.get("num_ctx")
     return val if isinstance(val, int) else None
+
+
+def _is_reasoning_model(
+    provider: ProviderConfig, resolved: ResolvedCapabilities
+) -> bool:
+    """v1.8.2: True iff the model is known to emit a hidden reasoning trace.
+
+    Thinking models (Gemma 4, Qwen3-with-/think, gpt-oss, deepseek-r1,
+    Claude Sonnet 4.5+ in extended-thinking mode) burn output tokens on a
+    ``reasoning`` field before any visible ``content`` is produced. The
+    num_ctx / streaming probes use small response budgets that get fully
+    consumed by the reasoning prefix, producing a false-positive
+    NEEDS_TUNING. Callers use this to choose a generous probe budget.
+
+    Three signals fire:
+      * provider declared ``capabilities.thinking: true`` in providers.yaml
+      * provider declared ``capabilities.reasoning_passthrough: true``
+        (the operator opted in to passing the raw reasoning to the client,
+        which is only meaningful for models that emit it)
+      * registry resolved ``thinking: true`` for this (kind, model) pair
+
+    Conservative bias — when both provider declaration and registry are
+    silent, treat as non-reasoning. The probe still completes for thinking
+    models in that case (they just hit ``finish_reason='length'`` like
+    they did pre-v1.8.2), but at least the new generous default budget
+    (256 / 512) gives more headroom than the old 32 / 128.
+    """
+    if provider.capabilities.thinking is True:
+        return True
+    if provider.capabilities.reasoning_passthrough is True:
+        return True
+    if resolved.thinking is True:
+        return True
+    if resolved.reasoning_passthrough is True:
+        return True
+    return False
 
 
 _PROBE_BASIC_USER_PROMPT = "Reply with exactly the single word: PONG"
@@ -617,7 +678,9 @@ def _extract_openai_assistant_choice(
     return msg if isinstance(msg, dict) else None
 
 
-async def _probe_num_ctx(provider: ProviderConfig) -> ProbeResult:
+async def _probe_num_ctx(
+    provider: ProviderConfig, resolved: ResolvedCapabilities
+) -> ProbeResult:
     """v1.0-B Probe — direct detection of Ollama ``num_ctx`` truncation.
 
     Addresses plan.md §9.4 symptom #1 (空応答 / 意味不明応答). Prior to
@@ -683,11 +746,21 @@ async def _probe_num_ctx(provider: ProviderConfig) -> ProbeResult:
     # whatever ``options.num_ctx`` the operator has declared. Request
     # fields win over extra_body, matching the adapter's merge order.
     body: dict[str, Any] = dict(provider.extra_body)
+    # v1.8.2: thinking models burn output tokens on a hidden ``reasoning``
+    # trace before emitting any ``content``. The pre-v1.8.2 default of 32
+    # was tight for any preamble at all; on Gemma 4 26B it caused
+    # ``finish_reason='length'`` with content="" before the canary could
+    # surface, producing a false-positive NEEDS_TUNING.
+    max_tokens = (
+        _NUM_CTX_PROBE_MAX_TOKENS_THINKING
+        if _is_reasoning_model(provider, resolved)
+        else _NUM_CTX_PROBE_MAX_TOKENS_DEFAULT
+    )
     body.update(
         {
             "model": provider.model,
             "messages": [{"role": "user", "content": user_prompt}],
-            "max_tokens": 32,
+            "max_tokens": max_tokens,
             "temperature": 0,
         }
     )
@@ -799,7 +872,9 @@ async def _probe_num_ctx(provider: ProviderConfig) -> ProbeResult:
     )
 
 
-async def _probe_streaming(provider: ProviderConfig) -> ProbeResult:
+async def _probe_streaming(
+    provider: ProviderConfig, resolved: ResolvedCapabilities
+) -> ProbeResult:
     """v1.0-C Probe — streaming completion path integrity.
 
     Addresses plan.md §9.4 symptom #1 from the **output** side. The v1.0-B
@@ -868,11 +943,18 @@ async def _probe_streaming(provider: ProviderConfig) -> ProbeResult:
     # probing. Top-level probe fields win on collision, matching adapter
     # merge order.
     body: dict[str, Any] = dict(provider.extra_body)
+    # v1.8.2: same thinking-model rationale as num_ctx probe — give
+    # reasoning a budget so the visible content has a chance to surface.
+    max_tokens = (
+        _STREAMING_PROBE_MAX_TOKENS_THINKING
+        if _is_reasoning_model(provider, resolved)
+        else _STREAMING_PROBE_MAX_TOKENS_DEFAULT
+    )
     body.update(
         {
             "model": provider.model,
             "messages": [{"role": "user", "content": _STREAMING_PROBE_USER_PROMPT}],
-            "max_tokens": 128,
+            "max_tokens": max_tokens,
             "temperature": 0,
             "stream": True,
         }
@@ -1506,11 +1588,11 @@ async def check_model(
     # declaration probes (tool_calls / thinking / reasoning-leak) should
     # dominate the report — streaming is the output-side sibling of
     # num_ctx and its NEEDS_TUNING verdict is orthogonal to the others.
-    report.results.append(await _probe_num_ctx(provider))
+    report.results.append(await _probe_num_ctx(provider, resolved))
     report.results.append(await _probe_tool_calls(provider, resolved))
     report.results.append(await _probe_thinking(provider, resolved))
     report.results.append(await _probe_reasoning_leak(provider, resolved))
-    report.results.append(await _probe_streaming(provider))
+    report.results.append(await _probe_streaming(provider, resolved))
     return report
 
 
