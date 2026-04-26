@@ -161,7 +161,7 @@ jobs:
           echo "wrote $(wc -l < release_notes.md) lines"
 
       - name: Create draft release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           # Draft = true so you review the release on GitHub before
           # publishing it. This prevents botched notes from going out
