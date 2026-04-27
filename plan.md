@@ -85,11 +85,39 @@ ChatGPT 等で類似 OSS を調査した結果を整理:
 4. **Reasoning leak scrub (think タグ / stop markers)** — free-claude-code 部分対応、他は基本未対応
 5. **5 deps 据え置き** — LiteLLM 系は依存重い、Go 製は除く
 
-**v1.9 で取りに行く差別化** (競合空白地帯):
+**v1.9 で取りに行く差別化** (競合空白地帯、2026-04-27 詳細調査済):
 
-- **Anthropic prompt caching の cross-backend サポート** — 調査リスト中で誰もやってない先行ポジション
-- **Adaptive routing (実 latency / error 率駆動)** — claude-code-router の plugin と一部被る可能性 (要確認、Task #40)
-- **Cost-aware dashboard with cache savings** — LiteLLM ですら未対応の領域
+- **Anthropic prompt caching の cross-backend サポート** — Claude Code 特化 cluster で唯一。LiteLLM は集計するが **cache_creation_input_tokens 周りで undercounting バグあり** → CodeRouter は最初から正確に設計する好機
+- **Health-based Adaptive routing (実 latency / error 率駆動)** — claude-code-router は **task-based** (`default` / `background` / `think` / `longContext` / `webSearch` で context 種別に切替) で、CodeRouter v1.9-C の **health-based** (provider の実 latency で priority 動的調整) とは **補完的、被らない**。両軸を CodeRouter は既に持つ (auto_router = task-based ルール)、v1.9-C で health-based 追加
+- **Cost-aware dashboard with cache savings** — LiteLLM は cache token を表示するが savings 計算 (cache_read 90% 割引、cache_creation 25% 増し等の Anthropic 価格モデル) を提供してない。CodeRouter は最初から savings 表示込みで設計
+
+**Adaptive routing の 2 軸整理 (重要)**:
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Task-based adaptive routing (プロンプトの種類/内容で切替)    │
+│   - claude-code-router: default/background/think/longContext │
+│   - CodeRouter auto_router: image / code-fence / regex (v1.6) │
+│   - v1.10 候補: longContext threshold (claude-code-router 取込) │
+├─────────────────────────────────────────────────────────────┤
+│ Health-based adaptive routing (provider の実 latency で切替)  │
+│   - 競合調査リスト中で誰も実装していない (2026-04-27 時点)    │
+│   - v1.9-C で取りに行く ← CodeRouter のユニーク領域           │
+└─────────────────────────────────────────────────────────────┘
+```
+
+**LiteLLM の cache 集計バグ (2026-04-27 確認)**:
+
+LiteLLM は `cache_read_input_tokens` / `cache_creation_input_tokens` を Usage object で露出しているが、`cache_creation_input_tokens` を `prompt_tokens` に加算していないため、Langfuse 等の tracing で cost undercounting が報告されている (LiteLLM はデータ取得は正しいが、downstream の合計計算で undercounting)。
+
+→ **CodeRouter v1.9-A/D で 4 分類で厳密に集計**:
+
+| 集計項目 | 内容 |
+|---|---|
+| `total_input_tokens` | `prompt_tokens` 全体 (cache 含む) |
+| `cache_read_input_tokens` | 90% 割引対象 |
+| `cache_creation_input_tokens` | 25% 増し対象 (Anthropic 価格モデル) |
+| `effective_cost` | 上記 3 種類から正確に算出 |
 
 **v1.9 ロードマップ — Adaptive Caching を主軸に (2026-04-27 確定)**:
 
