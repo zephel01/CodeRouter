@@ -119,7 +119,69 @@ LiteLLM は `cache_read_input_tokens` / `cache_creation_input_tokens` を Usage 
 | `cache_creation_input_tokens` | 25% 増し対象 (Anthropic 価格モデル) |
 | `effective_cost` | 上記 3 種類から正確に算出 |
 
-**v1.9 ロードマップ — Adaptive Caching を主軸に (2026-04-27 確定)**:
+**市場機会の 3 圧力 (2026-04-27 観察、CodeRouter vision の追い風)**:
+
+ユーザー観察によると、ローカル LLM の安定性需要は今まさに立ち上がりつつある:
+
+1. **クラウド LLM コスト増** — Anthropic / OpenAI / Gemini の値上げ・rate limit 強化が連続、月 $50-100 払う Pro user が「ローカル併用」を真剣に検討する時期
+2. **Agent/秘書ツールの普及** — OpenClaw / Cline / Continue / Aider / Cowork mode 等の autonomous agent が日常化、**「30 分〜数時間自律実行」が普通の使い方** に。短時間 chat ではなく **「長時間 loop」が新ノルマ**
+3. **ローカル LLM 品質のキャッチアップ** — Qwen3.6 / Gemma 4 / DeepSeek-R1 等で coding 性能が実用レベル到達、LM Studio / Ollama / llama.cpp の運用 UX が急速改善、M-series ハードウェア大衆化
+
+3 圧力が揃ったことで、**「ローカル LLM を 8 時間止まらず動かす」需要が爆発的に増える局面**に入る。CodeRouter は **この瞬間に layer を提供できる先行ポジション**にいる。
+
+**Target Market Segments (TMS)**:
+
+| Segment | 困っていること | CodeRouter で解決される機能 |
+|---|---|---|
+| **A. コスト意識 Claude Code user** | 月 $50-100 払ってる、ローカル併用したい | v1.9-A/B (cache savings) + C (adaptive) + D (cost dashboard) |
+| **B. ★ Agent/秘書ツール user** (**メイン顧客**) | Cline / OpenClaw 等で長時間 loop、不安定 | v1.9-E (Long-run Guards) + v2.0-F/G (context/drift) |
+| **C. プライバシー強制 user** | 法的にクラウド送信不可 | v1.9-E + v2.0 全部 (full local reliability) |
+| **D. ハイブリッド user** | ルーティンはローカル、複雑時だけクラウド | v1.9 全部 |
+
+セグメント B (秘書ツール user) が最も顧客像鮮明、note 記事の訴求も最強。
+
+**v1.9 priority 微調整 (B 優先)**:
+
+旧順序 A → B → C → D → E (cache 系後ろに guard) を:
+
+**新順序 A → B → E → C → D** (cache 観測基盤 → cross-backend → **★長時間 guard 早期投入** → adaptive → cost)
+
+理由: v1.9-E が出ると **「8 時間動かせる」を最初に実証**、これが note 記事 + コミュニティ訴求の最大武器になる。
+
+**Vision: Local LLM で agent を長時間回すための信頼性層 (2026-04-27 確定)**:
+
+CodeRouter のポジショニング・ステートメント:
+
+> 上層 (固定、深追い不要): **Anthropic / OpenAI 標準 API** — Claude Code / Cursor / gemini-cli が共有してる方式、agent はユーザー好みで選んでよい
+>
+> ★ 中層 (本領): **API と backend の間で長時間 agent ループの安定性を保証**
+>
+> 下層 (動的、深追い必要): **Local LLM backend + model** (Ollama / llama.cpp / LM Studio / vLLM + Qwen3 / Gemma 4 / GLM 等)
+
+「Claude Code を 8 時間連続で local LLM に向けて使っても止まらない」を担保する layer。**フロントエンド (agent) 側の breadth は追わない、バックエンド (local LLM) 側の depth に振る**戦略。
+
+**3 pillar に集約** (旧 4 pillar から Multi-agent を de-prioritize):
+
+| Pillar | 内容 | 主な実装軸 |
+|---|---|---|
+| **P1 Connection Stability** | Anthropic ↔ OpenAI 翻訳 + mid-stream guard + backend fallback | 既存強化 + Health-based adaptive routing (v1.9-C) |
+| **P2 Long-run Reliability** | Context budget / Memory pressure / Loop detection / Drift detection | 新規、v1.9-E + v2.0-F/G で実装 |
+| **P3 Diagnostic + Evidence** | doctor 6-probe + model-capabilities.yaml + continuous probing + public benchmark | 既存強化 + 自動更新 (v2.0-I) |
+
+**長時間運用で起きる 6 系統障害の体系化** (これが CodeRouter の存在意義):
+
+| # | 障害 | 症状 | 対処 sub-release |
+|---|---|---|---|
+| **L1** | Context overflow | 会話が長くなり model context window を超える | v2.0-F: Context budget management |
+| **L2** | Memory pressure | Ollama / LM Studio が OOM、swap 発生 | v1.9-E: Memory pressure awareness |
+| **L3** | Tool loop | tool call の無限ループ | v1.9-E: Loop detection |
+| **L4** | Quality drift | 長時間で model 応答の品質劣化 (KV cache / context 圧迫) | v2.0-G: Drift detection |
+| **L5** | Backend crash | LM Studio GUI 閉じた / Ollama systemd 死亡 | v1.9-E: Backend health monitoring (continuous probe) |
+| **L6** | Mid-stream interrupt | 生成途中で接続切れ / 失敗 | v0.3-A 既存 (mid-stream guard)、v2.0-H で partial stitching 強化 |
+
+L1〜L5 は競合プロジェクト (Claude Code 特化 / Generic gateway) いずれも体系的に対処していない領域。**Local LLM が production で本格的に長時間使われるようになる前に layer を作っておく**ことで defacto を狙う。
+
+**v1.9 ロードマップ — Adaptive Caching + Long-run Guards (2026-04-27 refinement)**:
 
 LM Studio 0.4.12 で Anthropic 互換 `/v1/messages` が公式化され、ローカル LLM で `cache_read_input_tokens` まで成立する状況を実機で確認。CodeRouter の v1.9 系では **「翻訳」から「routing intelligence + observability」への重心移動**を 4 sub-release で進める。
 
@@ -129,6 +191,7 @@ LM Studio 0.4.12 で Anthropic 互換 `/v1/messages` が公式化され、ロー
 | **v1.9-B** | **Cross-backend cache passthrough + capability gate** — `kind: anthropic` で cache_control passthrough 確認、registry に `capabilities.cache_control` 追加、doctor に cache probe 新設 (upstream に cache_control 付き request → `cache_read_input_tokens` 観測)、`openai_compat` 系で capability gate warn | ~300-400 LOC、tests +8 | 5-7 日 |
 | **v1.9-C** | **Adaptive Routing** — 実 latency / error rate を rolling window で記録、`providers.yaml` で opt-in (`adaptive: true`)、chain static order に dynamic 補正、デバウンス、dashboard で現在の effective chain order 可視化 | ~500-700 LOC、tests +12 | 1-2 週間 |
 | **v1.9-D** | **Cost-aware Dashboard** — provider 別 cost config、累積 cost 表示、**cache hit による savings 別枠** (cache_read_input_tokens × 90% 割引)、1 日 / 1 週間累積、`coderouter stats --cost` で TUI | ~300-500 LOC、tests +8 | 5-7 日 |
+| **v1.9-E** | **Long-run Guards 三段** (vision の核心): (1) **Memory pressure awareness** (L2 対処): backend 残メモリを probe、しきい値超過時に軽量 model に自動切替、(2) **Tool loop detection** (L3 対処): 直近 N 件の tool args 重複を検出、しきい値で break + 警告、(3) **Backend health continuous monitoring** (L5 対処): 受動 (request fail) + 能動 probe、crash 検出で fallback chain 自動 promote | ~600-900 LOC、tests +15 | 1-2 週間 |
 
 **v1.9 全体の note 記事計画** (4 連作の続き):
 
