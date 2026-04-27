@@ -53,6 +53,77 @@
 | 5 | ✅ **用途別 4 プロファイル** | examples/providers.yaml に `multi`/`coding`/`general`/`reasoning` + `append_system_prompt` + `mode_aliases` | v1.8.0 |
 | 6 | ✅ **Gemma 4 / Qwen3.6 / Z.AI 登録** | Ollama 公式 tag 化されたモデル群と Z.AI Coding Plan / General API を providers.yaml に登録 | v1.8.0 |
 
+**競合分析と差別化ポジション (2026-04-27 調査)**:
+
+ChatGPT 等で類似 OSS を調査した結果を整理:
+
+**Claude Code 特化 cluster** (6+ projects):
+
+| プロジェクト | URL | 特徴 | CodeRouter との差 |
+|---|---|---|---|
+| `free-claude-code` | https://github.com/Alishahryar1/free-claude-code | Claude Code 専用軽量プロキシ、NIM/OpenRouter/Ollama/llama.cpp、thinking + tool-call 対応 | 機能セット最も近い、tool repair / reasoning scrub / doctor は CodeRouter が強い |
+| `claude-code-router` | https://github.com/musistudio/claude-code-router | タスク別動的 routing、Transformer/plugin (TS) | 高度カスタム routing、軽量さと fallback 明示性は CodeRouter 優勢 |
+| `9Router` | https://github.com/decolua/9router | 全 coding tool 対応 (Cursor / Copilot / Gemini)、40+ プロバイダ | 対応ツール広い、CodeRouter は coding agent 特化を維持 |
+| `UniClaudeProxy` | https://github.com/vibheksoni/UniClaudeProxy | Anthropic→OpenAI/Gemini/DeepSeek/Ollama 翻訳、tool-calling 対応 | シンプル/速い、CodeRouter の repair 機能類似 |
+| `claude-code-proxy` 系 | (複数) | Claude→OpenAI 翻訳 (LiteLLM ベース多い) | LiteLLM 依存、CodeRouter は純粋 Python |
+| `FreeRouter` | https://github.com/openfreerouter/freerouter | OpenRouter/ClawRouter 代替、14 次元分類器 | 複雑さベース自動選択 |
+
+**Generic LLM Gateway cluster**:
+
+| プロジェクト | 特徴 | 備考 |
+|---|---|---|
+| `LiteLLM` | 100+ プロバイダ統一、cost 追跡、fallback、guardrail | 巨人。CodeRouter は「軽量 + coding 特化 + tool repair」で差別化 |
+| `Bifrost` | Go 製、50x 高速、企業向け load balancer | 性能面代替 |
+| `Portkey Gateway` | 1600+ モデル、guardrail、超高速 | 軽量本番向き |
+| `BricksLLM` | Go 企業向け、rate-limit / コスト制限 / PII 検知 | 監視特化 |
+
+**CodeRouter の唯一無二の強み (調査リスト範囲で確認、2026-04-27 時点)**:
+
+1. **`doctor` 6-probe 診断 + YAML auto-patch** — 完全独自 (どの競合にもない)
+2. **bundled `model-capabilities.yaml`** — declarative capability layer (独自)
+3. **Tool-call repair (text-JSON → native tool_use)** — UniClaudeProxy 一部対応、free-claude-code 部分対応、他なし
+4. **Reasoning leak scrub (think タグ / stop markers)** — free-claude-code 部分対応、他は基本未対応
+5. **5 deps 据え置き** — LiteLLM 系は依存重い、Go 製は除く
+
+**v1.9 で取りに行く差別化** (競合空白地帯):
+
+- **Anthropic prompt caching の cross-backend サポート** — 調査リスト中で誰もやってない先行ポジション
+- **Adaptive routing (実 latency / error 率駆動)** — claude-code-router の plugin と一部被る可能性 (要確認、Task #40)
+- **Cost-aware dashboard with cache savings** — LiteLLM ですら未対応の領域
+
+**v1.9 ロードマップ — Adaptive Caching を主軸に (2026-04-27 確定)**:
+
+LM Studio 0.4.12 で Anthropic 互換 `/v1/messages` が公式化され、ローカル LLM で `cache_read_input_tokens` まで成立する状況を実機で確認。CodeRouter の v1.9 系では **「翻訳」から「routing intelligence + observability」への重心移動**を 4 sub-release で進める。
+
+| Sub-release | 内容 | 規模 | 想定期間 |
+| --- | --- | --- | --- |
+| **v1.9-A** | **Cache Observability** — Request 側で `cache_control` 検出 + log、Response 側で `cache_read_input_tokens` / `cache_creation_input_tokens` を metrics 集計、dashboard / `/metrics.json` で provider 別 cache hit 率を可視化 | ~200-300 LOC、tests +5 | 3-5 日 |
+| **v1.9-B** | **Cross-backend cache passthrough + capability gate** — `kind: anthropic` で cache_control passthrough 確認、registry に `capabilities.cache_control` 追加、doctor に cache probe 新設 (upstream に cache_control 付き request → `cache_read_input_tokens` 観測)、`openai_compat` 系で capability gate warn | ~300-400 LOC、tests +8 | 5-7 日 |
+| **v1.9-C** | **Adaptive Routing** — 実 latency / error rate を rolling window で記録、`providers.yaml` で opt-in (`adaptive: true`)、chain static order に dynamic 補正、デバウンス、dashboard で現在の effective chain order 可視化 | ~500-700 LOC、tests +12 | 1-2 週間 |
+| **v1.9-D** | **Cost-aware Dashboard** — provider 別 cost config、累積 cost 表示、**cache hit による savings 別枠** (cache_read_input_tokens × 90% 割引)、1 日 / 1 週間累積、`coderouter stats --cost` で TUI | ~300-500 LOC、tests +8 | 5-7 日 |
+
+**v1.9 全体の note 記事計画** (4 連作の続き):
+
+- v1.9-A 後: 「ローカル LLM で Anthropic prompt caching の動作を可視化した話」
+- v1.9-B 後: 「CodeRouter を Anthropic prompt caching aware にした実装記録」
+- v1.9-C 後: 「Adaptive routing を実装した記録 — 実 latency に基づく動的 priority」
+- v1.9-D 後 (umbrella): 「Adaptive caching で実コストが下がった話 — v1.9 まとめ」
+
+**Reactive 追加 (トレンド発火時のみ)**:
+
+「案 1 をメイン軸、トレンド追従は reactive に」方針 (2026-04-27 個人決定)。以下のいずれかが起きた時のみ、v1.9 計画に追加検討する:
+
+1. **新 backend major update** (LM Studio / Ollama / llama.cpp / vLLM / MLX-LM) — release notes 確認 → CodeRouter 関連改善があれば 1-2 日で `examples/providers.yaml` + 検証記事
+2. **新モデル登場** (Qwen / Gemma / GLM / Llama 等の major version) — bundled `model-capabilities.yaml` に capability 宣言追加
+3. **Anthropic API spec 変更** (新 endpoint、新 capability、新 cache 機構) — adapter 更新
+4. **Claude Code 挙動変化** — 実機検証 → adapter 修正
+5. **コミュニティ PR / issue** — レビュー → merge or close (issue #10 のスタイル)
+6. **競合 OSS の新機能** — 追従するか差別化するか判断
+
+これら 6 種類以外のトレンドは **無視して v1.9-A → D を粛々と進める**。「reactive but focused」の運用ルール。
+
+---
+
 **v1.7-C 候補 (実需要待ち、§11.B.5)**:
 
 | 領域 | 内容 | トリガ条件 |
