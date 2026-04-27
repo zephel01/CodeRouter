@@ -133,6 +133,86 @@ huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
 
 → CodeRouter 側の providers.yaml に **llama.cpp 直叩き例** を追加可能 (Task #23 着手済)。残るは (a) doctor / CodeRouter 経由 end-to-end 確認、(b) `reasoning_content` strip の v1.8.3 patch、(c) Qwopus3.5 (qwen35 architecture) の llama.cpp PR 状況確認。
 
+**ローカル backend 別接続マトリクス + テスト方針 (2026-04-26 整理)**:
+
+CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Studio / vLLM / MLX-LM** いずれにも繋がる設計。各 backend の接続レシピと doctor probe での検証方法を以下にまとめる。
+
+| Backend | デフォルトポート | `base_url` (CodeRouter から) | 検証ステータス | 専用 doc |
+| --- | --- | --- | --- | --- |
+| **Ollama** | `11434` | `http://localhost:11434/v1` | ✅ v0.x 〜 v1.8.x 通して継続検証 | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
+| **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
+| **LM Studio** | `1234` | `http://localhost:1234/v1` | ⏳ TODO (接続手順は判明済、tool_calls / reasoning フィールド命名の実機検証待ち) | (新規 `docs/lmstudio-direct.md` を v1.9 で予定) |
+| **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | ⏳ TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外) | TBD |
+| **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | ⏳ TODO (Mac native、量子化が Apple Silicon 最適化) | TBD |
+
+### 共通の検証手順 (どの backend にも適用可)
+
+1. **server 起動** — backend ごとの方法でモデルをロード + OpenAI 互換 API を listen させる
+2. **CodeRouter `providers.yaml` に provider 定義を追加** — `kind: openai_compat` + 該当 `base_url`、必要に応じて `capabilities.thinking: true` (reasoning モデル時)
+3. **`coderouter doctor --check-model <name>`** で 6 probe (`auth+basic-chat / num_ctx / tool_calls / thinking / reasoning-leak / streaming`) を回す
+4. **CodeRouter 経由 Anthropic 互換 curl で end-to-end 1 round-trip** を確認
+5. NEEDS_TUNING が出たら `--apply` で patch 自動適用 → 再 probe
+
+### 各 backend で確認すべき固有ポイント
+
+| Backend | 確認ポイント |
+|---|---|
+| **Ollama** | `/api/chat` (native) と `/v1/chat/completions` (OpenAI-compat) で挙動差異あり、`extra_body.options.num_ctx` の効き、Modelfile の `PARAMETER num_ctx` 焼き込み、新 architecture の `unknown model architecture` 500 エラー |
+| **llama.cpp** | `--jinja` で chat template が効くか、`reasoning_content` フィールド名 (Ollama は `reasoning`)、Metal / CUDA build flag、Unsloth Dynamic Quantization (UD-Q4_K_M) の精度優位 |
+| **LM Studio** | OpenAI 互換 endpoint の挙動が Ollama / llama.cpp と微妙に違う可能性、reasoning フィールドの命名、UI で context length / max tokens を server start 時に指定する必要 |
+| **vLLM** | `--enable-auto-tool-choice` フラグ、tool spec 形式 (Hermes / Mistral / Llama3 のどれを採用するか)、Continuous batching の動作 |
+| **MLX-LM** | Apple Silicon 専用、`mlx_lm.server` 起動時の量子化指定、tool_calls 対応状況 (やや限定的の可能性) |
+
+### LM Studio 接続レシピ案 (v1.9 で実機検証予定)
+
+```bash
+# 1. LM Studio 本体を https://lmstudio.ai/ からダウンロード + インストール
+# 2. GUI でモデル (例: gemma-4-26b、qwen3.6 等) をダウンロード + ロード
+# 3. GUI の "Local Server" タブから:
+#    - Port: 1234 (default)
+#    - "Start Server" をクリック
+#    - "Just-in-time model loading" を有効化すると複数モデルを切替可能
+```
+
+```yaml
+# ~/.coderouter/providers.yaml に追加
+- name: lmstudio-gemma4-26b
+  kind: openai_compat
+  base_url: http://localhost:1234/v1
+  model: gemma-4-26b              # LM Studio の GUI に表示される model ID
+  paid: false
+  api_key_env: null                # LM Studio default は無認証
+  timeout_s: 120
+  capabilities:
+    chat: true
+    streaming: true
+    tools: true                    # 実機検証で確定
+    thinking: true                 # reasoning モデル時、doctor が 1024 budget を使う
+  output_filters:
+    - strip_thinking
+```
+
+```bash
+# 4. CodeRouter doctor で 6 probe 確認
+coderouter doctor --check-model lmstudio-gemma4-26b
+
+# 期待:
+# [1/6] auth+basic-chat …… [OK]
+# [2/6] num_ctx ………………… [SKIP]      ← port 1234、Ollama-shape ではない
+# [3/6] tool_calls ………… [OK or NEEDS_TUNING]   ← LM Studio 仕様次第
+# [5/6] reasoning-leak …… [OK]
+# [6/6] streaming ………… [SKIP]
+```
+
+実機検証の TODO リスト (LM Studio):
+
+- [ ] LM Studio に Qwen3.6:35b-a3b の Unsloth GGUF を読み込ませて動作確認 (llama.cpp 直叩きと等価か)
+- [ ] LM Studio が emit する reasoning フィールド名は何か (`reasoning` / `reasoning_content` / 独自) — adapter strip 対象を更新する必要があるか確認
+- [ ] tool_calls の native 出力 / repairable JSON / 完全テキストのどれか
+- [ ] streaming `[DONE]` フレーミングの仕様 (SSE 標準 or 独自)
+- [ ] context length を runtime で変更できるか (server 起動時固定か、リクエスト ごとか)
+- [ ] 検証結果を `docs/lmstudio-direct.md` (新規) にまとめる
+
 **v1.0 残スコープ (v2.0 計画の手前で着手、§11.B.6)**:
 
 | 領域 | 内容 | 着手予定 |
