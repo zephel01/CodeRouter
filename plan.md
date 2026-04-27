@@ -3,299 +3,58 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-04-26
+最終更新: 2026-04-27
 作成者: zephel01
-状態: **v1.8.3 — tool_calls probe も thinking 対応 + adapter で `reasoning_content` strip** (2026-04-26) — v1.8.2 同日リリースの第 2 弾 patch。Qwen3.6:35b-a3b on llama.cpp 実機検証 (M3 Max 64GB / Unsloth UD-Q4_K_M GGUF) で発見した 2 つの追加課題: (1) `_probe_tool_calls` の `max_tokens=64` が thinking モデル `reasoning_content` トークン消費に食い切られ偽陽性 NEEDS_TUNING + 真逆の suggested patch (`tools: false`) を出す active-harmful 誤診断、v1.8.2 で num_ctx / streaming に対して直したのと同じバグ pattern を tool_calls にも適用 (256/1024 budget)、(2) llama.cpp の `reasoning_content` フィールド (Ollama / OpenRouter は `reasoning`) が openai_compat adapter strip 対象に入っていなかった、`_NON_STANDARD_REASONING_KEYS = ("reasoning", "reasoning_content")` で両方 strip。**Ollama 経由詰み Qwen3.6 の真因が完全確定**: Ollama chat template / tool 仕様未成熟、モデル本体は健全で llama.cpp 直叩きでは native tool_calls が完璧に動作。733 → **737 tests green** (+4)、Runtime deps 据え置き (21 sub-release 連続)。詳細は CHANGELOG.md `[v1.8.3]`。直前: **v1.8.2 — doctor probe を thinking モデル対応に** (2026-04-26) — v1.8.1 出荷直後の深掘りで `doctor` の `num_ctx` / `streaming` probe が thinking モデル (Gemma 4 26B、Qwen3.6 系) に対して reasoning トークン消費分を見ていない `max_tokens=32` / `128` バジェットで偽陽性 NEEDS_TUNING を出していた事実を発見、probe バジェットを `_is_reasoning_model()` ヘルパで thinking 検出付きの動的選択に変更 (num_ctx 32→256/1024、streaming 128→512/1024)。bundled `model-capabilities.yaml` で `gemma4:*` / `qwen3.6:*` に `thinking: true` 宣言追加。**Gemma 4 26B は実機で完全動作確認** (`/v1/messages` Anthropic 互換経由で "Hello." を 2 秒応答、tool_calls native OK、reasoning strip 動作)、Qwen3.6 系の `tool_calls [NEEDS TUNING]` は thinking 起因とは別の真の課題として残る。730 → **733 tests green** (+3)、Runtime deps 据え置き (20 sub-release 連続)。**メタ教訓**: diagnostic ツール自身も diagnostic され続ける必要がある (plan.md §5.4 の補強)。詳細は CHANGELOG.md `[v1.8.2]`。直前: **v1.8.1 — 実機検証反映 patch** (2026-04-26) — v1.8.0 出荷直後の実機検証 (M3 Max 64GB / Ollama 0.21.2) で踏んだ問題 3 件 (mode_aliases startup 解決バグ / Qwen3.6 系 Ollama 動作課題 / Qwen3.5 系 llama.cpp 未対応) を patch で解消。loader.py の env_mode を mode_aliases 経由解決に修正、examples/providers.yaml の `coding` profile primary を Qwen3.6 → Gemma 4 + Qwen-Coder family に調整、bundled `qwen3.6:*` の `claude_code_suitability: ok` を撤回 (declaration 過信の例)、troubleshooting.md §4-2「ローカル Ollama 経由の Known Issues」新設 (Qwen3.6 silent cap / Qwen3.5 architecture 未対応 / Gemma 4 tool_calls OK)。**「先回り実装より実機 evidence」原則 (§5.4) を再確認**。729 → **730 tests green** (+1)、Runtime deps 据え置き (19 sub-release 連続)。詳細は CHANGELOG.md `[v1.8.1]`。直前: **v1.8.0 — 用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化** (2026-04-26) — `git clone + uv tool install --from git+...` の onboarding 摩擦をゼロにする minor。PyPI に **`coderouter-cli`** として publish (既存の `coderouter` 名前空間が別作者の HTTP routing 系汎用ライブラリで取得済みのため `*-cli` suffix で取得; **Python import / console script 名は `coderouter` のまま**)、`coderouter/__init__.py` の `version()` lookup 追従、`pyproject.toml` の classifiers / project.urls / keywords を publish 用に enrich、`tool.hatch.build.targets.sdist` を `only-include` 厳格 allowlist 化 (どのマシンでも 668 KB sdist + 161 KB wheel)、`LICENSE` ファイル新設、`.github/workflows/release.yml` で Trusted Publishing (OIDC) 経路を整備 (初回 v1.7.0 は手動 publish、以降 tag push で自動)。README ja/en、quickstart ja/en、free-tier-guide ja/en の install セクションを `uvx coderouter-cli` 中心に書き換え、(a) `uvx` 都度起動 / (b) `uv tool install` 恒久 / (c) `git clone + uv sync` ソース開発の 3 経路を明示。Runtime / API 挙動は v1.6.3 から完全に変化なし、tests 651 → 651 (±0、配布周りのみ)、Runtime deps 据え置き (17 sub-release 連続)。残り (v1.7-B 以降): `setup.sh` セットアップウィザード / `coderouter doctor --network` (CI 用) / launcher (`.command` / `.sh` / `.bat`) / 起動時アップデートチェック / capability registry の `claude_code_suitability` hint。詳細は CHANGELOG.md `[v1.7.0]`。直前: **v1.6.3 — `--env-file` + `doctor --check-env` for `.env` hygiene** (2026-04-24) — v1.6.2 で文書化した「`.env` の `export` 漏れ罠」をコマンドで解消する 2 機能を投入。`coderouter serve --env-file PATH` (1Password CLI / direnv+sops / OS Keychain との gateway、複数指定で left-to-right layering、shell 優先 / `--env-file-override` で反転)、`coderouter doctor --check-env [PATH]` (existence / POSIX 0600 / `.gitignore` 包含 / git tracking の 4 項目検査、`--check-model` と同 exit code 規約 0/2/1)、stdlib-only `.env` parser (1Password / sops 出力の subset 網羅)、`docs/troubleshooting.md` / `.en.md` §5「`.env` のセキュリティ運用」7 サブセクション (脅威モデル + 1Password CLI / direnv+sops / OS Keychain の 3 連携レシピ + `--env-file` layering + 自前暗号化を実装しない判断の明文化)。601 → **651 tests green** (+50: env_file 26 + env_security 15 + cli 8 + 1 renamed)、Runtime deps 据え置き (16 sub-release 連続)。直前: **v1.6.2 — Troubleshooting split-out + `.env` / NIM YAML hygiene** (2026-04-24) — v1.6.1 出荷後の実機運用で踏んだ罠を docs / examples 側に集約する小さな release。`docs/troubleshooting.md` / `.en.md` 新規 (README §トラブルシューティングを独立化、5 トピック: CLI 訂正 / `.env` の `export` 必須 / `Header of type authorization was missing` 401 切り分け / Llama-3.3-70B 過剰ツール呼び出し / `UserPromptSubmit hook error` (claude-mem 等プラグイン相性))、README §トラブルシューティング短縮 (30 秒早見表 + 症状別 4 入口索引)、`examples/.env.example` 全キー `export` 必須化、`examples/providers.nvidia-nim.yaml` 4 プロファイル並び替え (Llama-3.3-70B を最後尾に、Qwen3-Coder-480B を第一選択に)。601 → 601 tests green (±0、コード変更なし)、Runtime deps 据え置き (15 sub-release 連続)。直前: **v1.6.1 — NIM free-tier + doc hygiene** (2026-04-23) — v1.6.0 `auto_router` 出荷直後の patch-level。3 系統を 1 release に束ねた: (1) **NVIDIA NIM 無料枠 (40 req/min) 対応** — `examples/providers.nvidia-nim.yaml` 新設、live 検証 (2026-04-23) 済みの 3 tool-capable モデル (`meta/llama-3.3-70b-instruct` / `qwen/qwen3-coder-480b-a35b-instruct` / `moonshotai/kimi-k2-instruct`) + `qwen/qwen2.5-coder-32b-instruct` を `tools: false` で gated させる chat-only stanza + `nim-reasoning` プロファイル用 `moonshotai/kimi-k2-thinking`、`claude-code-nim` / `nim-first` / `free-only-nim` / `nim-reasoning` の 4 プロファイルで local → NIM → OpenRouter free → paid の 8 段 fallback を提供。`tests/test_examples_yaml.py` 新設で example YAML 全件ロード + NIM 固有 invariants (`api_key_env=NVIDIA_NIM_API_KEY` / `base_url=https://integrate.api.nvidia.com/v1` / tool-capable 枝の `tools: true` / chat-only 枝の `tools: false` / `nim-kimi-k2-thinking` がプライマリチェーン不在) を CI 時に強制、**596 → 601 tests green (+5)**。(2) **ドキュメント言語優先度スワップ** — README.md / docs/{usage-guide,security,quickstart,when-do-i-need-coderouter}.md の 5 ペアを `git mv` で「日本語 main / 英語 sub (`.en.md`)」に入れ替え、PyPI (`pyproject.toml readme = "README.md"`) も日本語 readme に切替。クロスリファレンス 20+ 箇所 (両 README の言語スイッチャー、docs 内部リンク、GitHub blob URL in `docs/articles/note-*.md` / `zenn-*.md`) を同時更新、全 `.md` リンク解決を walker で検証。(3) **README ヒーロー書き換え** — 汎用の「Local-first coding AI with ZERO cost」タグラインから「Claude Code × ローカル LLM tool calling 破綻 → CodeRouter の tool-call 修復で復元」という最強のピッチを最前面に。GIF placeholder (`docs/assets/before-after-toolcall.gif`) を HTML comment で予約、撮影できたらコメントアウト外すだけ。加えて (4) **`docs/free-tier-guide.md` 新規** — NIM + OpenRouter 無料枠の使い分けを live 検証済みデータと together に 250+ 行でまとめた reference doc (JA primary + EN sub)、README.md + `docs/usage-guide.md` §6 から双方向リンク。(5) **`coderouter/__init__.py` fix** — `__version__` を hardcode (`"1.5.0"`) から `importlib.metadata.version("coderouter")` 経由に切替、以降 `pyproject.toml` の `version` 1 行が single source of truth。直前: **v1.6.0 — auto_router (task-aware routing)** (2026-04-22) — plan.md §11 を 3 sub-release で受け、`default_profile: auto` sentinel + `RuleMatcher` (4 variant: `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex`) + `AutoRouteRule` / `AutoRouterConfig` の pydantic schema + bundled ruleset (image → `multi` / code-fence ≥ 0.3 → `coding` / else → `writing`) を投入。ingress 両面 (`/v1/messages` と `/v1/chat/completions`) の precedence chain に `default_profile == "auto"` 時のみ発火する auto slot を挿入、`auto_router_fallthrough_total` Prometheus counter を新設。example YAML 2 本 (`providers.auto.yaml` zero-config / `providers.auto-custom.yaml` 中級者向け copy-edit 起点) + `docs/quickstart.ja.md` の「補足: プロファイル選択を CodeRouter に任せる」セクション追加。527 → 596 tests green (+69, +13.1%)、Runtime deps 据え置き (13 sub-release 連続)。詳細は CHANGELOG.md `[v1.6.0]`。直前: **v1.5.0 — Observability pillar** (2026-04-22) — 計測ダッシュボード丸ごと 1 minor で出荷。§12 に literal に書かれていたスコープを A→B→C→D→E の 5 サブリリースに slice して投入。**v1.5-A** `MetricsCollector` (logging.Handler 経由で既存 structured log を in-memory ring に集約、毎秒 snapshot) + `GET /metrics.json` (配列 / カウンタ / `recent` 50 件 ring / `startup`) でまず "見える" を成立。**v1.5-B** `coderouter_*` プレフィクスの Prometheus text exposition 出力 (`GET /metrics`) + optional JSONL mirror (`$CODEROUTER_EVENTS_PATH` 設定時のみ、snapshot と完全に独立した side-effect) でスクレイパー / 長期保存の両経路を開通。**v1.5-C** stdlib `curses` + `urllib` だけで動く `coderouter stats` CLI TUI (5 パネル: Providers / Fallback & Gates / Requests/min sparkline / Recent Events / Usage Mix) + `--once` mode (TTY 不在でも単発レンダー、CI / pipe 用)。**v1.5-D** `/dashboard` HTML 1 ページ (tailwind CDN + fetch polling、2 秒ごとに `/metrics.json` を再取得、tab 切り替え不要の固定 1 画面)。**v1.5-E** `display_timezone` config フィールド (`providers.yaml` top-level、任意、IANA zone 名、未設定時は UTC) で CLI TUI / HTML dashboard 両方の timestamp 表示を切替 — 集約された UTC 時刻は保持したまま **表示層だけ**変換、`/metrics.json` の `config.display_timezone` 経由で JS 側に伝搬。加えて `scripts/demo_traffic.sh` (traffic generator、weighted scenario picker、`--duration` / `--serve` / `--dry-run` / banner + scenario table、bash 3.2 互換) を同梱し、README にライブ dashboard のスクショを追加 (`docs/assets/dashboard-demo.png`)。**457 → 527 tests green (+70, +15.3%)**、Runtime deps 維持 (curses + urllib は stdlib、tailwind は CDN、Prometheus 形式は自前文字列生成で SDK 依存ゼロ — 12+ sub-release 連続で依存数据え置き)。semver 上は plan.md §12 (計測ダッシュボード) を丸ごと受ける minor、`v1.0.1 → v1.5.0` で §11 (旧 v1.1 = 配布 / launcher / doctor) を飛ばしているため、§11 ヘッダは "v1.6" にリラベル済み。詳細は CHANGELOG.md `[v1.5.0]`。直前: **v1.0.1 — Hygiene pass** (2026-04-21) — v1.0.0 umbrella のあと、足回り 3 点を 1 release で消化。(1) `coderouter/errors.py` に root `CodeRouterError(Exception)` を新設、既存 3 leaf (`AdapterError` / `NoProvidersAvailableError` / `MidStreamError`) の基底を差し替え + top-level re-export で downstream integrator が `except CodeRouterError` 一文で router-side failure を wholesale catch 可能に (import パス完全非破壊)。(2) docstring 網羅率 **75.6% → 91.2%** (`interrogate coderouter` 基準) — public API 系ファイル全て 100%、残 21 は真の internal / stream-state plumbing のみ。(3) mypy `--strict` **0 errors** を確認 (ingress の `response_model=None` / fallback の `isinstance` narrowing / `StreamChunk.usage` 明示宣言)。+4 tests (`tests/test_errors.py` 継承 invariant guard) で計 **457 green**。semver 上 patch-level。詳細は CHANGELOG.md `[v1.0.1]`。直前: **v1.0.0 umbrella** (2026-04-20) — v1.0-A / v1.0-B / v1.0-C の 3 sub-release を束ねる umbrella tag。narrative layer は [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md) — "The observation loop, closed"。v0.7 retrospective で予告した "transformation には probe が伴う" 原則を具体化した minor で、**v1.0-A** 宣言的 `output_filters` filter chain (streaming + non-streaming stateful、OpenAI-compat + Anthropic native 両 adapter hook、per-text-block chain isolation) + doctor reasoning-leak probe 拡張 (transformation と probe を同一 release で同梱)、**v1.0-B** `_probe_num_ctx` で input-side truncation を直接検出 (canary `ZEBRA-MOON-847` echo-back / 5-verdict branch / `extra_body.options.num_ctx: 32768` patch)、**v1.0-C** `_probe_streaming` で output-side truncation を直接検出 (`"Count from 1 to 30"` deterministic prompt / `finish_reason="length"` + 短 content / `extra_body.options.num_predict: 4096` patch / 2xx-0-chunk advisory) — Ollama の 2-knob silent-fail 両面を観測可能に。`_is_ollama_like` 2-signal gate (`:11434` port OR `extra_body.options.num_ctx` declared) を v1.0-B で定義 → v1.0-C が verbatim 再利用。Probe 順序は symptom-orthogonality heuristic で決定 — `num_ctx` が chain 先頭寄り (`auth → num_ctx → tool_calls → thinking → reasoning-leak → streaming`、`num_ctx` は tool_calls 誤検出を塗り潰すため先頭、`streaming` は直交軸なので末尾)。併せて **v1.0-verify** として 3-scenario 実機 runner (`scripts/verify_v1_0.sh`) + `verify-ollama-bare` / `verify-ollama-tuned` provider pair を整備 — v0.5-verify の bare/tuned delta assertion pattern を 2nd instance として再利用、evidence は [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。計 **453 tests green** (382 → 431 → 441 → 453、v1.0 系で +71, +18.6%)、Runtime deps 維持 (pure-Python scanner / 文字列 SSE parse、10+ sub-release 連続で SDK 依存ゼロ)。直前の umbrella: v0.7.0 — Beginner UX, made legible ([`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md))。
+状態: **v1.8.4 — LM Studio 0.4.12 検証 release** (2026-04-27、PyPI 未 publish の検証 release)。Qwen3.5 9B / Qwen3.6 35B-A3B / `Jackrong/Qwopus3.5-9B-v3-GGUF` の 3 model が LM Studio 経由で完全動作 (OpenAI 互換 native tool_calls + Anthropic 互換 tool_use 両ルート)、`cache_read_input_tokens: 280` 観測で Anthropic prompt caching まで成立。CodeRouter 側追加コード不要、`examples/providers.yaml` に `lmstudio-*` 4 entry + test profile 2 件追加。直前の出荷は v1.8.3 (2026-04-26、PyPI 公開済、tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip)。
+- **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
+- **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: 内部メモとして別途整理 (公開リポジトリには含まれない)
+- **本ドキュメント**: 現在進行中の実装スケジュール (v1.9 系) + ローカル backend 別接続マトリクス + 検討中 / やらないこと
 
-### ステータスサマリ — 実施済み / 未実施 / 検討中
+### 実装スケジュール
 
-> 最新版 (v1.8.2、2026-04-26) 時点での実装状況を **領域別** に at-a-glance で。詳細は下の「リリース履歴（概要）」、§6.2「リリース履歴 (詳細)」、§18「実装ログ & 残アクション」を参照。
+> 過去の出荷済み機能・リリース詳細は [`CHANGELOG.md`](./CHANGELOG.md) を参照。
+> 本ドキュメントは **現在進行中 (v1.9) 系の実装スケジュール** に集中。長期 Vision / 競合分析 / 市場分析等は内部メモとして別途整理 (公開しない)。
 
-#### ✅ 実施済み (出荷済み)
+#### 進行中: v1.9 ロードマップ (Adaptive Caching + Long-run Guards)
 
-| 領域 | 内容 | 出荷バージョン |
-| --- | --- | --- |
-| **Wire 翻訳 / ingress** | OpenAI ⇄ Anthropic 双方向 (`/v1/messages` + `/v1/chat/completions`)、native passthrough、tool-call 修復 (text JSON → `tool_use`)、SSE downgrade、`anthropic-beta` header passthrough | v0.1〜v0.4 |
-| **Mid-stream guard** | first-byte 後の上流失敗を `event: error` 1 発に閉じ、フランケン応答を出さない | v0.3-B |
-| **Capability gate trio** | `thinking` / `cache_control` / `reasoning` の宣言的ゲート + `capability-degraded` 統一ログ契約 | v0.5-A/B/C |
-| **Mode / profile UX** | `--mode` CLI / `CODEROUTER_MODE` env、profile-level `timeout_s` / `append_system_prompt` 上書き、宣言的 `ALLOW_PAID` gate、`mode_aliases` + `X-CodeRouter-Mode` header | v0.6-A/B/C/D |
-| **Capability registry** | `model-capabilities.yaml` (bundled + user 2 層、first-match-per-flag、glob `match`) | v0.7-A |
-| **Doctor — モデル/構成診断** | `coderouter doctor --check-model <provider>` 6 プローブ (auth / num_ctx / tool_calls / thinking / reasoning-leak / streaming) + コピペ YAML パッチ、exit 0/2/1 | v0.7-B → v1.0-B/C |
-| **Doctor — `.env` 衛生** | `coderouter doctor --check-env [PATH]` (existence / POSIX 0600 / `.gitignore` 包含 / git tracking) | v1.6.3 |
-| **出力クリーニング** | `output_filters: [strip_thinking, strip_stop_markers]` chain (streaming + non-streaming stateful、SSE chunk 境界跨ぎ対応) | v1.0-A |
-| **Public API surface** | `CodeRouterError` root 例外、docstring 91.2%、mypy `--strict` 0 errors | v1.0.1 |
-| **Observability pillar** | `MetricsCollector` / `GET /metrics.json` / Prometheus `GET /metrics` / JSONL mirror / `GET /dashboard` HTML / `coderouter stats` curses TUI / `display_timezone` / `scripts/demo_traffic.sh` | v1.5 (A〜F) |
-| **Auto router** | `default_profile: auto` で task-aware routing (画像→`multi` / コードフェンス比率 ≥0.3→`coding` / 他→`writing`、4 種 RuleMatcher で user-customizable) | v1.6.0 |
-| **NVIDIA NIM 無料枠 (40 req/min)** | `examples/providers.nvidia-nim.yaml` 4 プロファイル + local → NIM → OpenRouter free → paid の 8 段チェーン | v1.6.1 |
-| **Troubleshooting docs split** | `docs/troubleshooting.md` / `.en.md` 独立化、5 トピック (起動・設定の罠 / ログ / Ollama 5 症状 / Claude Code 連携 / `.env` セキュリティ) | v1.6.2〜v1.6.3 |
-| **`.env` ハイジーン** | `coderouter serve --env-file PATH` (1Password CLI / direnv+sops / OS Keychain との gateway)、stdlib-only `.env` parser、troubleshooting §5 「`.env` のセキュリティ運用」7 サブセクション | v1.6.3 |
-| **PyPI 配布** | `coderouter-cli` として publish (import / console script 名は `coderouter` 維持)、`uvx coderouter-cli serve` 1 行起動、Trusted Publishing 経路 (`.github/workflows/release.yml`)、`LICENSE` 同梱、sdist `only-include` 厳格化 | v1.7-A (v1.7.0) |
-| **PyPI Trusted Publishing 自動化** | PyPI 側で pending publisher 登録 + GitHub `pypi` environment 作成、`git tag v* && git push` で release.yml が自動 publish + GitHub Release 草稿作成 (OIDC、API トークン不要) | v1.8.0 |
-| **`claude_code_suitability` hint** | capability registry に `Literal["ok", "degraded"] \| None` フィールド追加、Llama-3.3-70B 系を `claude-code-*` profile に置くと startup で `chain-claude-code-suitability-degraded` warn を構造化 emit | v1.8.0 |
-| **`doctor --check-model --apply` / `--dry-run`** | doctor 提案の YAML パッチを `providers.yaml` / `model-capabilities.yaml` に**非破壊**書き戻し (`ruamel.yaml` round-trip でコメント・key 順序保持)、`--dry-run` で `git apply` 互換 unified diff、`--apply` は `.bak` 自動バックアップ + 冪等 | v1.8.0 |
-| **`setup.sh` onboarding ウィザード** | RAM 自動検出 → 推奨ローカルモデル提案 → `ollama pull` → `~/.coderouter/providers.yaml` 生成、bash 3.2 互換、新規依存ゼロ | v1.8.0 |
-| **用途別 4 プロファイル (`multi`/`coding`/`general`/`reasoning`)** | examples/providers.yaml に default_profile=multi + 4 プロファイル + `append_system_prompt` で Claude 風応答 nudge + `mode_aliases` (default/fast/vision/think/cheap) | v1.8.0 |
-| **Gemma 4 / Qwen3.6 / Z.AI 登録** | Ollama 公式 tag 化された `gemma4:e4b/26b/31b` と `qwen3.6:27b/35b` を active stanza、Z.AI を OpenAI-compat で 2 base_url (Coding Plan / General API)、bundled model-capabilities.yaml に 3 family を新規宣言 | v1.8.0 |
-| **Supply-chain CI** | `gitleaks` / `pip-audit` + OSV-Scanner / `uv sync --frozen` / 禁則 SDK grep (anthropic / openai / litellm / langchain) / Dependabot (pip + actions 週次) | v1.0+ 継続 |
-| **OpenRouter roster cron** | `scripts/openrouter_roster_diff.py` で free-tier 週次差分を `docs/openrouter-roster/CHANGES.md` に追記 | v0.5-D |
-| **Retrospectives** | `docs/retrospectives/{v0.4,v0.5,v0.5-verify,v0.6,v0.7,v1.0,v1.0-verify}.md` | v0.4〜v1.0 |
+各 sub-release の規模・想定期間・差別化軸:
 
-#### ⏳ 未実施 — 次に実施 (実装方針確定済み)
+| Sub-release | 内容 | 規模 | 想定期間 | 差別化軸 |
+|---|---|---|---|---|
+| **v1.9-A** | Cache Observability — Request 側で `cache_control` 検出 + log、Response 側で `cache_read_input_tokens` / `cache_creation_input_tokens` を metrics 集計、dashboard / `/metrics.json` で provider 別 cache hit 率を可視化 | ~200-300 LOC、tests +5 | 3-5 日 | Claude Code 特化 cluster 内で唯一 + LiteLLM の undercounting バグ回避設計 |
+| **v1.9-B** | Cross-backend cache passthrough + capability gate — `kind: anthropic` で cache_control 透過確認、registry に `capabilities.cache_control` 追加、doctor cache probe 新設 | ~300-400 LOC、tests +8 | 5-7 日 | LM Studio 0.4.12 検証で前提成立 |
+| **★ v1.9-E (前倒し)** | Long-run Guards 三段: (a) **Memory pressure awareness** (L2 対処): backend 残メモリ probe + しきい値で軽量モデル切替、(b) **Tool loop detection** (L3 対処): tool args 重複検知 + break、(c) **Backend health continuous monitoring** (L5 対処): 受動 + 能動 probe で crash 自動検出 → fallback chain promote | ~600-900 LOC、tests +15 | 1-2 週間 | **Vision の核心、メイン顧客 B (秘書ツール user) への最大訴求** |
+| **v1.9-C** | Adaptive Routing (実 latency / error rate を rolling window、health-based 動的 priority、デバウンス) | ~500-700 LOC、tests +12 | 1-2 週間 | claude-code-router の task-based と被らない補完軸 |
+| **v1.9-D** | Cost-aware Dashboard (provider 別 cost config、cache savings 別枠表示、`coderouter stats --cost`) | ~300-500 LOC、tests +8 | 5-7 日 | LiteLLM ですら未対応の cache savings 計算 |
 
-**v1.7-B umbrella → v1.8.0 として 2026-04-26 に出荷完了**:
+順序: **A → B → ★ E → C → D** (B 顧客優先で E を 3 番目に前倒し、2026-04-27 確定)。
 
-| # | 領域 | 内容 | 出荷 |
-| --- | --- | --- | --- |
-| 1 | ✅ **Trusted Publishing 自動化** | PyPI 側で pending publisher を登録 → 次 tag push で自動 publish | v1.8.0 |
-| 2 | ✅ **`claude_code_suitability` hint** | capability registry に `degraded` フラグ、Llama-3.3-70B 系を `claude-code` 系プロファイルに置いたとき startup で WARN | v1.8.0 |
-| 3 | ✅ **`coderouter doctor --check-model --apply`** | doctor の YAML パッチを `providers.yaml` に非破壊書き戻し (key order + コメント保持)、`--dry-run` で diff プレビュー | v1.8.0 |
-| 4 | ✅ **`setup.sh` (onboarding ウィザード)** | RAM 検出 → 推奨ローカルモデル提案 → `ollama pull` → `providers.yaml` template 生成 (新規依存ゼロ、bash + 既存 doctor) | v1.8.0 |
-| 5 | ✅ **用途別 4 プロファイル** | examples/providers.yaml に `multi`/`coding`/`general`/`reasoning` + `append_system_prompt` + `mode_aliases` | v1.8.0 |
-| 6 | ✅ **Gemma 4 / Qwen3.6 / Z.AI 登録** | Ollama 公式 tag 化されたモデル群と Z.AI Coding Plan / General API を providers.yaml に登録 | v1.8.0 |
+#### v1.9 note 記事計画 (4 連作の続き)
 
-**競合分析と差別化ポジション (2026-04-27 調査)**:
-
-ChatGPT 等で類似 OSS を調査した結果を整理:
-
-**Claude Code 特化 cluster** (6+ projects):
-
-| プロジェクト | URL | 特徴 | CodeRouter との差 |
-|---|---|---|---|
-| `free-claude-code` | https://github.com/Alishahryar1/free-claude-code | Claude Code 専用軽量プロキシ、NIM/OpenRouter/Ollama/llama.cpp、thinking + tool-call 対応 | 機能セット最も近い、tool repair / reasoning scrub / doctor は CodeRouter が強い |
-| `claude-code-router` | https://github.com/musistudio/claude-code-router | タスク別動的 routing、Transformer/plugin (TS) | 高度カスタム routing、軽量さと fallback 明示性は CodeRouter 優勢 |
-| `9Router` | https://github.com/decolua/9router | 全 coding tool 対応 (Cursor / Copilot / Gemini)、40+ プロバイダ | 対応ツール広い、CodeRouter は coding agent 特化を維持 |
-| `UniClaudeProxy` | https://github.com/vibheksoni/UniClaudeProxy | Anthropic→OpenAI/Gemini/DeepSeek/Ollama 翻訳、tool-calling 対応 | シンプル/速い、CodeRouter の repair 機能類似 |
-| `claude-code-proxy` 系 | (複数) | Claude→OpenAI 翻訳 (LiteLLM ベース多い) | LiteLLM 依存、CodeRouter は純粋 Python |
-| `FreeRouter` | https://github.com/openfreerouter/freerouter | OpenRouter/ClawRouter 代替、14 次元分類器 | 複雑さベース自動選択 |
-
-**Generic LLM Gateway cluster**:
-
-| プロジェクト | 特徴 | 備考 |
+| 出荷 | 記事タイトル候補 | 訴求軸 |
 |---|---|---|
-| `LiteLLM` | 100+ プロバイダ統一、cost 追跡、fallback、guardrail | 巨人。CodeRouter は「軽量 + coding 特化 + tool repair」で差別化 |
-| `Bifrost` | Go 製、50x 高速、企業向け load balancer | 性能面代替 |
-| `Portkey Gateway` | 1600+ モデル、guardrail、超高速 | 軽量本番向き |
-| `BricksLLM` | Go 企業向け、rate-limit / コスト制限 / PII 検知 | 監視特化 |
+| v1.9-A 後 | 「ローカル LLM で Anthropic prompt caching の動作を可視化した話」 | 観測価値 |
+| v1.9-B 後 | 「CodeRouter を Anthropic prompt caching aware にした実装記録」 | 機能拡張 |
+| **v1.9-E 後** | **「Claude Code を 8 時間回したら起きた 6 つの障害と CodeRouter の対処」** | **★ 最大訴求** |
+| v1.9-C 後 | 「Adaptive routing を実装した記録 — 実 latency に基づく動的 priority」 | 差別化軸 |
+| v1.9-D 後 (umbrella) | 「Adaptive caching で実コストが下がった話 — v1.9 まとめ」 | 価値証明 |
 
-**CodeRouter の唯一無二の強み (調査リスト範囲で確認、2026-04-27 時点)**:
+#### Reactive 追加 (発火条件 6 種類、運用ルール)
 
-1. **`doctor` 6-probe 診断 + YAML auto-patch** — 完全独自 (どの競合にもない)
-2. **bundled `model-capabilities.yaml`** — declarative capability layer (独自)
-3. **Tool-call repair (text-JSON → native tool_use)** — UniClaudeProxy 一部対応、free-claude-code 部分対応、他なし
-4. **Reasoning leak scrub (think タグ / stop markers)** — free-claude-code 部分対応、他は基本未対応
-5. **5 deps 据え置き** — LiteLLM 系は依存重い、Go 製は除く
+「reactive but focused」運用ルール (2026-04-27 確定)。以下のいずれかが起きた時のみ計画に追加検討:
 
-**v1.9 で取りに行く差別化** (競合空白地帯、2026-04-27 詳細調査済):
-
-- **Anthropic prompt caching の cross-backend サポート** — Claude Code 特化 cluster で唯一。LiteLLM は集計するが **cache_creation_input_tokens 周りで undercounting バグあり** → CodeRouter は最初から正確に設計する好機
-- **Health-based Adaptive routing (実 latency / error 率駆動)** — claude-code-router は **task-based** (`default` / `background` / `think` / `longContext` / `webSearch` で context 種別に切替) で、CodeRouter v1.9-C の **health-based** (provider の実 latency で priority 動的調整) とは **補完的、被らない**。両軸を CodeRouter は既に持つ (auto_router = task-based ルール)、v1.9-C で health-based 追加
-- **Cost-aware dashboard with cache savings** — LiteLLM は cache token を表示するが savings 計算 (cache_read 90% 割引、cache_creation 25% 増し等の Anthropic 価格モデル) を提供してない。CodeRouter は最初から savings 表示込みで設計
-
-**Adaptive routing の 2 軸整理 (重要)**:
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ Task-based adaptive routing (プロンプトの種類/内容で切替)    │
-│   - claude-code-router: default/background/think/longContext │
-│   - CodeRouter auto_router: image / code-fence / regex (v1.6) │
-│   - v1.10 候補: longContext threshold (claude-code-router 取込) │
-├─────────────────────────────────────────────────────────────┤
-│ Health-based adaptive routing (provider の実 latency で切替)  │
-│   - 競合調査リスト中で誰も実装していない (2026-04-27 時点)    │
-│   - v1.9-C で取りに行く ← CodeRouter のユニーク領域           │
-└─────────────────────────────────────────────────────────────┘
-```
-
-**LiteLLM の cache 集計バグ (2026-04-27 確認)**:
-
-LiteLLM は `cache_read_input_tokens` / `cache_creation_input_tokens` を Usage object で露出しているが、`cache_creation_input_tokens` を `prompt_tokens` に加算していないため、Langfuse 等の tracing で cost undercounting が報告されている (LiteLLM はデータ取得は正しいが、downstream の合計計算で undercounting)。
-
-→ **CodeRouter v1.9-A/D で 4 分類で厳密に集計**:
-
-| 集計項目 | 内容 |
-|---|---|
-| `total_input_tokens` | `prompt_tokens` 全体 (cache 含む) |
-| `cache_read_input_tokens` | 90% 割引対象 |
-| `cache_creation_input_tokens` | 25% 増し対象 (Anthropic 価格モデル) |
-| `effective_cost` | 上記 3 種類から正確に算出 |
-
-**市場機会の 3 圧力 (2026-04-27 観察、CodeRouter vision の追い風)**:
-
-ユーザー観察によると、ローカル LLM の安定性需要は今まさに立ち上がりつつある:
-
-1. **クラウド LLM コスト増** — Anthropic / OpenAI / Gemini の値上げ・rate limit 強化が連続、月 $50-100 払う Pro user が「ローカル併用」を真剣に検討する時期
-2. **Agent/秘書ツールの普及** — OpenClaw / Cline / Continue / Aider / Cowork mode 等の autonomous agent が日常化、**「30 分〜数時間自律実行」が普通の使い方** に。短時間 chat ではなく **「長時間 loop」が新ノルマ**
-3. **ローカル LLM 品質のキャッチアップ** — Qwen3.6 / Gemma 4 / DeepSeek-R1 等で coding 性能が実用レベル到達、LM Studio / Ollama / llama.cpp の運用 UX が急速改善、M-series ハードウェア大衆化
-
-3 圧力が揃ったことで、**「ローカル LLM を 8 時間止まらず動かす」需要が爆発的に増える局面**に入る。CodeRouter は **この瞬間に layer を提供できる先行ポジション**にいる。
-
-**Target Market Segments (TMS)**:
-
-| Segment | 困っていること | CodeRouter で解決される機能 |
-|---|---|---|
-| **A. コスト意識 Claude Code user** | 月 $50-100 払ってる、ローカル併用したい | v1.9-A/B (cache savings) + C (adaptive) + D (cost dashboard) |
-| **B. ★ Agent/秘書ツール user** (**メイン顧客**) | Cline / OpenClaw 等で長時間 loop、不安定 | v1.9-E (Long-run Guards) + v2.0-F/G (context/drift) |
-| **C. プライバシー強制 user** | 法的にクラウド送信不可 | v1.9-E + v2.0 全部 (full local reliability) |
-| **D. ハイブリッド user** | ルーティンはローカル、複雑時だけクラウド | v1.9 全部 |
-
-セグメント B (秘書ツール user) が最も顧客像鮮明、note 記事の訴求も最強。
-
-**v1.9 priority 微調整 (B 優先)**:
-
-旧順序 A → B → C → D → E (cache 系後ろに guard) を:
-
-**新順序 A → B → E → C → D** (cache 観測基盤 → cross-backend → **★長時間 guard 早期投入** → adaptive → cost)
-
-理由: v1.9-E が出ると **「8 時間動かせる」を最初に実証**、これが note 記事 + コミュニティ訴求の最大武器になる。
-
-**Vision: Local LLM で agent を長時間回すための信頼性層 (2026-04-27 確定)**:
-
-CodeRouter のポジショニング・ステートメント:
-
-> 上層 (固定、深追い不要): **Anthropic / OpenAI 標準 API** — Claude Code / Cursor / gemini-cli が共有してる方式、agent はユーザー好みで選んでよい
->
-> ★ 中層 (本領): **API と backend の間で長時間 agent ループの安定性を保証**
->
-> 下層 (動的、深追い必要): **Local LLM backend + model** (Ollama / llama.cpp / LM Studio / vLLM + Qwen3 / Gemma 4 / GLM 等)
-
-「Claude Code を 8 時間連続で local LLM に向けて使っても止まらない」を担保する layer。**フロントエンド (agent) 側の breadth は追わない、バックエンド (local LLM) 側の depth に振る**戦略。
-
-**3 pillar に集約** (旧 4 pillar から Multi-agent を de-prioritize):
-
-| Pillar | 内容 | 主な実装軸 |
-|---|---|---|
-| **P1 Connection Stability** | Anthropic ↔ OpenAI 翻訳 + mid-stream guard + backend fallback | 既存強化 + Health-based adaptive routing (v1.9-C) |
-| **P2 Long-run Reliability** | Context budget / Memory pressure / Loop detection / Drift detection | 新規、v1.9-E + v2.0-F/G で実装 |
-| **P3 Diagnostic + Evidence** | doctor 6-probe + model-capabilities.yaml + continuous probing + public benchmark | 既存強化 + 自動更新 (v2.0-I) |
-
-**長時間運用で起きる 6 系統障害の体系化** (これが CodeRouter の存在意義):
-
-| # | 障害 | 症状 | 対処 sub-release |
-|---|---|---|---|
-| **L1** | Context overflow | 会話が長くなり model context window を超える | v2.0-F: Context budget management |
-| **L2** | Memory pressure | Ollama / LM Studio が OOM、swap 発生 | v1.9-E: Memory pressure awareness |
-| **L3** | Tool loop | tool call の無限ループ | v1.9-E: Loop detection |
-| **L4** | Quality drift | 長時間で model 応答の品質劣化 (KV cache / context 圧迫) | v2.0-G: Drift detection |
-| **L5** | Backend crash | LM Studio GUI 閉じた / Ollama systemd 死亡 | v1.9-E: Backend health monitoring (continuous probe) |
-| **L6** | Mid-stream interrupt | 生成途中で接続切れ / 失敗 | v0.3-A 既存 (mid-stream guard)、v2.0-H で partial stitching 強化 |
-
-L1〜L5 は競合プロジェクト (Claude Code 特化 / Generic gateway) いずれも体系的に対処していない領域。**Local LLM が production で本格的に長時間使われるようになる前に layer を作っておく**ことで defacto を狙う。
-
-**v1.9 ロードマップ — Adaptive Caching + Long-run Guards (2026-04-27 refinement)**:
-
-LM Studio 0.4.12 で Anthropic 互換 `/v1/messages` が公式化され、ローカル LLM で `cache_read_input_tokens` まで成立する状況を実機で確認。CodeRouter の v1.9 系では **「翻訳」から「routing intelligence + observability」への重心移動**を 4 sub-release で進める。
-
-| Sub-release | 内容 | 規模 | 想定期間 |
-| --- | --- | --- | --- |
-| **v1.9-A** | **Cache Observability** — Request 側で `cache_control` 検出 + log、Response 側で `cache_read_input_tokens` / `cache_creation_input_tokens` を metrics 集計、dashboard / `/metrics.json` で provider 別 cache hit 率を可視化 | ~200-300 LOC、tests +5 | 3-5 日 |
-| **v1.9-B** | **Cross-backend cache passthrough + capability gate** — `kind: anthropic` で cache_control passthrough 確認、registry に `capabilities.cache_control` 追加、doctor に cache probe 新設 (upstream に cache_control 付き request → `cache_read_input_tokens` 観測)、`openai_compat` 系で capability gate warn | ~300-400 LOC、tests +8 | 5-7 日 |
-| **v1.9-C** | **Adaptive Routing** — 実 latency / error rate を rolling window で記録、`providers.yaml` で opt-in (`adaptive: true`)、chain static order に dynamic 補正、デバウンス、dashboard で現在の effective chain order 可視化 | ~500-700 LOC、tests +12 | 1-2 週間 |
-| **v1.9-D** | **Cost-aware Dashboard** — provider 別 cost config、累積 cost 表示、**cache hit による savings 別枠** (cache_read_input_tokens × 90% 割引)、1 日 / 1 週間累積、`coderouter stats --cost` で TUI | ~300-500 LOC、tests +8 | 5-7 日 |
-| **v1.9-E** | **Long-run Guards 三段** (vision の核心): (1) **Memory pressure awareness** (L2 対処): backend 残メモリを probe、しきい値超過時に軽量 model に自動切替、(2) **Tool loop detection** (L3 対処): 直近 N 件の tool args 重複を検出、しきい値で break + 警告、(3) **Backend health continuous monitoring** (L5 対処): 受動 (request fail) + 能動 probe、crash 検出で fallback chain 自動 promote | ~600-900 LOC、tests +15 | 1-2 週間 |
-
-**v1.9 全体の note 記事計画** (4 連作の続き):
-
-- v1.9-A 後: 「ローカル LLM で Anthropic prompt caching の動作を可視化した話」
-- v1.9-B 後: 「CodeRouter を Anthropic prompt caching aware にした実装記録」
-- v1.9-C 後: 「Adaptive routing を実装した記録 — 実 latency に基づく動的 priority」
-- v1.9-D 後 (umbrella): 「Adaptive caching で実コストが下がった話 — v1.9 まとめ」
-
-**Reactive 追加 (トレンド発火時のみ)**:
-
-「案 1 をメイン軸、トレンド追従は reactive に」方針 (2026-04-27 個人決定)。以下のいずれかが起きた時のみ、v1.9 計画に追加検討する:
-
-1. **新 backend major update** (LM Studio / Ollama / llama.cpp / vLLM / MLX-LM) — release notes 確認 → CodeRouter 関連改善があれば 1-2 日で `examples/providers.yaml` + 検証記事
-2. **新モデル登場** (Qwen / Gemma / GLM / Llama 等の major version) — bundled `model-capabilities.yaml` に capability 宣言追加
-3. **Anthropic API spec 変更** (新 endpoint、新 capability、新 cache 機構) — adapter 更新
+1. **新 backend major update** (LM Studio / Ollama / llama.cpp / vLLM / MLX-LM)
+2. **新モデル登場** (Qwen / Gemma / GLM / Llama 等の major version)
+3. **Anthropic API spec 変更** (新 endpoint、新 capability、新 cache 機構)
 4. **Claude Code 挙動変化** — 実機検証 → adapter 修正
 5. **コミュニティ PR / issue** — レビュー → merge or close (issue #10 のスタイル)
 6. **競合 OSS の新機能** — 追従するか差別化するか判断
 
-これら 6 種類以外のトレンドは **無視して v1.9-A → D を粛々と進める**。「reactive but focused」の運用ルール。
+これら 6 種類以外のトレンドは **無視して計画を粛々と進める**。
 
----
 
-**v1.7-C 候補 (実需要待ち、§11.B.5)**:
 
-| 領域 | 内容 | トリガ条件 |
-| --- | --- | --- |
-| **Doctor — network audit** | `coderouter doctor --network` (`lsof -i -P` 相当 + ホワイトリスト照合 + 「localhost only」のグリーン表示) | エンタープライズ採用の問い合わせ / CI 統合の要望 |
-| **Doctor — 全部回す mode** | `coderouter doctor --check-config` / `--check-adapter` / 引数なしで全 probe 順次実行 | doctor surface 完成度を上げる必要が出たとき |
-| **`recover_garbled_tool_json` の範囲拡大** | 末尾カンマ / 引用符違い / 部分マルチライン等の壊れパターンへ対応拡大 | 実機で失敗を踏んだ時にデータ駆動で拡張 (先回り実装はしない) |
-| **起動時アップデートチェック (opt-in)** | PyPI に新版があれば INFO ログ 1 行、明示的に opt-in (デフォルト OFF) | `uv tool upgrade` で済むため需要次第 |
-
-**v1.8.x patch 候補 — llama.cpp 直叩き backend 検証 (Ollama tool 仕様未成熟の切り分け、2026-04-26 追加)**:
-
-| 領域 | 内容 | 検証ポイント |
-| --- | --- | --- |
-| **llama.cpp `llama-server` 経由で Qwen3.6:27b/35b** | M3 Max 64GB で `cmake -DGGML_METAL=ON` で build、Qwen3.6 GGUF を HF から取得、`llama-server --jinja --chat-template-file qwen3-chat.jinja --ctx-size 32768` で起動、CodeRouter `providers.yaml` に `kind: openai_compat` + `base_url: http://localhost:8080/v1` で provider 追加 | v1.8.1 で観測した Qwen3.6 系の `tool_calls [NEEDS TUNING]` (Ollama 経由で native tool_calls / 修復可能 JSON のいずれも返さず) が **Ollama の chat template / tool 仕様未成熟** によるものか、それともモデル本体の課題かを切り分ける。llama.cpp 直叩きで `tool_calls [OK]` になれば前者確定 → CodeRouter として llama.cpp 直叩き例を providers.yaml に追加 + troubleshooting.md §4-2-A を更新 (Ollama 経由は避ける、llama.cpp 直叩きで使う) |
-| **llama.cpp `llama-server` 経由で Qwopus3.5-9B (Qwen3.5 + Opus 蒸留)** | llama.cpp main に `qwen35` architecture 実装が merge されているか確認 (`grep -ri qwen35 src/ ggml/ \|\| gh pr list ... --search qwen35`)、merged なら build → 動作確認、未 merged なら待機 | v1.8.1 で `unable to load model: unknown model architecture: 'qwen35'` 500 エラー (hybrid Transformer-SSM) が llama.cpp 本体の対応待ちと判定済。Ollama 経由ではなく llama.cpp 本体の対応状況に依存 — 対応済になり次第、CodeRouter 側の対応は ZERO (既存 `kind: openai_compat` で繋がる) |
-| **doctor probe を llama.cpp shape も拾うよう拡張 (任意)** | `_is_ollama_like` を `_is_llama_cpp_like` (port 8080 OR `--ctx-size` 系の ENV signal) と並列化、num_ctx / streaming probe の patch 提案を「Ollama 系: extra_body.options.num_ctx」「llama.cpp 系: server 起動引数 `--ctx-size`」に分岐 | llama.cpp 直叩き経路が CodeRouter ユーザーで一般化したら検討 (現状は SKIP のまま実害なし、Ollama 専用 knob は llama.cpp で reach できないのが設計通り) |
-
-**目的**: v1.8.1 の note 記事「3 連敗した話」 → v1.8.2 で「Gemma 4 は doctor 偽陽性、Qwen3.6 の tool_calls だけが本物の課題」に絞られた。残る Qwen3.6 系の課題が **Ollama 側の問題** なのか **モデル側の問題** なのかを llama.cpp 直叩きで切り分けると、(a) Qwen3.6 がローカル primary 候補に復活する可能性、(b) CodeRouter として「Ollama / llama.cpp / vLLM の併用ガイド」を提供できる、(c) note 記事の自然な続編ネタになる、の 3 つが期待値。
-
-**コミュニティ証拠 (2026-04-26 偵察)**: X / Reddit (r/ollama, r/LocalLLaMA) を確認、私たちの実機検証と同じ症状が広く報告されていた:
-
-- **Qwen3.6 35B-A3B でクラッシュ / リブート / hard crash** (Mac Metal、複数報告)
-- **「available memory 不足」でロード失敗 (Ollama の memory 計算バグ疑い)**、最新 Ollama で一部改善報告
-- **Claude Code / OpenCode 連携でタイムアウト・コンテキスト切れ・loop**
-- **`think=False` 時の構造化出力バグ**
-- **エージェント workflow で継続稼働が低い (Qwen3.6 35B-A3B)**
-
-回避策として複数経路が報告されている:
-
-1. **Modelfile `PARAMETER num_ctx 131072` で context を明示焼き込み** (Ollama 経由維持の最小変更)
-2. **Unsloth の GGUF を llama.cpp / llama-server で直叩き** (最有力、複数の「これで解決した」報告あり)
-3. **低 quant (Q4_K_M) や coding 特化 tag (`qwen3.6:35b-a3b-coding-*`) を試す**
-4. Ollama 最新版へアップデート (memory bug 部分改善)
-
-→ 私たちが描いた **(2) Unsloth GGUF + llama.cpp 直叩き経路がコミュニティでも一番収率の高い解** と一致。検証時はまずこのルートで進める。`qwen35` (Qwopus3.5) の hybrid Transformer-SSM は llama.cpp PR 状況に依存するので別タスク扱い。
-
-**実機ログ予定**: 検証結果は §18 実装ログに記録、note 記事 (v1.8.x or v1.9 出荷時) で「Qwen3.6 + Ollama がコミュニティ全体で詰んでる中、Unsloth GGUF + llama.cpp 直叩きで CodeRouter から動かした記録」として公開。
-
-**実機検証 1 — Qwen3.6:35b-a3b on llama.cpp (2026-04-26、M3 Max 64GB)**:
-
-検証成功。**Ollama 経由詰みの真因が完全確定**: Ollama の chat template / tool 仕様未成熟が原因、モデル本体は健全。
-
-検証済み recipe (canonical reference):
-
-```bash
-# 1. llama.cpp build (Metal + curl)
-git clone https://github.com/ggml-org/llama.cpp ~/llama.cpp
-cd ~/llama.cpp
-cmake -B build -DGGML_METAL=ON -DLLAMA_CURL=ON
-cmake --build build --config Release -j
-
-# 2. Unsloth Dynamic Quantization (UD-Q4_K_M) GGUF を取得 (~22GB)
-huggingface-cli download unsloth/Qwen3.6-35B-A3B-GGUF \
-  --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
-  --local-dir ~/models/qwen3.6-35b-a3b-unsloth
-
-# 3. llama-server 起動
-./build/bin/llama-server \
-  --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
-  --port 8080 \
-  --ctx-size 32768 \
-  --n-predict 4096 \
-  --jinja \
-  --threads 8 \
-  -ngl 999 \
-  --host 127.0.0.1
-```
-
-確認 curl:
-
-- **Test A (basic chat、`max_tokens: 500`)**: `content: "Hello"` 返答、`reasoning_content` (~200 tokens) 別フィールド付き。`max_tokens: 50` だと content 空 → reasoning が予算消費する thinking モデル設計
-- **Test B (tool_calls)**: `finish_reason: "tool_calls"` + 正規 OpenAI `tool_calls[]` array が native で返る。**Ollama 経由では NEEDS_TUNING で詰んでいた箇所**
-
-派生発見:
-
-- llama.cpp は **`reasoning_content`** フィールド名を使う (Ollama は `reasoning`)。CodeRouter の openai_compat adapter は `reasoning` のみ strip するので、llama.cpp 経由だと client に reasoning が流れる可能性。**v1.8.3 patch 候補**: adapter の reasoning strip 対象に `reasoning_content` を追加
-- **Unsloth Dynamic Quantization (UD-Q4_K_M)** が同 GGUF サイズで通常 Q4_K_M より精度が高い variant、コミュニティ報告と一致
-
-→ CodeRouter 側の providers.yaml に **llama.cpp 直叩き例** を追加可能 (Task #23 着手済)。残るは (a) doctor / CodeRouter 経由 end-to-end 確認、(b) `reasoning_content` strip の v1.8.3 patch、(c) Qwopus3.5 (qwen35 architecture) の llama.cpp PR 状況確認。
-
-**ローカル backend 別接続マトリクス + テスト方針 (2026-04-26 整理)**:
+### ローカル backend 別接続マトリクス + テスト方針 (現役、運用中)
 
 CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Studio / vLLM / MLX-LM** いずれにも繋がる設計。各 backend の接続レシピと doctor probe での検証方法を以下にまとめる。
 
@@ -303,7 +62,7 @@ CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Stud
 | --- | --- | --- | --- | --- |
 | **Ollama** | `11434` | `http://localhost:11434/v1` | ✅ v0.x 〜 v1.8.x 通して継続検証 | [`docs/quickstart.md`](./docs/quickstart.md) / [`docs/troubleshooting.md` §4-2](./docs/troubleshooting.md) |
 | **llama.cpp `llama-server`** | `8080` | `http://localhost:8080/v1` | ✅ v1.8.3 で実機検証 (Qwen3.6:35b-a3b on Unsloth UD-Q4_K_M、native `tool_calls` 完璧動作) | [`docs/llamacpp-direct.md`](./docs/llamacpp-direct.md) |
-| **LM Studio** | `1234` | `http://localhost:1234/v1` (OpenAI 互換) または `http://localhost:1234` (Anthropic 互換 `/v1/messages`) | 🔥 **優先度上げ (LM Studio 0.4.12 で Qwen 3.6 サポート + Qwen 3.5 性能改善 + Anthropic compat 公式化)** | (新規 `docs/lmstudio-direct.md` を v1.9 で予定) |
+| **LM Studio** | `1234` | `http://localhost:1234/v1` (OpenAI 互換) または `http://localhost:1234` (Anthropic 互換 `/v1/messages`) | ✅ v1.8.4 で実機検証 (Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 すべて native tool_calls + tool_use OK、`cache_read_input_tokens: 280` 観測で Anthropic prompt caching 成立) | (新規 `docs/lmstudio-direct.md` を v1.9 で予定) |
 | **vLLM** | `8000` (server start で変更可) | `http://localhost:8000/v1` | ⏳ TODO (CUDA / data center GPU 前提、Mac M3 Max は対象外) | TBD |
 | **MLX-LM** | `8080` (`mlx_lm.server` 起動) | `http://localhost:8080/v1` | ⏳ TODO (Mac native、量子化が Apple Silicon 最適化) | TBD |
 
@@ -325,109 +84,20 @@ CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Stud
 | **vLLM** | `--enable-auto-tool-choice` フラグ、tool spec 形式 (Hermes / Mistral / Llama3 のどれを採用するか)、Continuous batching の動作 |
 | **MLX-LM** | Apple Silicon 専用、`mlx_lm.server` 起動時の量子化指定、tool_calls 対応状況 (やや限定的の可能性) |
 
-### LM Studio 接続レシピ案 (v1.9 で実機検証予定、優先度 🔥 上げ)
+### LM Studio 接続レシピ (v1.8.4 で実機検証済み)
 
-**LM Studio 0.4.12 (2026-04 リリース) の重要アップデート**:
+LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 3.5/3.6 性能改善が入った。CodeRouter からは **OpenAI 互換 / Anthropic 互換** の 2 経路で接続可能、後者は `kind: anthropic` で adapter 翻訳ゼロ透過。
 
-- **Qwen 3.6 サポート**: Ollama 経由詰みの代替経路がもう 1 本 (llama.cpp 直叩きと並列)
-- **Qwen 3.5 性能改善 (OpenAI 互換 `/v1/chat/completions` + `/v1/responses`)**: ⚡ **これが大きい** — llama.cpp が `qwen35` architecture (hybrid Transformer-SSM) 未対応で詰んでいた **Qwopus3.5 系 (Qwen3.5 + Opus 蒸留) が LM Studio 経由で動く可能性大**。フレームワーク本体の対応待ちだった構造が崩れる
-- **Anthropic 互換 `/v1/messages`**: CodeRouter から **`kind: anthropic` で直接接続可能**、OpenAI 互換層を通さず Anthropic の native shape (`tool_use` block / `cache_control` / `thinking` block 等) を保持できる
+検証手順 + providers.yaml の sample は `examples/providers.yaml` の `lmstudio-*` 4 entry を参照。詳細ガイド `docs/lmstudio-direct.md` は v1.9 で予定。
 
-```bash
-# 1. LM Studio 本体を https://lmstudio.ai/ からダウンロード + インストール
-#    (バージョン 0.4.12 以降を必ず使う、Qwen 3.6 / Anthropic compat はこれ以降)
-# 2. GUI でモデル (例: gemma-4-26b、qwen3.6:35b-a3b、Qwopus 系等) をダウンロード + ロード
-# 3. GUI の "Local Server" タブから:
-#    - Port: 1234 (default)
-#    - "Start Server" をクリック
-#    - "Just-in-time model loading" を有効化すると複数モデルを切替可能
-#    - Anthropic 互換 endpoint も同時に listen (LM Studio 0.4.12+)
-```
+### v1.8.x patch 候補 (実機検証フィードバック反映、未着手分)
 
-**CodeRouter `providers.yaml` 候補 2 経路** (どちらでも動くはず、Anthropic 互換ルートはネイティブ機能保持で有利):
+- **`docs/lmstudio-direct.md` 新規作成** (LM Studio 経由 backend ガイド、v1.8.4 検証データを記載)
+- **`docs/troubleshooting.md` §4-2 に LM Studio 救出パスを追記** (Qwopus3.5 系は LM Studio 0.4.12+ で動く)
+- **v1.8.5 patch 候補**: doctor の thinking probe suggestion message 更新 (v1.8.3 の `_is_reasoning_model()` 効果を反映)
+- **v1.10 候補**: longContext auto-switch (claude-code-router の task-based を auto_router に取り込み)
 
-```yaml
-# (a) OpenAI 互換経路 (従来通り、CodeRouter の adapter 翻訳を経由)
-- name: lmstudio-qwen3-6-35b-a3b
-  kind: openai_compat
-  base_url: http://localhost:1234/v1
-  model: qwen3.6-35b-a3b           # LM Studio GUI の model ID と合わせる
-  paid: false
-  api_key_env: null
-  timeout_s: 120
-  capabilities:
-    chat: true
-    streaming: true
-    tools: true
-    thinking: true                  # reasoning モデル時、doctor が 1024 budget を使う
-  output_filters:
-    - strip_thinking
-
-# (b) Anthropic 互換経路 (LM Studio 0.4.12+、native shape 保持)
-- name: lmstudio-qwen3-6-35b-a3b-anthropic
-  kind: anthropic                   # ← OpenAI 翻訳を skip
-  base_url: http://localhost:1234   # /v1/messages は LM Studio 側で受ける
-  model: qwen3.6-35b-a3b
-  paid: false
-  api_key_env: null
-  timeout_s: 120
-  capabilities:
-    chat: true
-    streaming: true
-    tools: true
-    thinking: true
-    cache_control: true             # Anthropic 互換ルートでは保持される (要実機検証)
-```
-
-```bash
-# 4. CodeRouter doctor で 6 probe 確認 (両経路を比較)
-coderouter doctor --check-model lmstudio-qwen3-6-35b-a3b
-coderouter doctor --check-model lmstudio-qwen3-6-35b-a3b-anthropic
-
-# 期待:
-# OpenAI 互換ルート:
-#   [3/6] tool_calls ………… [OK]    ← 0.4.12 改善で動くはず
-#   [5/6] reasoning-leak …… [OK]   ← reasoning フィールド命名の確認
-#
-# Anthropic 互換ルート:
-#   [3/6] tool_calls ………… [OK]    ← native tool_use block で返る
-#   thinking probe が openai_compat と違って [OK] になる可能性
-```
-
-実機検証の TODO リスト (LM Studio 0.4.12+ 前提):
-
-- [ ] **🔥 最優先: Qwopus3.5 (Qwen3.5 + Opus 蒸留)** — llama.cpp で詰んでいた `qwen35` architecture が LM Studio で動くか確認。動けば v1.8.1 article で「フレームワーク待ち」と書いた結論を覆せる
-- [ ] **🔥 高優先: Qwen 3.6:35b-a3b on LM Studio** — llama.cpp 直叩きと並ぶ第 2 の経路の安定性確認
-- [ ] **Anthropic 互換 `/v1/messages` 経路** — `kind: anthropic` で接続、`cache_control` / `thinking` block / `tool_use` ネイティブ保持の検証
-- [ ] LM Studio が emit する reasoning フィールド名は何か (`reasoning` / `reasoning_content` / 独自) — adapter strip 対象を更新する必要があるか確認
-- [ ] tool_calls の native 出力 / repairable JSON / 完全テキストのどれか
-- [ ] streaming `[DONE]` フレーミングの仕様 (SSE 標準 or 独自)
-- [ ] context length を runtime で変更できるか (server 起動時固定か、リクエスト ごとか)
-- [ ] 検証結果を `docs/lmstudio-direct.md` (新規) にまとめる
-- [ ] note 記事の続編候補: 「LM Studio 0.4.12 で Qwopus 救出 (llama.cpp フレームワーク待ちを LM Studio で迂回した話)」
-
-**v1.0 残スコープ (v2.0 計画の手前で着手、§11.B.6)**:
-
-| 領域 | 内容 | 着手予定 |
-| --- | --- | --- |
-| **14 ケース回帰スイート** | claude-code-local 同等の e2e (tools / streaming / system prompt 多段 / cache_control / 失敗復旧) | v2.0 計画の手前 |
-| **Code Mode (Claude Code harness slim)** | Claude Code 用最小ハーネス (システムプロンプト / tool 宣言 / SSE 整形を vendor-neutral 化) | v2.0 計画の手前 |
-
-**ドキュメント / コミュニティ (外部 PR が来たら、§11.B.6)**:
-
-| 領域 | 内容 | 着手予定 |
-| --- | --- | --- |
-| **Retrospective: v1.5 + v1.6 + v1.7 を 1 本に統合** | v0.x の minor 1 本ペースを v1.x 系で「3 minor 1 本」に圧縮 | v1.7-B/C 出荷後 |
-| **横断ドキュメント** | `docs/architecture.md` / `docs/providers.md` / `docs/benchmarks.md` | 外部 contributor が関わるようになってから |
-| **`CONTRIBUTING.md` / ISSUE / PR テンプレート** | 30 分で書ける | 最初の外部 PR が来たタイミング |
-
-**v2.0 (§13)**:
-
-| 領域 | 内容 | 着手予定 |
-| --- | --- | --- |
-| **プラグイン (provider 動的追加)** | `pip install coderouter-provider-foo` → entry_points or 動的ロード | v2.0 |
-| **MCP サーバ実装** | Anthropic MCP 仕様準拠 | v2.0 |
-| **Web UI で `providers.yaml` 編集** | YAML/JSON schema 駆動の GUI editor、`coderouter ui` サブコマンド | v2.0 |
+> v2.0 以降の機能 (Pillar 別 deepening / プラグイン / MCP server / Web UI) は内部メモで別途整理
 
 #### ❓ 検討中 — 実装方針 / 必要性が未確定
 
@@ -450,10 +120,23 @@ coderouter doctor --check-model lmstudio-qwen3-6-35b-a3b-anthropic
 
 ---
 
-### リリース履歴（概要）
+### リリース履歴 (直近 5 件)
 
-| Ver | 日付 | タグ | Commit | 一言 |
-| --- | --- | --- | --- | --- |
+過去の全リリース履歴と各 release の詳細は [`CHANGELOG.md`](./CHANGELOG.md) を参照。
+
+| Ver | 日付 | タグ | 一言 |
+| --- | --- | --- | --- |
+| **v1.8.4** | 2026-04-27 | (検証 release、PyPI 未 publish) | LM Studio 0.4.12 で Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 全動作確認 + Anthropic prompt caching 成立 (`cache_read_input_tokens: 280`)、`examples/providers.yaml` に lmstudio-* 4 entry + test profile 2 件 |
+| **v1.8.3** | 2026-04-26 | `v1.8.3` | tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip — llama.cpp 直叩きで Qwen3.6 復権、active-harmful 誤診断 (tools=false suggestion) を解消 |
+| **v1.8.2** | 2026-04-26 | `v1.8.2` | doctor probe を thinking モデル対応 (num_ctx 32→256/1024、streaming 128→512/1024) — Gemma 4 偽陽性解消、メタ教訓「diagnostic ツール自身も diagnostic され続ける必要がある」 |
+| **v1.8.1** | 2026-04-26 | `v1.8.1` | 実機検証反映 patch — mode_aliases 解決バグ修正、Qwen3.6 系 Ollama 経由詰みを認識 (`claude_code_suitability: ok` 撤回)、troubleshooting.md §4-2 新設 |
+| **v1.8.0** | 2026-04-26 | `v1.8.0` | 用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化 (= v1.7-B umbrella、6 サブリリース統合)、PyPI Trusted Publishing 自動化 |
+
+過去のリリース (v0.1.0〜v1.7.0) は [`CHANGELOG.md`](./CHANGELOG.md) の各エントリ、各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
+
+振り返り: [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md) / [`docs/retrospectives/v0.5.md`](./docs/retrospectives/v0.5.md) / [`docs/retrospectives/v0.5-verify.md`](./docs/retrospectives/v0.5-verify.md) / [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md) / [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md) / [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md) / [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。
+
+<!-- 過去 release 一覧 (v0.1.0〜v1.7.0) は CHANGELOG.md に集約、plan.md 上は最新 5 件のサマリのみ
 | v0.1.0 | 2026-04-20 | `v0.1.0` | `5efff5b` | Walking Skeleton — OpenAI ingress + local + fallback 1 個、26 tests green |
 | v0.2.0 | 2026-04-20 | `v0.2.0` | `6c6e3f4` | Anthropic ingress — Claude Code 疎通、+28 tests / 計 54 green |
 | v0.3.0 | 2026-04-20 | `v0.3.0` | `5261dae` | Tool-call repair + mid-stream guard + usage 集計 + tool-call streaming downgrade、+33 tests / 計 87 green |
@@ -490,9 +173,8 @@ coderouter doctor --check-model lmstudio-qwen3-6-35b-a3b-anthropic
 | v1.8.2 | 2026-04-26 | `v1.8.2` | — | **Patch: doctor probe を thinking モデル対応** (M3 Max 64GB / Ollama 0.21.2)。v1.8.1 出荷直後の深掘りで `doctor` の `num_ctx` / `streaming` probe が thinking モデル (Gemma 4 26B、Qwen3.6 系) に対して reasoning トークン消費分を見ていない `max_tokens=32` / `128` バジェットで偽陽性 NEEDS_TUNING を出していた事実を発見。(1) `coderouter/doctor.py` に `_is_reasoning_model(provider, resolved)` ヘルパ追加、`_probe_num_ctx` / `_probe_streaming` の `max_tokens` を thinking 検出付きの動的選択に変更 (num_ctx 32→256/1024、streaming 128→512/1024)。非 thinking モデルは natural stop で早期終了するため無駄消費なし、thinking モデルは reasoning trace + 答えが収まる headroom。(2) `coderouter/data/model-capabilities.yaml` で `gemma4:*` / `google/gemma-4*` / `qwen3.6:*` / `qwen/qwen3.6-*` に `thinking: true` を追加 (registry 経由で渡るので user は providers.yaml 触らずに doctor の thinking バジェットが効く)。Qwen3.6 セクションのコメントを v1.8.2 で「num_ctx / streaming は doctor 偽陽性、tool_calls [NEEDS TUNING] が真の課題として残る」へ整理。(3) `tests/test_doctor.py` に 3 件追加 (provider declaration / registry-based / streaming)、既存 num_ctx merge test の `max_tokens == 32` を `== 256` に更新、streaming merge test に `max_tokens == 512` assertion 追加。**実機検証**: M3 Max 64GB / `gemma4:26b` で `/v1/messages` Anthropic 互換経由 "Hello." が 2 秒応答、`tool_calls native OK`、`reasoning strip` 動作、`ollama ps` で context length 262144 確認。730 → **733 tests green** (+3)、Runtime deps 据え置き (20 sub-release 連続)。**メタ教訓**: diagnostic ツール自身も diagnostic され続ける必要がある (§5.4 の補強)。詳細は CHANGELOG.md `[v1.8.2]` |
 | v1.8.1 | 2026-04-26 | `v1.8.1` | — | **Patch: 実機検証反映** (M3 Max 64GB / Ollama 0.21.2)。(1) `coderouter/config/loader.py` の `CODEROUTER_MODE` env が `mode_aliases` 解決せずに `default_profile` 直接代入する v0.6-A 素朴実装を修正、startup と runtime (`X-CodeRouter-Mode`) を symmetric に。NIM example yaml ベースで `cr serve --mode coding` が validation エラーで起動失敗していた問題を解消。(2) `examples/providers.nvidia-nim.yaml` に `mode_aliases` 追加 (NIM ユーザーも canonical 短縮 alias 利用可)。(3) `examples/providers.yaml` の `coding` profile primary を Qwen3.6 → Gemma 4 + Qwen-Coder family へ実機検証反映調整。(4) `coderouter/data/model-capabilities.yaml` の `qwen3.6:*` / `qwen/qwen3.6-*` の `claude_code_suitability: ok` を撤回 (実機 num_ctx silent cap / tool_calls 0 chars / streaming 0 chars の 3 重 NEEDS_TUNING、note 伝聞ベースの先回り宣言は declaration 過信)。(5) `docs/troubleshooting.md` §4-2 新設「ローカル Ollama 経由の Known Issues」(4 サブセクション: §4-2-A Qwen3.6 系課題、§4-2-B Qwen3.5 系 llama.cpp `qwen35` architecture 未対応、§4-2-C Gemma 4 26B 無加工 tool_calls OK 確認、§4-2-D ベスト実践「枯れたモデル + 観測ツール」)。`tests/test_config.py` に `test_env_mode_resolves_through_mode_aliases_at_startup` 追加 (alias 解決成功 / 直接 profile 名 / 未知 mode で fast-fail の 3 ケース)。729 → **730 tests green** (+1)、Runtime deps 据え置き (19 sub-release 連続)。**「先回り実装より実機 evidence」原則 (§5.4) を再確認**。詳細は CHANGELOG.md `[v1.8.1]` |
 | v1.8.0 | 2026-04-26 | `v1.8.0` | — | **Minor: 用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化** (= v1.7-B umbrella、6 サブリリース統合)。(1) PyPI Trusted Publishing 自動化 (OIDC、tag push で自動 publish + Release 草稿)、(2) `claude_code_suitability` hint (Llama-3.3-70B 系を `claude-code-*` profile に置くと startup で `chain-claude-code-suitability-degraded` warn)、(3) `doctor --check-model --apply` / `--dry-run` (`ruamel.yaml` round-trip で YAML パッチ非破壊書き戻し、コメント・key 順序保持、冪等)、(4) `setup.sh` onboarding ウィザード (RAM 検出 → 推奨モデル → `ollama pull` → providers.yaml 生成、bash 3.2、依存ゼロ)、(5) examples/providers.yaml を `multi` (default) / `coding` / `general` / `reasoning` の 4 プロファイル化 + 全プロファイルに `append_system_prompt` で Claude 風応答 nudge + `mode_aliases`、(6) Ollama 公式 tag 化された `gemma4:e4b/26b/31b` / `qwen3.6:27b/35b` を active stanza として登録、Z.AI を OpenAI-compat で 2 base_url 提供、bundled model-capabilities.yaml に `qwen3.6:*` (claude_code_suitability=ok) / `gemma4:*` / `GLM-5*` / `GLM-4.[5-9]*` を新規宣言。"Claude Sonnet/Opus との挙動互換性" を 3 段の対策 (モデル選定 + append_system_prompt + output_filters) で実現。651 → **710 tests green** (+59、+9.1%)、Runtime deps 据え置き (18 sub-release 連続、`ruamel.yaml` は optional `[doctor]` extras で lazy import)。詳細は CHANGELOG.md `[v1.8.0]` |
-| v1.7.0 | 2026-04-25 | `v1.7.0` | — | **Minor: PyPI 公開 + uvx 経路の整備** (= v1.7-A 配布パイプライン)。(1) **PyPI にて `coderouter-cli` として publish** — 既存の `coderouter` 名前空間が別作者の HTTP routing 系汎用ライブラリで取得済み (Lawrence Chen, 2025-06, 0.1.0 only, ドメイン完全別物) のため `*-cli` suffix で取得。**Python import / console script 名は `coderouter` のまま**で、`pip install` 時の名前だけ違う npm/cargo 流の構成。(2) **`coderouter/__init__.py`** の `_pkg_version("coderouter")` を `version("coderouter-cli")` に追従 (PyPI 配布名の変更だけ反映、import 名は不変)。(3) **`pyproject.toml` enrich** — classifiers (`Topic :: Scientific/Engineering :: Artificial Intelligence` / `Topic :: System :: Networking` / `Typing :: Typed` 等)、`project.urls` 4 本 (Homepage / Repository / Issues / Changelog / Documentation)、keywords 拡張 (`claude-code` / `ollama` / `nvidia-nim` 追加)。(4) **`tool.hatch.build.targets.sdist`** を `only-include` 厳格 allowlist 化 — ローカル `.venv*` / `__pycache__` / `dist/` / `.pytest_cache` を絶対に sdist に取り込まない設計。`uv build` がどのマシンでも 668 KB sdist + 161 KB wheel の同サイズを出すようになった。(5) **`LICENSE` ファイル新規** — MIT を明示的にファイル化、wheel の `dist-info/licenses/LICENSE` に同梱されて PyPI の license 表示と sdist 完全性が向上。(6) **`.github/workflows/release.yml` 新規** — `git tag v*` push で Trusted Publishing (OIDC、API トークン不要) で PyPI へ自動 publish + GitHub Release 草稿作成。**初回 publish (v1.7.0) は手動**、Trusted Publisher 登録後 v1.7.x 以降は自動。(7) **README ja/en、quickstart ja/en、free-tier-guide ja/en** の install セクションを `uvx coderouter-cli` 中心に書き換え、(a) `uvx` 都度起動 / (b) `uv tool install coderouter-cli` 恒久 / (c) `git clone + uv sync` ソース開発、の 3 経路を明示。実機検証: 1Password Vault Item で `PYPI_TOKEN` を管理 → `op run --env-file=.env.publish.tpl -- uv publish` で publish、`uv pip install coderouter-cli==1.7.0` で 23 packages 全部 PyPI から正常解決 + `coderouter --version` 動作確認。651 → **651 tests green** (±0、コード変更は配布周りのみ)、Runtime deps 据え置き (17 sub-release 連続) |
-各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
-振り返り: [`docs/retrospectives/v0.4.md`](./docs/retrospectives/v0.4.md) / [`docs/retrospectives/v0.5.md`](./docs/retrospectives/v0.5.md) / [`docs/retrospectives/v0.5-verify.md`](./docs/retrospectives/v0.5-verify.md) / [`docs/retrospectives/v0.6.md`](./docs/retrospectives/v0.6.md) / [`docs/retrospectives/v0.7.md`](./docs/retrospectives/v0.7.md) / [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md) / [`docs/retrospectives/v1.0-verify.md`](./docs/retrospectives/v1.0-verify.md)。
+| v1.7.0 | 2026-04-25 | `v1.7.0` | — | PyPI 公開 + uvx 経路の整備 (`coderouter-cli` として publish、Trusted Publishing 経路) |
+-->
 
 ---
 
