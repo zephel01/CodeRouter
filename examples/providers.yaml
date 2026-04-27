@@ -147,6 +147,105 @@ providers:
     # llama.cpp は `extra_body.options` を受けない (Ollama 専用)、context /
     # max_tokens は server 起動引数 (--ctx-size / --n-predict) で確定済
 
+  # LM Studio (port 1234) — v1.8.4 で実機検証
+  # (M3 Max 64GB / LM Studio 0.4.12 / qwen35 + qwen35moe architecture 動作確認)
+  #
+  # 採用理由:
+  #   * LM Studio 0.4.12 で Qwen 3.6 公式サポート + Qwen 3.5 性能改善
+  #     (OpenAI compat /v1/chat/completions, /v1/responses, Anthropic compat /v1/messages)
+  #   * v1.8.1 で「llama.cpp 未対応で Qwopus3.5 詰み」と書いた qwen35 architecture が
+  #     LM Studio 経由で動く (フレームワーク待ちの前提が覆った)
+  #   * MoE / Dense / vision / tools / thinking 全部 native 対応、reasoning_content
+  #     フィールド名は llama.cpp と同じ (CodeRouter v1.8.3 で strip 対応済)
+  #   * Anthropic 互換 /v1/messages ルートでは tool_use block + 正規 stop_reason が
+  #     native で返る → CodeRouter から `kind: anthropic` で adapter 翻訳ゼロ接続可能
+  #
+  # 事前準備:
+  #   1. https://lmstudio.ai/ から LM Studio 0.4.12+ をダウンロード + インストール
+  #   2. GUI の "Discover" タブで以下のモデルを検索 + ダウンロード:
+  #      - lmstudio-community/Qwen3.5 9B (Q4_K_M、6.5GB)
+  #      - lmstudio-community/Qwen3.6 35B A3B (Q4_K_M、22.1GB)
+  #   3. Chat タブで Load Model:
+  #      - Context Length: 32768 (default 4096 では Claude Code system prompt 詰む)
+  #      - GPU Offload: max (全 layer Metal offload)
+  #      - Flash Attention: ON
+  #      - Keep Model in Memory: ON
+  #   4. Local Server タブ → "Just-in-time Model Loading: ON" → "Start Server"
+  #      → http://localhost:1234 で listen 開始
+  #
+  # 検証コマンド (LM Studio 0.4.12 で実機確認済):
+  #   curl http://localhost:1234/v1/models                # model 一覧
+  #   curl http://localhost:1234/v1/chat/completions ...  # OpenAI 互換、native tool_calls 動作
+  #   curl http://localhost:1234/v1/messages ...          # Anthropic 互換、native tool_use 動作
+  #
+  # 詳細手順は docs/lmstudio-direct.md (v1.9 で予定)。
+  # ------------------------------------------------------------
+
+  # (a) Qwen3.5 9B — qwen35 architecture、軽量で起動が速い、検証用 first choice
+  - name: lmstudio-qwen3-5-9b
+    kind: openai_compat
+    base_url: http://localhost:1234/v1
+    model: qwen3.5-9b                # LM Studio は fuzzy match (qwen/qwen3.5-9b でも可)
+    paid: false
+    api_key_env: null                 # LM Studio default は無認証
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true                     # v1.8.4 で native tool_calls 動作確認済
+      thinking: true                  # reasoning_content 出すモデル、doctor が 1024 budget を使う
+    output_filters:
+      - strip_thinking                # `<think>...</think>` リーク時の保険
+    # context / max_tokens は LM Studio GUI のロード時設定で確定 (32768 推奨)
+    # extra_body.options は不要 (Ollama 専用 knob)
+
+  # (b) Qwen3.5 9B Anthropic 互換ルート — v1.8.4 の目玉
+  #     LM Studio 0.4.12 から /v1/messages 公式サポート、native tool_use block
+  #     + 正規 stop_reason が返る → CodeRouter から adapter 翻訳ゼロで透過可能
+  - name: lmstudio-qwen3-5-9b-anthropic
+    kind: anthropic                   # ← ここがポイント、OpenAI 互換層を skip
+    base_url: http://localhost:1234   # /v1/messages は LM Studio 側で受ける (path はクライアント側で付与)
+    model: qwen3.5-9b
+    paid: false
+    api_key_env: null
+    timeout_s: 120
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      thinking: true
+
+  # (c) Qwen3.6 35B-A3B — qwen35moe architecture、MoE active 3.8B / total 35B
+  #     llama.cpp 直叩き (llamacpp-qwen3-6-35b-a3b) と同等 + LM Studio GUI の便利さ
+  - name: lmstudio-qwen3-6-35b-a3b
+    kind: openai_compat
+    base_url: http://localhost:1234/v1
+    model: qwen3.6-35b-a3b
+    paid: false
+    api_key_env: null
+    timeout_s: 180                    # 35B なので 9B より生成時間長め
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      thinking: true
+    output_filters:
+      - strip_thinking
+
+  # (d) Qwen3.6 35B-A3B Anthropic 互換ルート
+  - name: lmstudio-qwen3-6-35b-a3b-anthropic
+    kind: anthropic
+    base_url: http://localhost:1234
+    model: qwen3.6-35b-a3b
+    paid: false
+    api_key_env: null
+    timeout_s: 180
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+      thinking: true
+
   # Ollama — convenient for trying multiple models
   # Small & fast (1-2s/turn on M-series for non-Claude-Code traffic,
   # but tool selection is weak — not recommended as Claude Code's primary).
@@ -995,6 +1094,27 @@ profiles:
       - openrouter-gpt-oss-free        # cloud free (gpt-oss reasoning)
       - zai-coding-glm-5-1             # paid: GLM-5.1 (Opus 級フラッグシップ)
       - anthropic-opus-direct          # paid: Opus 4-1 with thinking (★★★★★)
+
+  # ==========================================================================
+  # Test / verify profiles (LM Studio 0.4.12+、v1.8.4 検証で動作確認済)
+  # ==========================================================================
+  # 上記の lmstudio-* providers を直接叩くための test profile。
+  # `coderouter serve --mode test-lmstudio-openai` または `--mode test-lmstudio-anthropic`
+  # で起動して、実機で挙動を確認するときに使う。
+
+  # OpenAI 互換ルート (従来通り、CodeRouter の adapter 翻訳経由)
+  - name: test-lmstudio-openai
+    providers:
+      - lmstudio-qwen3-5-9b           # 軽量、起動が速い (検証用 first choice)
+      - lmstudio-qwen3-6-35b-a3b      # 大型、本番候補
+      - openrouter-free               # 安全網 (LM Studio が落ちた時のフォールバック)
+
+  # Anthropic 互換ルート (v1.8.4 で確認した /v1/messages、adapter 翻訳ゼロ)
+  - name: test-lmstudio-anthropic
+    providers:
+      - lmstudio-qwen3-5-9b-anthropic
+      - lmstudio-qwen3-6-35b-a3b-anthropic
+      - openrouter-free
 
   # ==========================================================================
   # Legacy / backward-compat profiles
