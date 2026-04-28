@@ -223,6 +223,23 @@ class FallbackChain(BaseModel):
             "error response. See FallbackChain comment for trade-offs."
         ),
     )
+    adaptive: bool = Field(
+        default=False,
+        description=(
+            "v1.9-C: enable health-based dynamic chain reordering for "
+            "this profile. When True, the engine consults its "
+            "AdaptiveAdjuster and may demote providers whose rolling-"
+            "window median latency or error rate exceeds the configured "
+            "thresholds (1.5x global median / 10% errors). Demotions are "
+            "debounced (30 s minimum between rank changes per provider) "
+            "so a transient blip cannot oscillate the chain. When False "
+            "(default), the static ``providers`` order is honored "
+            "verbatim — no observation overhead. Orthogonal to L5 "
+            "(binary HEALTHY/UNHEALTHY backend swap, planned for "
+            "v1.9-E phase 3): C handles the gradient case during normal "
+            "operation, L5 handles hard crashes."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

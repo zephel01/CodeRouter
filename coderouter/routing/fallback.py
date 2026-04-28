@@ -24,6 +24,7 @@ Dual entry points (v0.3.x-1):
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from typing import Final
 
@@ -52,6 +53,7 @@ from coderouter.logging import (
     log_chain_paid_gate_blocked,
     log_tool_loop_detected,
 )
+from coderouter.routing.adaptive import AdaptiveAdjuster
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
@@ -335,12 +337,41 @@ class FallbackEngine:
         held in the per-call ``ProviderCallOverrides``), so caching by
         provider name across requests is safe and avoids the cost of
         re-parsing YAML / re-resolving env vars on every request.
+
+        v1.9-C: an :class:`AdaptiveAdjuster` is constructed eagerly
+        but its observation buffers stay empty until the first profile
+        with ``adaptive: true`` actually fires. Adapter calls under
+        non-adaptive profiles record nothing — zero observation
+        overhead in the default configuration.
         """
         self.config = config
         # Cache adapters so we don't re-instantiate per request
         self._adapters: dict[str, BaseAdapter] = {
             p.name: build_adapter(p) for p in config.providers
         }
+        # v1.9-C: per-process adaptive routing adjuster (rolling-window
+        # latency + error-rate observations, debounced rank changes).
+        # Stored under ``_adaptive_adjuster`` and surfaced via the
+        # ``_adaptive`` property so legacy tests that bypass __init__
+        # via ``__new__`` get a lazily-built default instance instead
+        # of an AttributeError.
+        self._adaptive_adjuster: AdaptiveAdjuster = AdaptiveAdjuster()
+
+    @property
+    def _adaptive(self) -> AdaptiveAdjuster:
+        """Return the adaptive routing adjuster, lazily building one if absent.
+
+        Some legacy tests construct the engine via ``FallbackEngine.__new__``
+        and only populate ``config`` + ``_adapters``. The ``_adaptive``
+        property covers that case so the engine's recording sites
+        always see an adjuster object — at worst, an empty one whose
+        observations don't outlive the test.
+        """
+        existing = getattr(self, "_adaptive_adjuster", None)
+        if existing is None:
+            self._adaptive_adjuster = AdaptiveAdjuster()
+            existing = self._adaptive_adjuster
+        return existing
 
     def _resolve_profile_overrides(self, profile_name: str | None) -> ProviderCallOverrides:
         """v0.6-B: build the ProviderCallOverrides for the active profile.
@@ -412,12 +443,24 @@ class FallbackEngine:
         will fire. Capable providers are pulled to the front (stable sort)
         so the user's ordering is preserved within each bucket.
 
+        v1.9-C: when the profile has ``adaptive: true``, the static
+        chain is run through :meth:`AdaptiveAdjuster.compute_effective_order`
+        BEFORE the thinking-capability split. This way operator-declared
+        ordering and adaptive demotions both feed the capability
+        bucketing as a single unified order — capable providers stay in
+        front, but among them the (possibly-demoted) latency / error-
+        rate signal still applies.
+
         Returns a list of ``(adapter, will_degrade)`` pairs in the order
         they should be tried. When the request has no capability
         requirement, all entries have ``will_degrade=False`` and the order
-        matches ``_resolve_chain``.
+        matches ``_resolve_chain`` (with adaptive reorder when applicable).
         """
         base = self._resolve_chain(request.profile)
+
+        if self._profile_is_adaptive(request.profile) and base:
+            base = self._adaptive.compute_effective_order(base)
+
         if not anthropic_request_requires_thinking(request):
             return [(a, False) for a in base]
 
@@ -429,6 +472,21 @@ class FallbackEngine:
             else:
                 degraded.append((adapter, True))
         return capable + degraded
+
+    def _profile_is_adaptive(self, profile_name: str | None) -> bool:
+        """Return True iff the resolved profile opts into adaptive routing.
+
+        Centralized so both the chain resolver and the recording-side
+        path read the same flag from the same source. A missing
+        profile (e.g. test harness with stripped config) returns
+        False — adaptive defaults off.
+        """
+        chosen = profile_name or self.config.default_profile
+        try:
+            profile = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return False
+        return profile.adaptive
 
     async def generate(self, request: ChatRequest) -> ChatResponse:
         """Non-streaming OpenAI-shaped generation with sequential fallback.
@@ -607,6 +665,11 @@ class FallbackEngine:
                     "degraded": will_degrade,
                 },
             )
+            # v1.9-C: time the whole adapter call (including any
+            # translation hops on the openai_compat path) so the
+            # rolling-window median reflects the operator-visible
+            # latency, not just the upstream HTTP RTT.
+            attempt_started = time.monotonic()
             try:
                 # `is_native` is the same test as this `isinstance`; we do
                 # it directly here so mypy narrows `adapter` to
@@ -620,6 +683,20 @@ class FallbackEngine:
                     chat_resp = await adapter.generate(chat_req, overrides=overrides)
                     resp = to_anthropic_response(chat_resp, allowed_tool_names=tool_names)
             except AdapterError as exc:
+                # v1.9-C: record the failure with its observed latency.
+                # Auth-flavored failures (401 / 403) carry no useful
+                # latency signal (they short-circuit immediately), so
+                # we drop the latency to None and let the error-rate
+                # counter alone do the demotion math.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(
+                        None
+                        if exc.status_code in {401, 403}
+                        else (time.monotonic() - attempt_started) * 1000.0
+                    ),
+                    success=False,
+                )
                 logger.warning(
                     "provider-failed",
                     extra={
@@ -633,6 +710,13 @@ class FallbackEngine:
                 if not exc.retryable:
                     break
                 continue
+            else:
+                # v1.9-C: record the successful attempt's latency.
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                    success=True,
+                )
 
             logger.info(
                 "provider-ok",

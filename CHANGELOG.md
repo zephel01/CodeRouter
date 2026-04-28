@@ -6,6 +6,103 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a4] — 2026-04-28 (v1.9-C: Adaptive Routing — health-based dynamic chain priority)
+
+**Theme: 「平常時の最適化」を chain に持ち込む。** 静的に declare した `providers` 順序を、live observed の median latency / error rate に基づいて自動再優先化。L5 (v1.9-E phase 3 予定) は二値 (HEALTHY/UNHEALTHY) で crash 対応するのに対し、C は連続値 gradient で **平常時の遅さ** を吸収する。両方とも同じ observation stream から動くが、適用ロジックが直交。
+
+`docs/inside/future.md` §5.4 の v1.9-C 範囲を MVP 実装。**Anthropic 非 streaming パスのみ** 対応 (v1.9-C2 で OpenAI-shaped + streaming follow-up 予定)。
+
+- Tests: 795 → **811** (+16: stats 4 / no-demote 3 / latency demote 2 / error-rate demote 2 / debounce 2 / engine integration 2 / constants pin 1)
+- Runtime deps: 5 → 5 (26 sub-release 連続据え置き)
+- Backward compat: 完全互換、既存 profile は default の `adaptive: false` で従来挙動を維持
+- Pre-release: `1.9.0a4`、`pip install --pre coderouter-cli` で取得可能
+
+### Changes
+
+#### `coderouter/routing/adaptive.py` 新規 (~360 LOC)
+
+- `AdaptiveAdjuster` クラス — per-process singleton (engine が 1 つ保持)
+  - `record_attempt(provider, *, latency_ms, success, now=None)` — observation 記録、append on each engine attempt
+  - `stats_for(provider, *, now=None) -> ProviderStats` — rolling-window から median latency + error rate 計算
+  - `compute_effective_order(adapters, *, now=None) -> list[BaseAdapter]` — 静的 chain → 動的順序、debounce 適用
+- `_ProviderObservation` / `_AdjusterState` / `ProviderStats` データクラス
+- `_apply_debounce` 内部メソッド — `last_committed_rank` 比較で debounce window 内の rank 変更を pinning (両方向、demote→promote と promote→demote 両方)
+- 定数:
+  - `ROLLING_WINDOW_S = 60.0`
+  - `LATENCY_DEMOTE_FACTOR = 1.5` (median × 1.5 を超えたら -1 段)
+  - `ERROR_RATE_DEMOTE_THRESHOLD = 0.10` (10% 失敗で -2 段)
+  - `DEBOUNCE_S = 30.0`
+  - `MIN_SAMPLES_FOR_LATENCY = 3` / `MIN_SAMPLES_FOR_ERROR_RATE = 5`
+
+#### Engine integration (`coderouter/routing/fallback.py`)
+
+- `FallbackEngine.__init__` で `_adaptive_adjuster: AdaptiveAdjuster` を eager 構築。`@property` の `_adaptive` で lazy-fallback も用意 (legacy test `__new__` bypass パターンに対する resilience)
+- `_resolve_anthropic_chain`: profile が `adaptive: true` のときに `_adaptive.compute_effective_order(base)` で chain を再優先化、その後 thinking-capable bucket logic に渡す
+- `_profile_is_adaptive(profile_name)` ヘルパ — chain resolver と recording 側で同じ profile lookup を共有
+- `generate_anthropic` の adapter 呼び出しを `time.monotonic()` で wrap、success/failure 両方で `record_attempt(...)` 呼び出し。auth-flavored failures (401/403) は latency_ms=None で記録 (短絡応答なので latency 信号として無意味)
+
+#### Logging
+
+- 新 event `adaptive-routing-applied` (info-level) — 静的 chain と effective chain order が異なるときのみ fire。payload に static_order / effective_order / per-provider stats を含む
+
+#### Config schema
+
+- `FallbackChain.adaptive: bool = False` 追加。既存 yaml はそのまま動く (default false)
+
+#### Tests
+
+- **`tests/test_routing_adaptive.py`** 新規 (+16 tests):
+  - **Stats**: unseen / median は success のみ / window roll-off / error rate zero on empty (4)
+  - **No demote**: empty chain / no obs / all fast (3)
+  - **Latency demote**: 1.5× threshold / min samples gate (2)
+  - **Error rate demote**: 10% threshold / min samples gate (2)
+  - **Debounce**: pin within window / release after window (2)
+  - **Engine integration**: static profile not invoking adjuster / adaptive profile invoking adjuster (2)
+  - **Constants pin**: ROLLING_WINDOW_S / LATENCY_DEMOTE_FACTOR / ERROR_RATE_DEMOTE_THRESHOLD / DEBOUNCE_S / MIN_SAMPLES_* (1)
+
+### Why
+
+`docs/inside/future.md` §5.4 で確立した「task-based (auto_router、v1.6-A) + health-based (v1.9-C) の両軸対応」のうち health-based を実装。auto_router は request shape (intent) で profile を選ぶが、profile の chain 内 priority は static のまま。v1.9-C で chain 内 priority が live observed health に追従するようになり、両軸が初めて補完関係を成す。
+
+**競合状況**: claude-code-router は task-based 単独、LiteLLM は session-cost-based、何れも latency-aware adaptive routing を持たない。CodeRouter は v1.9-C で **task-based + health-based 両軸** を持つ唯一の Claude Code 系 OSS という位置づけ。
+
+### Migration
+
+`pyproject.toml version 1.9.0a3 → 1.9.0a4`、`coderouter --version` は 1.9.0a4 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。新フィールド `adaptive: false` がデフォルトなので、既存 profile はゼロ変更で従来動作を維持。
+
+明示的に有効化する operator は profile に追加:
+
+```yaml
+profiles:
+  - name: coding
+    providers:
+      - lmstudio-qwen3-5-9b
+      - ollama-gemma4-26b
+      - openrouter-free
+    adaptive: true   # 平常時の latency / error rate に基づく動的優先度
+```
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+A  coderouter/routing/adaptive.py
+A  tests/test_routing_adaptive.py
+```
+
+### Out of scope (次回以降の v1.9-C2)
+
+- **OpenAI-shaped engine paths**: `generate` / `stream` (非 Anthropic ingress) からの `record_attempt` 呼び出し。MVP では Anthropic 非 streaming のみカバー
+- **Anthropic streaming**: `stream_anthropic` の latency 計測 (mid-stream success の境界をどこに置くか設計余地あり)
+- **Dashboard panel**: `/dashboard` に effective chain order の可視化 (「static order vs current effective order」の差分強調表示)
+- **MetricsCollector への adaptive 集計**: 現在は `adaptive-routing-applied` log のみ。将来 dashboard panel 用に reorder 回数 / 直近 reorder timestamp などを集計
+- **L5 (v1.9-E phase 3)**: binary HEALTHY/UNHEALTHY backend swap。本実装の continuous gradient と棲み分け、両方とも同じ observation stream を消費する設計
+
+---
+
 ## [v1.9.0a3] — 2026-04-28 (v1.9-E phase 1: L3 Tool-loop detection guard)
 
 **Theme: Long-run reliability の最初の guard。** `docs/inside/future.md` §5.3 の v1.9-E は L2/L3/L5 の 3 系統障害を扱う 1-2 週間のまとまった作業。1 commit で全部やると重いので **L3 (Tool loop detection) → L2 (Memory pressure) → L5 (Backend health)** の 3 段階で alpha pre-release を切る。
