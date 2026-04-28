@@ -489,6 +489,16 @@ class CacheObservedPayload(TypedDict):
         streaming: whether the response was returned via the streaming
             path. Streaming aggregation lands in v1.9-B; for v1.9-A,
             ``streaming=True`` always pairs with ``outcome=unknown``.
+        cost_usd: v1.9-D — total USD cost charged for this attempt
+            (sum of all four token buckets at their respective rates,
+            using the provider's :class:`coderouter.config.schemas.CostConfig`).
+            ``0.0`` when the provider has no cost configured (typical
+            for local models).
+        cost_savings_usd: v1.9-D — counterfactual "no-cache" delta:
+            what the operator *would have* paid for ``cache_read_input_tokens``
+            at full input rate, minus what they actually paid at the
+            discounted rate. ``0.0`` when there were no cache reads
+            or no cost is configured. Always >= 0.
     """
 
     provider: str
@@ -499,6 +509,8 @@ class CacheObservedPayload(TypedDict):
     input_tokens: int
     output_tokens: int
     streaming: bool
+    cost_usd: float
+    cost_savings_usd: float
 
 
 def log_cache_observed(
@@ -512,6 +524,8 @@ def log_cache_observed(
     input_tokens: int,
     output_tokens: int,
     streaming: bool,
+    cost_usd: float = 0.0,
+    cost_savings_usd: float = 0.0,
 ) -> None:
     """Emit a ``cache-observed`` info record with the unified shape.
 
@@ -523,7 +537,10 @@ def log_cache_observed(
 
     Caller responsibility: derive ``outcome`` from the token fields.
     Helper :func:`classify_cache_outcome` exists for callers that just
-    have the raw usage dict.
+    have the raw usage dict. v1.9-D adds optional ``cost_usd`` /
+    ``cost_savings_usd`` parameters that default to 0.0 — pre-v1.9-D
+    callers continue to work and simply don't contribute to the cost
+    aggregator.
     """
     payload: CacheObservedPayload = {
         "provider": provider,
@@ -534,6 +551,8 @@ def log_cache_observed(
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "streaming": streaming,
+        "cost_usd": cost_usd,
+        "cost_savings_usd": cost_savings_usd,
     }
     logger.info("cache-observed", extra=payload)
 

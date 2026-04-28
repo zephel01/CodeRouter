@@ -38,7 +38,8 @@ from coderouter.adapters.base import (
     StreamChunk,
 )
 from coderouter.adapters.registry import build_adapter
-from coderouter.config.schemas import CodeRouterConfig
+from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
+from coderouter.cost import compute_cost_for_attempt
 from coderouter.errors import CodeRouterError
 from coderouter.guards.tool_loop import (
     DEFAULT_LOOP_INJECT_HINT,
@@ -166,6 +167,7 @@ def _emit_cache_observed(
     provider: str,
     request_had_cache_control: bool,
     streaming: bool,
+    provider_config: ProviderConfig | None = None,
 ) -> None:
     """Extract usage / cache fields from an AnthropicResponse and log them.
 
@@ -184,6 +186,12 @@ def _emit_cache_observed(
     aggregate ``message_delta`` events, so streaming responses always
     record ``outcome=unknown`` (per :data:`coderouter.logging.CacheOutcome`
     docstring). Streaming aggregation lands in v1.9-B.
+
+    v1.9-D: when ``provider_config.cost`` is set, also computes the
+    USD cost of this attempt + the counterfactual cache savings and
+    folds them into the log payload. ``provider_config=None`` (legacy
+    callers) yields zero cost figures and the dashboard reports
+    nothing for that attempt.
     """
     usage = response.usage
     extra = usage.model_extra or {}
@@ -207,6 +215,19 @@ def _emit_cache_observed(
         cache_read_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
     )
+
+    # v1.9-D: compute per-attempt USD cost using the provider's
+    # CostConfig (if any). Local / unconfigured providers yield 0.0
+    # so they show up in token counters but contribute nothing to
+    # the cost dashboard.
+    cost = compute_cost_for_attempt(
+        provider_config.cost if provider_config is not None else None,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+    )
+
     log_cache_observed(
         logger,
         provider=provider,
@@ -217,6 +238,8 @@ def _emit_cache_observed(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         streaming=streaming,
+        cost_usd=cost.total_usd,
+        cost_savings_usd=cost.savings_usd,
     )
 
 
@@ -732,11 +755,14 @@ class FallbackEngine:
             # cache_creation_input_tokens via usage.model_extra;
             # openai_compat-converted responses fall through to
             # outcome=unknown.
+            # v1.9-D: also enrich the log line with per-attempt
+            # USD cost + cache savings via the provider's CostConfig.
             _emit_cache_observed(
                 resp,
                 provider=adapter.name,
                 request_had_cache_control=request_had_cache_control,
                 streaming=False,
+                provider_config=adapter.config,
             )
             return resp
 

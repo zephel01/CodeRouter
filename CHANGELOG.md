@@ -6,6 +6,125 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a5] — 2026-04-28 (v1.9-D: Cost-aware Dashboard — Anthropic prompt-cache aware)
+
+**Theme: 「いくら使ってる」を可視化、cache savings を別枠で。** v1.9-A で観測、v1.9-B で透過保証、v1.9-D で **金額に翻訳**。Anthropic の prompt-cache 価格モデル (cache_read 90% 割引、cache_creation 25% 増し) を最初から正確に実装、LiteLLM 競合品が **cache savings を別計算しない** 弱点を構造的にカバー。
+
+`docs/inside/future.md` §5.5 の v1.9-D 範囲を実装。
+
+- Tests: 811 → **826** (+15: pure compute_cost 8 / collector dispatch 4 / Prometheus exposition 3)
+- Runtime deps: 5 → 5 (27 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` の `cost:` フィールドは optional (unset = 0 contribution)
+- Pre-release: `1.9.0a5`
+
+### Changes
+
+#### `coderouter/cost.py` 新規 (~150 LOC)
+
+- `CostBreakdown` dataclass — per-attempt cost components (input/output/cache_read/cache_creation USD + total + savings)
+- `compute_cost_for_attempt(cost_config, *, input_tokens, ..., cache_creation)` 純関数:
+  - 4 token bucket をそれぞれの rate で計算
+  - cache_read tokens を `input_rate × cache_read_discount` で割引
+  - cache_creation tokens を `input_rate × cache_creation_premium` で premium
+  - savings = `cache_read tokens × input_rate × (1 - cache_read_discount)` (cache_creation は premium なので savings には入らない)
+  - 負の token / None config / partial config に対する defensive 処理
+
+#### Schema: `CostConfig` 新設
+
+- **`coderouter/config/schemas.py`**: `CostConfig` BaseModel に `input_tokens_per_million` / `output_tokens_per_million` / `cache_read_discount=0.10` / `cache_creation_premium=1.25` を declare
+- `ProviderConfig.cost: CostConfig | None = None` 追加 — opt-in、unset の provider (local 等) は dashboard に 0 contribution
+
+#### Engine integration
+
+- **`coderouter/routing/fallback.py`**: `_emit_cache_observed` を拡張、`provider_config: ProviderConfig | None = None` パラメータを受けて `compute_cost_for_attempt()` で per-attempt USD cost + savings を計算、log payload に折り込む
+- `generate_anthropic` の call site で `adapter.config` を渡す
+
+#### Logging schema 拡張
+
+- **`coderouter/logging.py`** `CacheObservedPayload` に `cost_usd: float` / `cost_savings_usd: float` フィールド追加 (default 0.0、pre-v1.9-D caller は zero contribution で互換)
+- `log_cache_observed` helper の signature にも optional kwargs 追加
+
+#### MetricsCollector: per-provider cost aggregation
+
+- **`coderouter/metrics/collector.py`**: `cache-observed` event の dispatch で cost を集計
+  - `_cost_total_usd: dict[str, float]` (per-provider)
+  - `_cost_savings_usd: dict[str, float]` (per-provider)
+  - `_cost_total_usd_aggregate: float` / `_cost_savings_usd_aggregate: float` (process-wide)
+- `snapshot()` 拡張:
+  - `counters.cost_total_usd` / `cost_savings_usd` (per-provider dict)
+  - `counters.cost_total_usd_aggregate` / `cost_savings_usd_aggregate` (process-wide)
+  - 各 provider row に `cost: {total_usd, savings_usd}` panel
+- `reset()` で v1.9-D state も clear
+- 防御的: malformed cost values (str/None) → 0.0 default、handler は raise しない
+
+#### Prometheus exposition
+
+- **`coderouter/metrics/prometheus.py`**: 新 helper `_counter_float()` (float-valued counter、`.10g` formatter で trailing zero trim) + 2 つの新 metric:
+  - `coderouter_cost_total_usd_total{provider}` — cumulative USD billed
+  - `coderouter_cost_savings_usd_total{provider}` — cumulative cache savings USD
+
+#### Tests (+15)
+
+- **`tests/test_metrics_cost.py`** 新規:
+  - `compute_cost_for_attempt`: None config / no cache / cache read discount / cache creation premium / combined / negative tokens defensive / partial config (7)
+  - Collector dispatch: per-provider aggregation / zero cost no entry / per-row cost panel / reset / malformed values (5)
+  - Prometheus: HELP+TYPE / per-provider labels / `_total` suffix (3)
+
+### Why
+
+`docs/inside/future.md` §5.5 で確立した「LiteLLM ですら未対応の cache savings 計算を最初から正確に実装」の具体実装。Anthropic 価格モデルを 4 token bucket × 4 multiplier で正確に表現、operator が「ローカル LLM 併用でいくら浮いたか」「Anthropic prompt cache でいくら節約できたか」を 1 画面で見える状態を実現。
+
+**競合状況**:
+- LiteLLM の cost tracker は `cache_read_input_tokens` を full input rate で billing (= overstate)、savings 別計算なし
+- claude-code-router は cost tracking 自体なし
+- v1.9-D は **Claude Code 系 OSS で唯一、cache-aware cost dashboard を持つ**
+
+### Migration
+
+`pyproject.toml version 1.9.0a4 → 1.9.0a5`、`coderouter --version` は 1.9.0a5 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+明示的に有効化する operator は paid provider に `cost:` ブロックを追加:
+
+```yaml
+providers:
+  - name: anthropic-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-8
+    api_key_env: ANTHROPIC_API_KEY
+    paid: true
+    cost:                              # v1.9-D 新フィールド
+      input_tokens_per_million: 3.00
+      output_tokens_per_million: 15.00
+      cache_read_discount: 0.10        # default、省略可
+      cache_creation_premium: 1.25     # default、省略可
+```
+
+`coderouter serve` 起動後、`/metrics.json` の `counters.cost_total_usd` / `cost_savings_usd` で per-provider cost を取得可能。Prometheus scrape は `coderouter_cost_total_usd_total{provider="anthropic-direct"}` で取れる。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+A  coderouter/cost.py
+A  tests/test_metrics_cost.py
+```
+
+### Out of scope (次回以降)
+
+- **`/dashboard` HTML cost panel**: snapshot schema は揃ったが UI 描画は v1.9-D2 で
+- **`coderouter stats --cost` TUI**: 5 行サマリ CLI コマンドは v1.9-D2 で
+- **期間別累積 (1 day / 1 week / 1 month)**: 現在 process-lifetime のみ。期間集計は SQLite persistence と組み合わせて v1.10 候補
+- **OpenAI-shaped engine paths のコスト集計**: Anthropic 非 streaming 経路のみ。OpenAI ingress + streaming 対応は v1.9-C2 と同じ follow-up
+
+---
+
 ## [v1.9.0a4] — 2026-04-28 (v1.9-C: Adaptive Routing — health-based dynamic chain priority)
 
 **Theme: 「平常時の最適化」を chain に持ち込む。** 静的に declare した `providers` 順序を、live observed の median latency / error rate に基づいて自動再優先化。L5 (v1.9-E phase 3 予定) は二値 (HEALTHY/UNHEALTHY) で crash 対応するのに対し、C は連続値 gradient で **平常時の遅さ** を吸収する。両方とも同じ observation stream から動くが、適用ロジックが直交。

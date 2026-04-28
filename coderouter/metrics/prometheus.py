@@ -209,6 +209,44 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             samples=cache_outcome_samples,
         )
     )
+
+    # ---- v1.9-D: cost-aware metrics --------------------------------------
+    # Two counters expose the cost picture:
+    #   * cost_total_usd_total{provider}    — cumulative USD billed
+    #   * cost_savings_usd_total{provider}  — cumulative USD saved by
+    #                                         prompt cache reads
+    # Both are floats; Prometheus accepts decimal-bearing samples on
+    # counters per spec. The ``_total`` suffix is preserved for naming
+    # consistency with the rest of the exposition surface even though
+    # the metric carries USD rather than counts.
+    lines.extend(
+        _counter_float(
+            name="cost_total_usd_total",
+            help_text=(
+                "Cumulative USD billed for successful responses, by provider. "
+                "Includes input / output / cache_read / cache_creation buckets "
+                "at their respective per-provider rates."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(counters.get("cost_total_usd", {}).items())
+            ],
+        )
+    )
+    lines.extend(
+        _counter_float(
+            name="cost_savings_usd_total",
+            help_text=(
+                "Cumulative USD saved by prompt cache reads, by provider — "
+                "the counterfactual delta vs. paying full input rate for the "
+                "same cache_read_input_tokens. Excludes cache_creation premium."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(counters.get("cost_savings_usd", {}).items())
+            ],
+        )
+    )
     return "\n".join(lines) + "\n"
 
 
@@ -237,6 +275,35 @@ def _counter(
     ]
     for labels, value in samples:
         lines.append(f"{full_name}{_fmt_labels(labels)} {value}")
+    return lines
+
+
+def _counter_float(
+    *,
+    name: str,
+    help_text: str,
+    samples: list[tuple[tuple[tuple[str, str], ...], float]],
+) -> list[str]:
+    """v1.9-D: float-valued counter (used for USD cost figures).
+
+    Identical wire format to :func:`_counter`; Prometheus's text
+    exposition spec accepts decimal samples on counter metrics. We
+    keep them as separate helpers to make grep'ability easier
+    (``_counter_float`` calls clearly identify cost-metric sites)
+    and to anchor the ``g`` formatter for the value, which trims
+    trailing zeros (``$3.5`` instead of ``$3.50000000``) without
+    losing precision on small fractions.
+    """
+    full_name = f"{_PREFIX}{name}"
+    lines = [
+        f"# HELP {full_name} {help_text}",
+        f"# TYPE {full_name} counter",
+    ]
+    for labels, value in samples:
+        # ``g`` chops trailing zeros; ``.10g`` keeps 10 sig figs which
+        # covers sub-cent precision for cumulative totals into the
+        # thousands of dollars.
+        lines.append(f"{full_name}{_fmt_labels(labels)} {value:.10g}")
     return lines
 
 

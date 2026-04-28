@@ -134,6 +134,17 @@ class MetricsCollector(logging.Handler):
         self._cache_read_tokens_total: int = 0
         self._cache_creation_tokens_total: int = 0
 
+        # v1.9-D: per-provider USD cost aggregation. Floats use a
+        # plain dict-of-floats rather than Counter (Counter coerces
+        # non-int values weirdly on some operations); we hand-update
+        # with += in the dispatch site. ``cost_savings`` tracks the
+        # counterfactual "what would have been paid without cache"
+        # delta, which is the headline figure on the dashboard.
+        self._cost_total_usd: dict[str, float] = {}
+        self._cost_savings_usd: dict[str, float] = {}
+        self._cost_total_usd_aggregate: float = 0.0
+        self._cost_savings_usd_aggregate: float = 0.0
+
         # Last-error snapshot per provider (overwrites previous). Enables the
         # dashboard's "last error" column without scanning the ring.
         self._last_error: dict[str, dict[str, Any]] = {}
@@ -236,6 +247,35 @@ class MetricsCollector(logging.Handler):
                 self._cache_creation_tokens_total += creation
                 if outcome:
                     self._cache_outcomes.setdefault(provider, Counter())[outcome] += 1
+
+                # v1.9-D: cost aggregation. Same defensive coercion —
+                # malformed cost values default to 0.0 rather than
+                # crashing the metrics handler. The fields are typed
+                # ``float`` in CacheObservedPayload but JSON parsers
+                # downstream can sometimes hand us ``int`` for whole
+                # numbers, so we accept both.
+                cost_usd_raw = extras.get("cost_usd", 0.0)
+                savings_usd_raw = extras.get("cost_savings_usd", 0.0)
+                cost_usd = (
+                    float(cost_usd_raw)
+                    if isinstance(cost_usd_raw, (int, float))
+                    else 0.0
+                )
+                savings_usd = (
+                    float(savings_usd_raw)
+                    if isinstance(savings_usd_raw, (int, float))
+                    else 0.0
+                )
+                if cost_usd > 0.0:
+                    self._cost_total_usd[provider] = (
+                        self._cost_total_usd.get(provider, 0.0) + cost_usd
+                    )
+                    self._cost_total_usd_aggregate += cost_usd
+                if savings_usd > 0.0:
+                    self._cost_savings_usd[provider] = (
+                        self._cost_savings_usd.get(provider, 0.0) + savings_usd
+                    )
+                    self._cost_savings_usd_aggregate += savings_usd
             elif event == "coderouter-startup":
                 # Snapshot a subset — startup payload contains lists that are
                 # safe to surface to /metrics.json. Version / providers /
@@ -287,6 +327,8 @@ class MetricsCollector(logging.Handler):
                 | set(self._cache_read_tokens)
                 | set(self._cache_creation_tokens)
                 | set(self._cache_outcomes)
+                | set(self._cost_total_usd)
+                | set(self._cost_savings_usd)
             )
             provider_rows = [
                 {
@@ -305,6 +347,19 @@ class MetricsCollector(logging.Handler):
                         self._cache_read_tokens.get(name, 0),
                         self._cache_creation_tokens.get(name, 0),
                     ),
+                    # v1.9-D: per-row cost panel. ``cost_usd`` /
+                    # ``savings_usd`` are zero for unconfigured /
+                    # local providers — the dashboard renders "—"
+                    # for those rows rather than showing a misleading
+                    # "$0.00 spent".
+                    "cost": {
+                        "total_usd": round(
+                            self._cost_total_usd.get(name, 0.0), 6
+                        ),
+                        "savings_usd": round(
+                            self._cost_savings_usd.get(name, 0.0), 6
+                        ),
+                    },
                 }
                 for name in providers
             ]
@@ -339,6 +394,25 @@ class MetricsCollector(logging.Handler):
                         name: dict(counter)
                         for name, counter in self._cache_outcomes.items()
                     },
+                    # v1.9-D: per-provider USD cost + counterfactual
+                    # cache savings. Aggregate totals are also
+                    # surfaced inline so the dashboard's headline
+                    # number doesn't have to fold the per-provider
+                    # dict on every render.
+                    "cost_total_usd": {
+                        n: round(v, 6)
+                        for n, v in self._cost_total_usd.items()
+                    },
+                    "cost_savings_usd": {
+                        n: round(v, 6)
+                        for n, v in self._cost_savings_usd.items()
+                    },
+                    "cost_total_usd_aggregate": round(
+                        self._cost_total_usd_aggregate, 6
+                    ),
+                    "cost_savings_usd_aggregate": round(
+                        self._cost_savings_usd_aggregate, 6
+                    ),
                 },
                 "providers": provider_rows,
                 "recent": list(self._recent),
@@ -372,6 +446,11 @@ class MetricsCollector(logging.Handler):
             self._cache_outcomes.clear()
             self._cache_read_tokens_total = 0
             self._cache_creation_tokens_total = 0
+            # v1.9-D
+            self._cost_total_usd.clear()
+            self._cost_savings_usd.clear()
+            self._cost_total_usd_aggregate = 0.0
+            self._cost_savings_usd_aggregate = 0.0
             self._last_error.clear()
             self._recent.clear()
             self._startup_info.clear()

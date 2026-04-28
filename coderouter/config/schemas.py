@@ -49,6 +49,87 @@ class Capabilities(BaseModel):
     openai_compatible: bool = True
 
 
+class CostConfig(BaseModel):
+    """v1.9-D: per-provider unit pricing for cost aggregation.
+
+    All fields are optional. When :attr:`ProviderConfig.cost` is unset,
+    the provider contributes zero to the cost dashboard but still
+    appears in token-count totals — same shape as a free local model.
+
+    Pricing model
+    -------------
+
+    Anthropic's prompt-cache pricing (verified 2026-04 docs.anthropic.com):
+
+      * Normal input  : 1.0x ``input_tokens_per_million``
+      * Normal output : 1.0x ``output_tokens_per_million``
+      * Cache read    : ``cache_read_discount`` x normal input
+      * Cache creation: ``cache_creation_premium`` x normal input
+
+    The 4-class breakdown (cache_hit / cache_creation / no_cache /
+    unknown) recorded by v1.9-A's ``cache-observed`` log lets the
+    cost aggregator apply the right multiplier per token, and the
+    "savings" figure in the dashboard is computed as
+    ``cache_read_input_tokens x normal x (1 - cache_read_discount)``
+    — i.e. what the operator *would have* paid without prompt
+    caching.
+
+    LiteLLM's cost tracker (verified 2026-04) does not implement
+    cache-aware breakdown; it bills ``cache_read_input_tokens`` at
+    full input rate, overstating spend on cache-heavy workloads. The
+    CodeRouter dashboard's selling point is correctness here.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    input_tokens_per_million: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "USD per million input tokens at normal (uncached) rate. "
+            "Anthropic Sonnet 4.x is around 3.00, Opus 4.x around 15.00 "
+            "(check the upstream's pricing page — values change)."
+        ),
+    )
+    output_tokens_per_million: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "USD per million output tokens. Output is invariably the "
+            "expensive side of the meter — for coding workloads with "
+            "large completions this dominates the bill."
+        ),
+    )
+    cache_read_discount: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Multiplier applied to ``input_tokens_per_million`` for "
+            "tokens served from prompt cache. Anthropic's 2026-04 "
+            "pricing is 0.10 (i.e. cache reads are billed at 10% of "
+            "normal input rate). LM Studio /v1/messages locally "
+            "honors the cache_read field but local backends usually "
+            "have ``input_tokens_per_million`` of 0.0, so this field "
+            "is moot there."
+        ),
+    )
+    cache_creation_premium: float = Field(
+        default=1.25,
+        ge=0.0,
+        description=(
+            "Multiplier applied to ``input_tokens_per_million`` for "
+            "tokens *written* to the prompt cache on the first hit. "
+            "Anthropic's 2026-04 pricing is 1.25 (cache writes cost "
+            "25% more than normal input on the writeback call; "
+            "subsequent reads then cost ``cache_read_discount`` x, "
+            "amortizing the writeback). Above 1.0 means premium, "
+            "1.0 = no premium, below 1.0 = discount on creation "
+            "(unusual but theoretically supported by the schema)."
+        ),
+    )
+
+
 class ProviderConfig(BaseModel):
     """A single provider entry from providers.yaml.
 
@@ -115,6 +196,19 @@ class ProviderConfig(BaseModel):
     )
 
     capabilities: Capabilities = Field(default_factory=Capabilities)
+
+    cost: CostConfig | None = Field(
+        default=None,
+        description=(
+            "v1.9-D: per-provider unit pricing for cost aggregation. "
+            "Unset = provider contributes zero to the cost dashboard "
+            "(typical for local models). Set on paid endpoints to "
+            "feed the ``/dashboard`` cost panel and the "
+            "``coderouter stats --cost`` TUI summary. Cache-aware "
+            "calculation differentiates cache_read (90% discount on "
+            "Anthropic) from normal input — see :class:`CostConfig`."
+        ),
+    )
 
     @model_validator(mode="after")
     def _check_output_filters_known(self) -> ProviderConfig:
