@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.8.3-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.8.5-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -59,11 +59,12 @@
 | **要るか判断する** | [要否判定ガイド](./docs/when-do-i-need-coderouter.md) | エージェント × モデルの詳細マトリクスで「そもそも自分に必要か」を決める |
 | **詰まったとき** | [トラブルシューティング](./docs/troubleshooting.md) | `doctor` の使い方、`.env` の export 必須、Ollama サイレント失敗 5 症状、Claude Code 連携の罠 |
 | **llama.cpp 直叩き** | [llama.cpp 直叩きガイド](./docs/llamacpp-direct.md) | Qwen3.6 を Ollama 詰みから救出する経路。`llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter 接続を 7 step で（v1.8.3 実機検証済）|
+| **LM Studio 直接** | [LM Studio 直接ガイド](./docs/lmstudio-direct.md) | `qwen35` / `qwen35moe` を救う第 2 経路。LM Studio 0.4.12+ Local Server 経由で OpenAI 互換 + Anthropic 互換 (`/v1/messages`) 両対応、prompt caching 透過（v1.8.4 実機検証済）|
 | **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
-| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.8.3 — tool_calls probe も thinking 対応 + adapter で `reasoning_content` strip / llama.cpp 直叩き対応） |
+| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.8.5 — doctor NEEDS_TUNING メッセージを v1.8.3 thinking-aware budget の事実に揃える + `docs/lmstudio-direct.md` 新規） |
 | **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
 
-English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [llama.cpp direct](./docs/llamacpp-direct.en.md) · [Security](./docs/security.en.md)
+English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [llama.cpp direct](./docs/llamacpp-direct.en.md) · [LM Studio direct](./docs/lmstudio-direct.en.md) · [Security](./docs/security.en.md)
 
 ## CodeRouter で何が楽になるか
 

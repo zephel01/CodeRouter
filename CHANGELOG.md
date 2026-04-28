@@ -6,6 +6,55 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.8.5] — 2026-04-28 (doctor NEEDS_TUNING メッセージを v1.8.3 thinking-aware budget の事実に揃える + `docs/lmstudio-direct.md` 新規)
+
+**Theme: 文言の整合 patch + ドキュメント補完。**v1.8.3 で `tool_calls` / `num_ctx` / `streaming` の 3 probe に thinking-aware budget (256 / 1024) を入れた。今回はその事実を NEEDS_TUNING 時の detail メッセージに反映し、operator が「probe budget が小さすぎたのでは」と疑う余地をなくす。あわせて v1.8.4 で実機検証した LM Studio 0.4.12 経由経路を `docs/llamacpp-direct.md` と対をなす形で `docs/lmstudio-direct.md` (+ `.en.md`) として正式化。
+
+- Tests: 737 → 737 (既存 assert は phrase-substring を見ていないので追従不要、新規 assertion は不足分を 1 件追加)
+- Runtime deps: 5 → 5 (22 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` / コード側 API 変更なし
+
+### Changes
+
+#### Doctor NEEDS_TUNING 文言更新 (suggestion を thinking-aware budget 前提に揃える)
+
+- **`coderouter/doctor.py` `_probe_tool_calls`**: 「Common for quantized small models」を残しつつ、thinking モデル時は `Probed with thinking-aware budget (1024 tokens, covers reasoning_content plus the call) — this is a true tools=false case, not budget exhaustion.` を前置。非 thinking 時は `Probed with default budget (256 tokens) — the model produced no tool-shaped output at all.` を前置
+- **`coderouter/doctor.py` `_probe_streaming`**: `finish_reason='length'` 偽陽性回避のため、thinking 時は `Probe sent max_tokens=1024 (thinking-aware), so the cap is server-side options.num_predict rather than the probe budget.` を前置。非 thinking 時は `Probe sent max_tokens=512;` 系を前置
+- **`coderouter/doctor.py` `_probe_num_ctx`**: 「canary missing」3 ケース (declared=None / declared<threshold / declared>=threshold) すべてに、thinking モデル時は `Probe sent max_tokens=1024 (thinking-aware), so the miss is prompt-side truncation rather than reply truncation.` の budget note を追加。これで operator が「probe の reply budget が足りなかったのでは」という疑問を即座に消せる
+
+#### Documentation 補完: `docs/lmstudio-direct.md` 新規
+
+- **`docs/lmstudio-direct.md` / `.en.md` 新規** — v1.8.4 で実機検証した LM Studio 0.4.12 経由経路を `docs/llamacpp-direct.md` と対をなす形で 7 step + Troubleshooting で。M3 Max 64GB / Q4_K_M / Metal 想定 + GUI 操作前提の canonical recipe
+  - Step 1: LM Studio install & Discover タブで Q4_K_M モデルダウンロード (Qwen3.5 9B / Qwen3.6 35B-A3B / Jackrong/Qwopus3.5-9B-v3-GGUF)
+  - Step 2: Chat タブで Load Model (Context 32768 / GPU max / Flash Attention ON)
+  - Step 3: Local Server タブで Port 1234 / Just-in-time Model Loading: ON / Start Server
+  - Step 4: curl 直叩き (OpenAI 互換 + Anthropic 互換 両ルート、native tool_calls / native tool_use 両方確認)
+  - Step 5: CodeRouter に provider 登録 (`kind: openai_compat` 経路 + `kind: anthropic` 経路の 2 種)
+  - Step 6: doctor 6 probe で動作確認 (両ルートとも全 probe OK)
+  - Step 7: CodeRouter 経由 end-to-end (Anthropic prompt caching `cache_read_input_tokens: 280` 観測も含む)
+
+### Why
+
+v1.8.3 で `tool_calls` probe の active-harmful 誤診断 (thinking モデルに対して `tools: false` 提案) を fix したが、メッセージ文面はそのまま v1.8.2 以前の言い回し (「Common for quantized small models」のみ) を残していた。operator が NEEDS_TUNING を見たときに「probe budget が小さすぎたのでは」「v1.8.2 のバグの再発では」と疑う余地が文面上残っていたのを、**実装が既に thinking-aware なので断定できる** という事実に文言を揃える。診断ツールの出力は実装の confidence を反映すべき。
+
+`docs/lmstudio-direct.md` は v1.8.4 で実機検証 + `examples/providers.yaml` に provider 例追加までは済ませていたが、`docs/llamacpp-direct.md` と並ぶレベルの canonical recipe ドキュメントが欠けていた。LM Studio 経由が現時点で最も `qwen35` / `qwen35moe` architecture を安定して動かせる経路 (Anthropic prompt caching まで透過) なので、operator が辿り着けるドキュメントとして正式化。
+
+### Migration
+
+`pyproject.toml version 1.8.3 → 1.8.5`、`coderouter --version` は 1.8.5 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。doctor 出力の文面が変わるが verdict と suggested_patch の semantic は完全互換。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/doctor.py
+M  pyproject.toml
+A  docs/lmstudio-direct.md
+A  docs/lmstudio-direct.en.md
+```
+
+---
+
 ## [v1.8.3] — 2026-04-26 (tool_calls probe も thinking モデル対応 + adapter で `reasoning_content` strip — llama.cpp 直叩き対応)
 
 **Theme: v1.8.2 と同日リリースの第 2 弾 patch。Qwen3.6:35b-a3b on llama.cpp の実機検証で発見した 2 つの追加課題 — `tool_calls` probe の thinking モデル偽陽性 + llama.cpp が emit する `reasoning_content` フィールドの adapter strip 不足 — を解消。**

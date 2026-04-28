@@ -836,6 +836,22 @@ async def _probe_num_ctx(
         )
 
     # Canary missing → truncation occurred.
+    #
+    # v1.8.5: with the v1.8.3 thinking-aware response budget already
+    # applied (max_tokens=1024 for reasoning models — see
+    # ``_NUM_CTX_PROBE_MAX_TOKENS_THINKING``), a missing canary cannot
+    # be blamed on an under-sized reply. The fault is genuinely on the
+    # prompt side: the upstream truncated the input before the model
+    # could see the canary token at the head. This sharpens the
+    # remediation — we are confident bumping ``num_ctx`` is the right
+    # fix, not bumping the response budget.
+    thinking = _is_reasoning_model(provider, resolved)
+    budget_note = (
+        f" Probe sent max_tokens={max_tokens} (thinking-aware), so the "
+        "miss is prompt-side truncation rather than reply truncation."
+        if thinking
+        else ""
+    )
     if declared is None:
         return ProbeResult(
             name="num_ctx",
@@ -845,7 +861,7 @@ async def _probe_num_ctx(
                 "upstream truncated the prompt. No `extra_body.options.num_ctx` "
                 "is declared, so Ollama is running at its 2048-token default, "
                 "which cannot hold Claude Code's system + tool prompts "
-                "(plan.md §9.4 symptom #1)."
+                f"(plan.md §9.4 symptom #1).{budget_note}"
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_num_ctx(provider.name, 32768),
@@ -857,7 +873,8 @@ async def _probe_num_ctx(
             detail=(
                 f"canary missing — declared num_ctx={declared} is below "
                 f"the {_NUM_CTX_ADEQUATE_THRESHOLD}-token threshold needed "
-                "for Claude Code prompts. Bump it (plan.md §9.4 symptom #1)."
+                f"for Claude Code prompts. Bump it (plan.md §9.4 symptom "
+                f"#1).{budget_note}"
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_num_ctx(provider.name, 32768),
@@ -875,7 +892,7 @@ async def _probe_num_ctx(
             "declared value, or the upstream is silently capping it — "
             "verify with the model card / server logs. The suggested "
             "patch still emits 32768 as a starting point; dial down if "
-            "the host is memory-constrained."
+            f"the host is memory-constrained.{budget_note}"
         ),
         target_file="providers.yaml",
         suggested_patch=_patch_providers_yaml_num_ctx(provider.name, 32768),
@@ -1041,6 +1058,24 @@ async def _probe_streaming(
         # mid-word". Since we're already Ollama-shape-gated, the
         # remediation is always the ``extra_body.options.num_predict``
         # bump.
+        #
+        # v1.8.5: with v1.8.3's thinking-aware probe budget already
+        # applied (max_tokens=1024 for reasoning models), a length cap
+        # here cannot be blamed on the probe budget — the upstream is
+        # the one capping. Surface the budget used so the operator can
+        # rule it out at a glance.
+        thinking = _is_reasoning_model(provider, resolved)
+        budget_note = (
+            f"Probe sent max_tokens={max_tokens} (thinking-aware), so "
+            "the cap is server-side `options.num_predict` rather than "
+            "the probe budget."
+            if thinking
+            else (
+                f"Probe sent max_tokens={max_tokens}; the cap is "
+                "server-side `options.num_predict` rather than the "
+                "probe budget."
+            )
+        )
         return ProbeResult(
             name="streaming",
             verdict=ProbeVerdict.NEEDS_TUNING,
@@ -1048,9 +1083,9 @@ async def _probe_streaming(
                 f"stream closed with `finish_reason='length'` after only "
                 f"{len(content)} chars (expected ≥ "
                 f"{_STREAMING_PROBE_MIN_EXPECTED_CHARS}). Upstream is "
-                "capping output — most likely `options.num_predict`. "
-                "Bump it via `extra_body` (plan.md §9.4 symptom #1 "
-                "streaming variant)."
+                f"capping output — most likely `options.num_predict`. "
+                f"{budget_note} Bump it via `extra_body` (plan.md §9.4 "
+                "symptom #1 streaming variant)."
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_num_predict(
@@ -1239,13 +1274,33 @@ async def _probe_tool_calls(
 
     # Nothing tool-shaped at all.
     if declared:
+        # v1.8.5: with the v1.8.3 thinking-aware budget already applied,
+        # we can speak with confidence here: the model genuinely did not
+        # emit tool_calls (it's not a budget-exhaustion false-positive
+        # like the pre-v1.8.3 64-token cap used to produce). For thinking
+        # models specifically, the 1024-token budget covers
+        # ``reasoning_content`` *and* a tool call — so a missing
+        # ``tool_calls`` here is real. Surface the budget that was used
+        # so operators reading the message understand what was probed.
+        thinking = _is_reasoning_model(provider, resolved)
+        budget_note = (
+            f"Probed with thinking-aware budget ({max_tokens} tokens, "
+            "covers `reasoning_content` plus the call) — this is a true "
+            "tools=false case, not budget exhaustion."
+            if thinking
+            else (
+                f"Probed with default budget ({max_tokens} tokens) — "
+                "the model produced no tool-shaped output at all."
+            )
+        )
         return ProbeResult(
             name="tool_calls",
             verdict=ProbeVerdict.NEEDS_TUNING,
             detail=(
                 "declaration says tools=true but model produced neither "
-                "native `tool_calls` nor repairable tool JSON. Common for "
-                "quantized small models (plan.md §9.4 symptom #2)."
+                "native `tool_calls` nor repairable tool JSON. "
+                f"{budget_note} Common for quantized small models "
+                "(plan.md §9.4 symptom #2)."
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_capability(provider.name, "tools", False),
