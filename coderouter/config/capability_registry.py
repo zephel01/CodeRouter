@@ -115,6 +115,24 @@ class RegistryCapabilities(BaseModel):
             "startup check)."
         ),
     )
+    cache_control: bool | None = Field(
+        default=None,
+        description=(
+            "v1.9-B: does the upstream preserve Anthropic ``cache_control`` "
+            "markers end-to-end on the wire? When True, the v0.5-B "
+            "translation-lossy gate stays quiet and the doctor cache probe "
+            "treats the upstream as eligible for hit-rate verification. "
+            "Independent from ``providers.yaml capabilities.prompt_cache`` "
+            "(provider-level explicit opt-in); the registry value carries "
+            "model-family defaults that match real-world wire support — "
+            "for Anthropic native (``claude-sonnet-*`` / ``claude-opus-*``) "
+            "and LM Studio's ``/v1/messages`` for ``qwen3.5-*`` / "
+            "``qwen3.6-*`` (verified live in v1.8.4, "
+            "``cache_read_input_tokens: 280`` observed). "
+            "``None`` (default) = no opinion → the v0.5-B gate falls back "
+            "to ``provider.kind == 'anthropic'`` for the answer."
+        ),
+    )
 
 
 class CapabilityRule(BaseModel):
@@ -182,6 +200,7 @@ class ResolvedCapabilities:
     tools: bool | None = None
     max_context_tokens: int | None = None
     claude_code_suitability: Literal["ok", "degraded"] | None = None
+    cache_control: bool | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -233,12 +252,14 @@ class CapabilityRegistry:
         resolved_tools: bool | None = None
         resolved_max_ctx: int | None = None
         resolved_suitability: Literal["ok", "degraded"] | None = None
+        resolved_cache_control: bool | None = None
 
         thinking_locked = False
         reasoning_locked = False
         tools_locked = False
         max_ctx_locked = False
         suitability_locked = False
+        cache_control_locked = False
 
         for rule in self._rules:
             if not rule.kind_matches(kind):
@@ -261,12 +282,16 @@ class CapabilityRegistry:
             if not suitability_locked and caps.claude_code_suitability is not None:
                 resolved_suitability = caps.claude_code_suitability
                 suitability_locked = True
+            if not cache_control_locked and caps.cache_control is not None:
+                resolved_cache_control = caps.cache_control
+                cache_control_locked = True
             if (
                 thinking_locked
                 and reasoning_locked
                 and tools_locked
                 and max_ctx_locked
                 and suitability_locked
+                and cache_control_locked
             ):
                 break
 
@@ -276,6 +301,7 @@ class CapabilityRegistry:
             tools=resolved_tools,
             max_context_tokens=resolved_max_ctx,
             claude_code_suitability=resolved_suitability,
+            cache_control=resolved_cache_control,
         )
 
     # ------------------------------------------------------------------

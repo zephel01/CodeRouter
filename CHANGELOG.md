@@ -6,6 +6,88 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a2] — 2026-04-28 (v1.9-B: Cross-backend cache passthrough + capability gate + doctor cache probe)
+
+**Theme: v1.9-A の「観測」を「保証」へ。** capability registry に `cache_control` フィールドを新設し、Claude 4 family + LM Studio 経由 Qwen3.5/3.6 を bundled で宣言。doctor に新 probe `_probe_cache` を追加し、cache_control の round-trip (1 回目 creation → 2 回目 read) を実機 verify。
+
+`docs/inside/future.md` §5.2 の v1.9-B 範囲を実装。挙動変更は capability gate 拡張のみで、既存の `provider_supports_cache_control` 呼び出しは下位互換 (registry 未宣言 anthropic-kind は引き続き True)。
+
+- Tests: 759 → **779** (+20: registry resolution 12 / doctor cache probe 8)
+- Runtime deps: 5 → 5 (24 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` / API 全部変更なし
+- Pre-release: `1.9.0a2`、`pip install --pre coderouter-cli` で取得可能
+
+### Changes
+
+#### Capability registry: `cache_control` フィールド新設
+
+- **`coderouter/config/capability_registry.py`**: `RegistryCapabilities` / `ResolvedCapabilities` に `cache_control: bool | None` フィールド追加。lookup walker に同フィールドを追加 (first-match-per-flag 既存 semantics に従う)。
+- **`coderouter/data/model-capabilities.yaml`**: bundled で 5 rule 宣言:
+  - `claude-opus-4-*` / `claude-sonnet-4-*` / `claude-haiku-4-*` (kind=anthropic): `cache_control: true` — api.anthropic.com で実機検証済 (2026-04-20、1321 tokens 書き / 1321 tokens 読み)
+  - `qwen3.5-*` / `qwen3.6-*` (kind=anthropic): `cache_control: true` — LM Studio 0.4.12 `/v1/messages` で v1.8.4 実機検証済 (`cache_read_input_tokens: 280` 観測)
+  - openai_compat 系は意図的に未宣言 (= None) → 既存の v0.5-B `capability-degraded reason=translation-lossy` log がそのまま fire
+
+#### Capability gate: registry を consult
+
+- **`coderouter/routing/capability.py`**: `provider_supports_cache_control` に `registry: CapabilityRegistry | None = None` kwarg を追加。解決順序を 3 段に:
+  1. `provider.capabilities.prompt_cache: true` → True (explicit per-provider)
+  2. registry の `cache_control: true|false` → 即決
+  3. fallback: `provider.kind == "anthropic"` → True (pre-v1.9-B 互換)
+- registry が `False` を返したら kind=anthropic でも False を返すので、upstream regression 時に operator が一時的に `cache_control: false` を user yaml で declare → `capability-degraded` log が fire するという escape hatch が成立
+
+#### Doctor: `_probe_cache` 新 probe 追加
+
+- **`coderouter/doctor.py`**: `_probe_cache` 関数を新設、orchestrator の最後 (streaming probe の後) に組み込み。auth fail 時の SKIP list にも追加。
+  - 動作: 同一 body (~1900 token system prompt + `cache_control: ephemeral`) を 2 回 POST、1 回目で `cache_creation_input_tokens > 0`、2 回目で `cache_read_input_tokens > 0` を期待
+  - **Verdict 4 種**:
+    - **OK**: 2 回目で read > 0 → cache_control 配管が end-to-end 機能している
+    - **NEEDS_TUNING**: 1 回目 creation 観測 / 2 回目 read=0 → TTL 短すぎ or cache key mismatch
+    - **NEEDS_TUNING**: 両方とも creation/read 観測なし → upstream が cache_control を silent ignore (Anthropic compat 不完全) or 1024 token 最低未達
+    - **SKIP**: not anthropic / 未宣言 / upstream 5xx / auth fail
+  - **Gate は意図的に tight**: 2 paid HTTP call を消費するので、registry に `cache_control: true` 明示宣言 OR `providers.yaml capabilities.prompt_cache: true` のときのみ実行。kind=anthropic だけで自動実行はしない (unverified model に対して無駄な call を避ける)
+
+#### Tests
+
+- **`tests/test_capability_registry_cache_control.py`** 新規 (+12): registry resolution 4 / capability gate 5 / bundled YAML 検証 3
+  - bundled が `claude-opus-4-8` / `claude-sonnet-4-7` / `claude-haiku-4-1` で `cache_control=true` を返すこと
+  - bundled が `qwen3.5-9b` / `qwen3.6-35b-a3b` で `cache_control=true` を返すこと
+  - bundled が `openai_compat` の `qwen2.5-coder:7b` で undeclared (None) のまま → translation-lossy gate fire を確実にする
+- **`tests/test_doctor_cache_probe.py`** 新規 (+8): probe gate / OK round-trip / NEEDS_TUNING (no hit / no creation) / explicit prompt_cache opt-in / 1st call 5xx → SKIP / auth fail → SKIP
+
+### Why
+
+v1.9-A で「観測」した cache の動作を、v1.9-B で **どの (kind, model) が cache_control を保証するか** という contract に格上げ。doctor cache probe は **どの競合 (LiteLLM / claude-code-router / etc.) にもない機能** で、operator が「LM Studio で本当に cache が効いてるのか」を 1 コマンドで確認できる単独差別化軸。
+
+LM Studio 0.4.12 を bundled YAML に組み込んだのは、v1.8.4 で実機確認した「Anthropic compat `/v1/messages` 経由で `cache_read_input_tokens: 280` が end-to-end 透過する」という事実を CodeRouter として保証宣言する意味がある。Qwen3.5/3.6 を `kind: anthropic` で declare している operator なら、`coderouter doctor --check-model lmstudio-qwen3-5-9b-anthropic` で OK が出れば prompt caching 実利用可能、という保証関係。
+
+### Migration
+
+`pyproject.toml version 1.9.0a1 → 1.9.0a2`、`coderouter --version` は 1.9.0a2 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+`provider_supports_cache_control` は kwarg `registry=None` を追加したので signature は backward-compatible (既存 caller は変更なし)。registry を consult した結果 `False` で hard-disable できるのが新機能だが、bundled YAML は positive 宣言のみ ship なので default 挙動は変化なし。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/capability_registry.py
+M  coderouter/data/model-capabilities.yaml
+M  coderouter/doctor.py
+M  coderouter/routing/capability.py
+M  pyproject.toml
+A  tests/test_capability_registry_cache_control.py
+A  tests/test_doctor_cache_probe.py
+```
+
+### Out of scope (次回以降)
+
+- **v1.9-E (前倒し)**: Long-run Guards 三段 (L2 memory pressure / L3 tool loop / L5 backend health continuous) — Vision の核心実装
+- **v1.9-C**: Adaptive Routing (rolling latency window + health-based dynamic priority)
+- **v1.9-D**: Cost-aware Dashboard
+- streaming aggregation: cache 観測の streaming 時 `outcome` 値を `cache_hit/creation/no_cache` に格上げ (v1.9-A の `unknown` から)
+
+---
+
 ## [v1.9.0a1] — 2026-04-28 (v1.9-A: Cache Observability — Anthropic prompt caching を観測可能に)
 
 **Theme: v1.9 シリーズ最初の alpha pre-release。Anthropic prompt caching の動作を CodeRouter 側で観測可能にし、`cache_read_input_tokens` / `cache_creation_input_tokens` を 4 分類 (cache_hit / cache_creation / no_cache / unknown) で per-provider 集計。**

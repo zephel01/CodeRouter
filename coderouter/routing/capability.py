@@ -219,32 +219,50 @@ def strip_thinking(request: AnthropicRequest) -> AnthropicRequest:
 # ---------------------------------------------------------------------------
 
 
-def provider_supports_cache_control(provider: ProviderConfig) -> bool:
+def provider_supports_cache_control(
+    provider: ProviderConfig,
+    *,
+    registry: CapabilityRegistry | None = None,
+) -> bool:
     """Does this provider preserve ``cache_control`` blocks end-to-end?
 
-    Resolution order:
-        1. If ``provider.capabilities.prompt_cache`` is True → True. This
-           is an explicit opt-in for any future ``openai_compat``
-           upstream that extends the wire format to preserve cache
-           markers (not known to exist today, 2026-04).
-        2. Otherwise:
-           - ``kind: anthropic``: True. Native passthrough via
-             ``/v1/messages`` keeps cache_control intact. Verified real-
-             machine against api.anthropic.com on 2026-04-20 (v0.4
-             retro §3: 1321 tokens written on call 1, 1321 read on call 2).
-           - ``kind: openai_compat``: False. The OpenAI Chat Completions
-             wire has no equivalent marker, so the existing
-             ``to_chat_request`` translation drops cache_control during
-             the Anthropic → OpenAI hop. The upstream itself might have
-             prompt caching, but CodeRouter can't currently carry the
-             marker through.
+    Resolution order (v1.9-B extended):
+        1. If ``provider.capabilities.prompt_cache`` is True → True
+           (explicit per-provider opt-in from providers.yaml — highest
+           precedence; a deployment opting a future upstream in by hand).
+        2. Consult the capability registry for an explicit
+           ``cache_control: true|false`` declaration on this
+           ``(kind, model)``. v1.9-B ships these defaults:
+              - ``claude-sonnet-*`` / ``claude-opus-*`` (kind=anthropic): True
+              - ``qwen3.5-*`` / ``qwen3.6-*`` on LM Studio (kind=anthropic
+                with port 1234): True (verified live in v1.8.4,
+                ``cache_read_input_tokens: 280`` observed end-to-end)
+              - other openai_compat models: undeclared (= None)
+           A registry value of ``False`` hard-disables the capability
+           even on a provider whose ``kind`` would normally pass — useful
+           when an upstream regresses and the operator wants the
+           ``capability-degraded`` log to fire during the regression.
+        3. Fall back to the original heuristic:
+              - ``kind: anthropic`` → True (native ``/v1/messages``
+                passthrough; verified against api.anthropic.com on
+                2026-04-20)
+              - ``kind: openai_compat`` → False (the OpenAI Chat
+                Completions wire has no equivalent marker; the existing
+                ``to_chat_request`` translation drops it).
 
     This routine does not inspect the request — it's a per-provider
     capability. Combine with ``anthropic_request_has_cache_control`` in
-    the engine to decide whether to log a degradation.
+    the engine to decide whether to log a degradation. The ``registry``
+    kwarg is for tests; production callers pass nothing and get the
+    module-level default.
     """
     if provider.capabilities.prompt_cache:
         return True
+    resolved = _resolve(provider, registry)
+    if resolved.cache_control is True:
+        return True
+    if resolved.cache_control is False:
+        return False
     return provider.kind == "anthropic"
 
 

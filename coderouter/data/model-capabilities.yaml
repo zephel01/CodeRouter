@@ -91,6 +91,61 @@ rules:
       thinking: true
 
   # ------------------------------------------------------------------
+  # Anthropic prompt caching — `cache_control` body field support (v1.9-B).
+  #
+  # Declares which (kind, model) pairs preserve the ``cache_control``
+  # marker end-to-end on the wire. The capability gate
+  # (``provider_supports_cache_control`` in coderouter/routing/capability.py)
+  # consults these declarations to decide whether to emit a
+  # ``capability-degraded reason=translation-lossy`` log when handing
+  # a cache_control-bearing request to the provider.
+  #
+  # Verification basis:
+  #   * api.anthropic.com (kind=anthropic, claude-* models):
+  #     verified live 2026-04-20 — 1321 tokens written on call 1,
+  #     1321 read on call 2. Native Anthropic shape passes through
+  #     verbatim, no translation hop loses the marker.
+  #   * LM Studio /v1/messages (kind=anthropic, qwen3.5-* / qwen3.6-*):
+  #     verified live 2026-04-27 in v1.8.4 — `cache_read_input_tokens: 280`
+  #     observed end-to-end through CodeRouter. LM Studio 0.4.12+ honors
+  #     the marker on its Anthropic-compatible endpoint.
+  #
+  # All entries are kind=anthropic. openai_compat upstreams have no wire
+  # equivalent for cache_control (the OpenAI Chat Completions schema does
+  # not carry it), so they intentionally stay undeclared — the gate's
+  # fallback maps undeclared + kind=openai_compat to False.
+  # ------------------------------------------------------------------
+
+  - match: "claude-opus-4-*"
+    kind: anthropic
+    capabilities:
+      cache_control: true
+
+  - match: "claude-sonnet-4-*"
+    kind: anthropic
+    capabilities:
+      cache_control: true
+
+  - match: "claude-haiku-4-*"
+    kind: anthropic
+    capabilities:
+      cache_control: true
+
+  # LM Studio /v1/messages exposes Qwen3.5 / Qwen3.6 with Anthropic-shaped
+  # responses including ``cache_read_input_tokens``. The provider declares
+  # ``kind: anthropic`` even though the underlying model is open-weights;
+  # the registry rule keys off the model name pattern.
+  - match: "qwen3.5-*"
+    kind: anthropic
+    capabilities:
+      cache_control: true
+
+  - match: "qwen3.6-*"
+    kind: anthropic
+    capabilities:
+      cache_control: true
+
+  # ------------------------------------------------------------------
   # Claude Code suitability — agentic harness compatibility hint (v1.7-B).
   #
   # "degraded" = the model over-eagerly invokes tools / skills when given

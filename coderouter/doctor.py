@@ -1599,6 +1599,242 @@ async def _probe_reasoning_leak(
 
 
 # ---------------------------------------------------------------------------
+# v1.9-B: cache probe (Anthropic prompt caching round-trip verification)
+# ---------------------------------------------------------------------------
+#
+# Two-call sequence that proves end-to-end cache_control plumbing:
+#
+#   1st call: long system prompt + ``cache_control: {type: ephemeral}`` →
+#             expect ``usage.cache_creation_input_tokens > 0`` (the
+#             upstream wrote the cache).
+#   2nd call: identical body re-issued                          →
+#             expect ``usage.cache_read_input_tokens > 0`` (the upstream
+#             read from cache instead of recomputing the prefix).
+#
+# Verdicts:
+#   * not anthropic-shaped               → SKIP (probe is Anthropic-specific)
+#   * registry/explicit declares False   → SKIP with note (operator
+#                                          opted out; running the probe
+#                                          would be misleading)
+#   * upstream error on either call      → SKIP (transient; auth probe
+#                                          dominates the report)
+#   * 2nd call cache_read > 0            → OK (full round-trip works)
+#   * 1st creation > 0 but 2nd read == 0 → NEEDS_TUNING (TTL too short
+#                                          or cache key mismatch)
+#   * neither creation nor read observed → NEEDS_TUNING (Anthropic
+#                                          1024-token min not met or
+#                                          upstream silently ignored
+#                                          cache_control)
+#
+# Token-budget design:
+#   Anthropic's prompt cache requires a minimum 1024-token prefix to fire.
+#   A safe synthetic prompt is built by repeating a 16-token-ish sentence
+#   ~120 times (≈ 1900 tokens) — with margin for tokenizer variation
+#   across model families. ``max_tokens: 32`` keeps the response short so
+#   the probe is cheap on metered (paid) Anthropic endpoints.
+
+# Repeated to ~1900 tokens. The exact sentence is uninteresting; what
+# matters is that the prompt is long enough to clear the 1024-token
+# minimum that Anthropic enforces before the cache will write anything.
+_CACHE_PROBE_SYSTEM_FILLER = (
+    "You are a careful assistant. Always reply briefly and accurately. "
+    "When the user asks you to greet, you greet. When the user asks for "
+    "the answer to two plus two, you reply with the digit four. "
+)
+_CACHE_PROBE_REPEATS = 64
+_CACHE_PROBE_MAX_TOKENS = 32
+
+
+def _cache_probe_body(provider: ProviderConfig) -> dict[str, Any]:
+    """Build the cache-probe Anthropic request body.
+
+    The system block carries the ``cache_control: {type: ephemeral}``
+    marker. The first call writes; an identical second call must read.
+    """
+    long_text = _CACHE_PROBE_SYSTEM_FILLER * _CACHE_PROBE_REPEATS
+    return {
+        "model": provider.model,
+        "system": [
+            {
+                "type": "text",
+                "text": long_text,
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+        "messages": [{"role": "user", "content": "Say hi."}],
+        "max_tokens": _CACHE_PROBE_MAX_TOKENS,
+    }
+
+
+def _extract_cache_usage(parsed: dict[str, Any] | None) -> tuple[int, int]:
+    """Return ``(cache_read_input_tokens, cache_creation_input_tokens)``.
+
+    Both default to 0 when the field is missing or non-int. The probe
+    treats both fields as informational, so coercion is silent.
+    """
+    if not isinstance(parsed, dict):
+        return 0, 0
+    usage = parsed.get("usage")
+    if not isinstance(usage, dict):
+        return 0, 0
+    raw_read = usage.get("cache_read_input_tokens", 0)
+    raw_create = usage.get("cache_creation_input_tokens", 0)
+    read = raw_read if isinstance(raw_read, int) else 0
+    create = raw_create if isinstance(raw_create, int) else 0
+    return read, create
+
+
+async def _probe_cache(
+    provider: ProviderConfig,
+    resolved: ResolvedCapabilities,
+) -> ProbeResult:
+    """v1.9-B Probe — Anthropic prompt caching round-trip verification.
+
+    Only runs for ``kind: anthropic`` providers — ``cache_control`` is
+    Anthropic-specific and lost during Anthropic → OpenAI translation.
+    Even if the underlying model is open-weights (e.g. Qwen3.6 on LM
+    Studio /v1/messages), the provider must declare ``kind: anthropic``
+    to qualify for this probe; the registry rule keys off the model
+    name so a single ``cache_control: true`` decl covers both Anthropic
+    cloud + LM Studio pair.
+
+    The probe issues two identical requests with a long
+    cache_control-bearing system prompt and inspects the usage block on
+    each. See module-level comment above for the verdict table.
+    """
+    if provider.kind != "anthropic":
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.SKIP,
+            detail=(
+                "not applicable — cache_control is Anthropic-shaped and "
+                "lost during Anthropic → OpenAI translation. Probe only "
+                "runs against `kind: anthropic` providers (which can "
+                "include LM Studio /v1/messages for Qwen3.5/3.6)."
+            ),
+        )
+
+    # Tighter gate than ``provider_supports_cache_control``: the probe
+    # spends 2 paid HTTP calls, so we only run it when there's a
+    # positive declaration that this (kind, model) actually preserves
+    # cache_control. The unified gate falls back to "kind=anthropic →
+    # True" for undeclared models, which is fine for the
+    # capability-degraded log emission (where the cost of a false
+    # positive is just one extra log line) but wasteful for a 2-call
+    # round-trip probe against an unknown model.
+    explicitly_capable = (
+        provider.capabilities.prompt_cache or resolved.cache_control is True
+    )
+    if not explicitly_capable:
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.SKIP,
+            detail=(
+                "skipped — no explicit `cache_control: true` declaration "
+                "for this (kind, model). The probe is opt-in via the "
+                "capability registry / `providers.yaml capabilities."
+                "prompt_cache: true` to avoid spending 2 HTTP calls "
+                "against an unverified model."
+            ),
+        )
+    if resolved.cache_control is False:
+        # Operator explicitly opted out via the registry. Honor that.
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.SKIP,
+            detail=(
+                "skipped — registry declares `cache_control: false` "
+                "for this (kind, model). Probe will not run; remove "
+                "the declaration to re-enable."
+            ),
+        )
+
+    url = _anthropic_messages_url(provider)
+    headers = _anthropic_headers(provider)
+    body = _cache_probe_body(provider)
+
+    status1, parsed1, _raw1 = await _http_post_json(
+        url, headers=headers, body=body, timeout=provider.timeout_s
+    )
+    if status1 is None or status1 >= 400 or parsed1 is None:
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.SKIP,
+            detail=(
+                f"skipped (1st call upstream status={status1!r}); auth "
+                "probe dominates."
+            ),
+        )
+
+    _read1, create1 = _extract_cache_usage(parsed1)
+
+    status2, parsed2, _raw2 = await _http_post_json(
+        url, headers=headers, body=body, timeout=provider.timeout_s
+    )
+    if status2 is None or status2 >= 400 or parsed2 is None:
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.SKIP,
+            detail=(
+                f"skipped (2nd call upstream status={status2!r}); the "
+                "1st call succeeded so this is likely a transient "
+                "issue rather than a configuration problem."
+            ),
+        )
+
+    read2, _create2 = _extract_cache_usage(parsed2)
+
+    # Successful round-trip: 2nd call read what the 1st call wrote.
+    if read2 > 0:
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.OK,
+            detail=(
+                f"cache round-trip verified: 1st call wrote "
+                f"creation={create1} tokens, 2nd call read={read2} "
+                "tokens — cache_control plumbing is intact end-to-end."
+            ),
+        )
+
+    # 1st call wrote but 2nd call did not hit. Most likely cause is a
+    # cache TTL shorter than the time between calls, or a cache-key
+    # mismatch (different ``model:`` between calls, different beta
+    # header, etc. — the probe sends identical bodies, so the cause is
+    # almost always upstream-side).
+    if create1 > 0:
+        return ProbeResult(
+            name="cache",
+            verdict=ProbeVerdict.NEEDS_TUNING,
+            detail=(
+                f"1st call wrote cache (creation={create1}) but 2nd "
+                f"call did not hit (read=0). Likely causes: cache TTL "
+                "expired between calls, the upstream regenerates the "
+                "cache key per session, or the upstream silently drops "
+                "the marker on subsequent calls. Check the upstream's "
+                "prompt-cache TTL documentation."
+            ),
+        )
+
+    # Neither call wrote anything — cache_control was sent but not
+    # honored. Either the prompt fell below Anthropic's 1024-token
+    # minimum (unlikely with ~1900-token filler) or the upstream
+    # ignored the marker entirely.
+    return ProbeResult(
+        name="cache",
+        verdict=ProbeVerdict.NEEDS_TUNING,
+        detail=(
+            "no cache_creation_input_tokens observed across either "
+            "call. The upstream may not honor `cache_control` (despite "
+            "claiming Anthropic compatibility), or the prompt was "
+            "below Anthropic's 1024-token minimum. Verify with `curl` "
+            "directly and consider declaring `cache_control: false` "
+            "for this (kind, model) in the registry to silence the "
+            "translation-lossy gate."
+        ),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -1649,6 +1885,7 @@ async def check_model(
             "thinking",
             "reasoning-leak",
             "streaming",
+            "cache",
         ):
             report.results.append(
                 ProbeResult(
@@ -1668,11 +1905,16 @@ async def check_model(
     # declaration probes (tool_calls / thinking / reasoning-leak) should
     # dominate the report — streaming is the output-side sibling of
     # num_ctx and its NEEDS_TUNING verdict is orthogonal to the others.
+    # v1.9-B: cache probe runs last; it issues 2 HTTP calls so it's the
+    # most expensive single probe, and a stable round-trip is only
+    # interesting after the basic probes have established that the
+    # provider responds correctly.
     report.results.append(await _probe_num_ctx(provider, resolved))
     report.results.append(await _probe_tool_calls(provider, resolved))
     report.results.append(await _probe_thinking(provider, resolved))
     report.results.append(await _probe_reasoning_leak(provider, resolved))
     report.results.append(await _probe_streaming(provider, resolved))
+    report.results.append(await _probe_cache(provider, resolved))
     return report
 
 
