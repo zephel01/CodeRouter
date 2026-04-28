@@ -6,6 +6,60 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a6] — 2026-04-28 (v1.9-A streaming パスの cache-observed emit 漏れ patch)
+
+**Theme: 実機検証で発見した v1.9-A の小さな実装ギャップを潰す。** v1.9-A の CHANGELOG / `CacheOutcome` docstring で「streaming レスポンスは `outcome=unknown` で記録される」と約束していたが、`stream_anthropic` 経路に `_emit_cache_observed` の呼び出しが実装漏れしていた (非 streaming `generate_anthropic` のみ実装済み)。実機で `curl -N stream:true` を投げても JSONL に `cache-observed` event が現れない事で発覚。doc で約束していた動作に実装を揃える。
+
+- Tests: 826 → **828** (+2: streaming 成功時 emit / streaming 失敗時 emit せず)
+- Runtime deps: 5 → 5 (28 sub-release 連続据え置き)
+- Backward compat: 完全互換、profile / API 全部変更なし
+- Pre-release: `1.9.0a6`
+
+### Changes
+
+#### `coderouter/routing/fallback.py` `stream_anthropic` に cache-observed emit を追加
+
+- `_apply_tool_loop_guard` 直後に `request_had_cache_control = anthropic_request_has_cache_control(request)` を変数化 (v0.5-B の inline call と新規 emit 用 caller の二重評価を回避)
+- successful stream の最後 (`async for ev in event_iter` 完走後、`return` の直前) に `log_cache_observed(...)` を呼ぶ
+  - `outcome="unknown"` (v1.9-B が `message_delta` 集約するまで streaming は usage 取得しない約束)
+  - `streaming=True`
+  - tokens は all 0 (engine は streaming 経路の usage を集約していない、cost も 0)
+- 非 streaming `generate_anthropic` の挙動には影響なし
+
+#### Tests
+
+- **`tests/test_fallback_cache_observed.py`** + 2:
+  - `test_cache_observed_fires_on_streaming_with_unknown_outcome` — 成功 streaming で `outcome=unknown` / `streaming=True` / `request_had_cache_control=True` が記録される
+  - `test_cache_observed_streaming_does_not_fire_on_provider_failure` — provider 失敗時は emit しない (非 streaming と同じ contract)
+- 上記のため `_CacheAnthropicAdapter.stream_anthropic` を `NotImplementedError` raise から「3 events (start / delta / stop) を yield する minimal stream」に拡張
+
+### Why
+
+v1.9-A 検証中に「stream:true の curl を投げても `cache-observed` log が JSONL に出ない」を発見 (`docs/inside/verification.md` の A-3 検証パス)。v1.9-A の `CacheOutcome` docstring を読み直すと「streaming responses always pair with `outcome=unknown` until v1.9-B aggregates `message_delta`」と書いてあったが、実装が `generate_anthropic` のみで `stream_anthropic` には emit を入れ忘れていた。
+
+これは **doc-implementation gap**: dashboard / metrics dashboard 利用者から見ると「streaming で動いているはずなのに observation が記録されない」という不整合になる。v1.9.0a6 は約束と実装を揃える小 patch。
+
+副次的効果として A-3 (`hit_rate=null when only `unknown` observations`) の実機検証もこの patch で初めて可能になった。
+
+### Migration
+
+`pyproject.toml version 1.9.0a5 → 1.9.0a6`、`coderouter --version` は 1.9.0a6 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。Streaming 経路のレスポンス内容も変化なし — log line が 1 件追加されるだけ。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+M  tests/test_fallback_cache_observed.py
+```
+
+### Out of scope (v1.9-B 送り)
+
+- `message_delta` event aggregation で streaming 時にも実 token 数 / cache_read / cache_creation を取得する → outcome を unknown 固定でなく実値で出せるようにする
+
+---
+
 ## [v1.9.0a5] — 2026-04-28 (v1.9-D: Cost-aware Dashboard — Anthropic prompt-cache aware)
 
 **Theme: 「いくら使ってる」を可視化、cache savings を別枠で。** v1.9-A で観測、v1.9-B で透過保証、v1.9-D で **金額に翻訳**。Anthropic の prompt-cache 価格モデル (cache_read 90% 割引、cache_creation 25% 増し) を最初から正確に実装、LiteLLM 競合品が **cache savings を別計算しない** 弱点を構造的にカバー。

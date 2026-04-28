@@ -95,8 +95,41 @@ class _CacheAnthropicAdapter(AnthropicAdapter):
         request: AnthropicRequest,
         *,
         overrides: ProviderCallOverrides | None = None,
-    ) -> AsyncIterator[AnthropicStreamEvent]:  # pragma: no cover - unused
-        raise NotImplementedError
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        """Minimal 3-event stream: message_start → message_delta → message_stop.
+
+        Used by the v1.9.0a6 streaming cache-observed test. The events
+        themselves don't carry usage that would change the outcome —
+        the v1.9-A engine-side emit always records ``outcome=unknown``
+        for streaming until v1.9-B aggregates ``message_delta``."""
+        yield AnthropicStreamEvent(
+            type="message_start",
+            data={
+                "type": "message_start",
+                "message": {
+                    "id": "msg_stream",
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [],
+                    "model": self.config.model,
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        )
+        yield AnthropicStreamEvent(
+            type="message_delta",
+            data={
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+        )
+        yield AnthropicStreamEvent(
+            type="message_stop",
+            data={"type": "message_stop"},
+        )
 
 
 # ----------------------------------------------------------------------
@@ -336,3 +369,72 @@ async def test_cache_observed_fires_only_on_winning_provider_in_chain(
     assert len(records) == 1
     assert records[0].provider == "anthropic-fallback"
     assert records[0].outcome == "cache_hit"
+
+
+# ----------------------------------------------------------------------
+# v1.9.0a6: streaming emission
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cache_observed_fires_on_streaming_with_unknown_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """v1.9.0a6: ``stream_anthropic`` must pair its successful completion
+    with a ``cache-observed`` log line carrying ``streaming=true`` and
+    ``outcome=unknown``.
+
+    Pre-v1.9.0a6 the streaming path did not call ``log_cache_observed``
+    at all (the v1.9-A non-streaming emission was implemented but the
+    streaming sibling was missed). The v1.9-A CHANGELOG / CacheOutcome
+    docstring promised "streaming responses always pair with
+    outcome=unknown until v1.9-B"; this test pins that contract.
+
+    Token counts are zero by design — message_delta aggregation lands
+    in v1.9-B; v1.9.0a6 only fixes the missing emission, not the
+    streaming token pickup.
+    """
+    cfg = _anthropic_provider("anthropic-direct")
+    config = _config([cfg], chain=["anthropic-direct"])
+    adapter = _CacheAnthropicAdapter(cfg)
+    engine = _engine(config, {"anthropic-direct": adapter})
+
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        async for _event in engine.stream_anthropic(_cache_request()):
+            pass
+
+    records = _cache_observed_records(caplog)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.provider == "anthropic-direct"
+    assert rec.outcome == "unknown"
+    assert rec.streaming is True
+    assert rec.cache_read_input_tokens == 0
+    assert rec.cache_creation_input_tokens == 0
+    assert rec.input_tokens == 0
+    assert rec.output_tokens == 0
+    assert rec.request_had_cache_control is True
+
+
+@pytest.mark.asyncio
+async def test_cache_observed_streaming_does_not_fire_on_provider_failure(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Streaming failure (no events emitted) → no cache-observed log,
+    same as the non-streaming counterpart."""
+    cfg = _openai_provider("ollama")
+    config = _config([cfg], chain=["ollama"])
+    failing = FakeOpenAIAdapter(
+        cfg,
+        fail_with=AdapterError("boom", provider="ollama", retryable=False),
+    )
+    engine = _engine(config, {"ollama": failing})
+
+    with (
+        caplog.at_level(logging.INFO, logger="coderouter"),
+        pytest.raises(NoProvidersAvailableError),
+    ):
+        async for _event in engine.stream_anthropic(_cache_request()):
+            pass
+
+    assert _cache_observed_records(caplog) == []

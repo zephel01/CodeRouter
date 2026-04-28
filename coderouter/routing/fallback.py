@@ -789,6 +789,9 @@ class FallbackEngine:
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
+        # v1.9-A: compute once for the v0.5-B capability-degraded gate
+        # AND for the cache-observed emission below.
+        request_had_cache_control = anthropic_request_has_cache_control(request)
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -803,7 +806,7 @@ class FallbackEngine:
                     reason="provider-does-not-support",
                 )
             # v0.5-B: mirror of the non-streaming path — see comment there.
-            if anthropic_request_has_cache_control(request) and not provider_supports_cache_control(
+            if request_had_cache_control and not provider_supports_cache_control(
                 adapter.config
             ):
                 log_capability_degraded(
@@ -894,6 +897,31 @@ class FallbackEngine:
                     },
                 )
                 raise MidStreamError(adapter.name, exc) from exc
+            # v1.9.0a6: pair the successful stream with a cache-observed
+            # log line so the streaming path is not invisible to the
+            # MetricsCollector (the v1.9-A non-streaming emission already
+            # fires for `generate_anthropic`; this is the streaming
+            # symmetric). Streaming aggregation of ``message_delta``
+            # usage events is deferred to v1.9-B, so we record
+            # ``outcome=unknown`` with zero token counts — that is
+            # exactly what the v1.9-A CacheOutcome docstring promises:
+            # "streaming responses always pair with outcome=unknown
+            # until v1.9-B aggregates message_delta events". Cost calc
+            # is skipped (zero tokens → zero cost) because the upstream
+            # billing happens server-side anyway.
+            log_cache_observed(
+                logger,
+                provider=adapter.name,
+                request_had_cache_control=request_had_cache_control,
+                outcome="unknown",
+                cache_read_input_tokens=0,
+                cache_creation_input_tokens=0,
+                input_tokens=0,
+                output_tokens=0,
+                streaming=True,
+                cost_usd=0.0,
+                cost_savings_usd=0.0,
+            )
             return
 
         profile = request.profile or self.config.default_profile
