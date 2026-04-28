@@ -39,7 +39,12 @@ from coderouter.adapters.base import (
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.errors import CodeRouterError
-from coderouter.logging import get_logger, log_chain_paid_gate_blocked
+from coderouter.logging import (
+    classify_cache_outcome,
+    get_logger,
+    log_cache_observed,
+    log_chain_paid_gate_blocked,
+)
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
@@ -59,6 +64,80 @@ from coderouter.translation import (
 )
 
 logger = get_logger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# v1.9-A: cache observation helper
+#
+# Single chokepoint that turns a successful AnthropicResponse into a
+# ``cache-observed`` log line. Lives at module scope (not on the engine
+# class) so unit tests can feed a synthetic response without spinning up
+# a fallback engine.
+#
+# We pass `request_had_cache_control` in from the caller (already
+# computed in v0.5-B for the capability-degraded gate) so we don't
+# re-walk the AnthropicRequest tree twice per call.
+# ---------------------------------------------------------------------------
+
+
+def _emit_cache_observed(
+    response: AnthropicResponse,
+    *,
+    provider: str,
+    request_had_cache_control: bool,
+    streaming: bool,
+) -> None:
+    """Extract usage / cache fields from an AnthropicResponse and log them.
+
+    The Anthropic ``usage`` block carries cache_read_input_tokens /
+    cache_creation_input_tokens via the ``extra="allow"`` config on
+    :class:`AnthropicUsage` — the engine never had to care about them
+    until v1.9-A. We pull them out of ``model_extra`` rather than typing
+    them into the schema because (a) the openai_compat → anthropic
+    converter zero-fills usage so ``input_tokens`` / ``output_tokens``
+    are always present, but cache fields land only on native
+    Anthropic / LM Studio /v1/messages responses, and (b) future
+    Anthropic API additions (e.g. ephemeral_5m vs ephemeral_1h
+    breakdowns) extend ``model_extra`` without a schema change.
+
+    The ``streaming=True`` arg path is reserved — v1.9-A does not yet
+    aggregate ``message_delta`` events, so streaming responses always
+    record ``outcome=unknown`` (per :data:`coderouter.logging.CacheOutcome`
+    docstring). Streaming aggregation lands in v1.9-B.
+    """
+    usage = response.usage
+    extra = usage.model_extra or {}
+    raw_read = extra.get("cache_read_input_tokens", 0)
+    raw_creation = extra.get("cache_creation_input_tokens", 0)
+    cache_read = raw_read if isinstance(raw_read, int) else 0
+    cache_creation = raw_creation if isinstance(raw_creation, int) else 0
+    # ``usage_present`` is True if either usage was populated by the
+    # upstream OR derived in conversion. We treat any non-zero token
+    # count as evidence the upstream answered with usage info; an
+    # all-zero usage from the openai_compat converter is treated as
+    # "unknown" so the no_cache bucket only counts real cache misses.
+    usage_present = (
+        usage.input_tokens > 0
+        or usage.output_tokens > 0
+        or cache_read > 0
+        or cache_creation > 0
+    )
+    outcome = classify_cache_outcome(
+        usage_present=usage_present,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+    )
+    log_cache_observed(
+        logger,
+        provider=provider,
+        request_had_cache_control=request_had_cache_control,
+        outcome=outcome,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+        input_tokens=usage.input_tokens,
+        output_tokens=usage.output_tokens,
+        streaming=streaming,
+    )
 
 
 class NoProvidersAvailableError(CodeRouterError):
@@ -401,6 +480,10 @@ class FallbackEngine:
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
         tool_names = [t.name for t in request.tools] if request.tools else None
+        # v1.9-A: cache observation needs to know whether the request
+        # ever asked for caching. Compute once; the v0.5-B gate uses the
+        # same value below for the capability-degraded log.
+        request_had_cache_control = anthropic_request_has_cache_control(request)
 
         for adapter, will_degrade in chain:
             is_native = isinstance(adapter, AnthropicAdapter)
@@ -423,7 +506,7 @@ class FallbackEngine:
             # needed here (to_chat_request already handles it) and no
             # chain reorder is done (user ordering preserved). We just
             # emit a log line so operators can see the lossiness.
-            if anthropic_request_has_cache_control(request) and not provider_supports_cache_control(
+            if request_had_cache_control and not provider_supports_cache_control(
                 adapter.config
             ):
                 log_capability_degraded(
@@ -475,6 +558,18 @@ class FallbackEngine:
                     "stream": False,
                     "native_anthropic": is_native,
                 },
+            )
+            # v1.9-A: pair every successful Anthropic response with a
+            # cache-observed log line. Native Anthropic / LM Studio
+            # /v1/messages report cache_read_input_tokens /
+            # cache_creation_input_tokens via usage.model_extra;
+            # openai_compat-converted responses fall through to
+            # outcome=unknown.
+            _emit_cache_observed(
+                resp,
+                provider=adapter.name,
+                request_had_cache_control=request_had_cache_control,
+                streaming=False,
             )
             return resp
 

@@ -399,3 +399,165 @@ def log_chain_claude_code_suitability_degraded(
         "chain-claude-code-suitability-degraded",
         extra=payload,
     )
+
+
+# ---------------------------------------------------------------------------
+# v1.9-A: cache-observed log shape (Cache Observability)
+#
+# Motivation (docs/inside/future.md §5.1):
+#   Anthropic prompt caching is the single biggest cost / latency lever a
+#   Claude Code user has, but until v1.9-A there is no record kept of how
+#   often it actually fires through CodeRouter. The MetricsCollector has
+#   ``provider-ok`` events but nothing in them carries token-level
+#   cache accounting. v1.9-A adds a structured ``cache-observed`` log
+#   line emitted from the engine's success path so every successful
+#   ``provider-ok`` is paired with a cache observation when the response
+#   carried any token usage data.
+#
+# Why a separate event (not piggyback on ``provider-ok``)
+#   1. ``provider-ok`` already has stable typed extras consumed by the
+#      v1.5-A MetricsCollector dispatch table; bolting cache fields onto
+#      it would force every downstream consumer (collector, JSONL mirror,
+#      tests) to re-validate the new shape.
+#   2. cache observation does not always fire (streaming path defers
+#      usage to ``message_delta`` events; openai_compat upstreams don't
+#      return cache fields). A dedicated event lets us model "cache info
+#      missing" as ``outcome=unknown`` without polluting ``provider-ok``.
+#   3. Forward compat: a future ``cache-observed`` from a doctor cache
+#      probe (planned for v1.9-B) reuses the same shape, no schema split.
+#
+# Four-class outcome (vs LiteLLM's three-class)
+#   future.md §3 documents the LiteLLM ``cache_creation_input_tokens``
+#   undercounting bug — they bucket "cache miss" and "no cache_control"
+#   together, which makes "is my cache_control even being sent?" hard to
+#   answer from their dashboard. CodeRouter splits these from day one:
+#       cache_hit       cache_read_input_tokens > 0
+#       cache_creation  cache_creation_input_tokens > 0 (and not hit)
+#       no_cache        usage present, both cache fields 0/missing
+#       unknown         response carried no usage at all (streaming /
+#                       openai_compat / pre-v1.9-A upstreams)
+#   "no_cache" further splits at the call site into "request lacked
+#   cache_control" vs "request had cache_control but provider stripped
+#   it" — but the latter is already captured by the existing
+#   ``capability-degraded`` (reason=translation-lossy) event, so this
+#   event keeps the bucket flat.
+# ---------------------------------------------------------------------------
+
+
+CacheOutcome = Literal["cache_hit", "cache_creation", "no_cache", "unknown"]
+"""Four-class cache observation outcome.
+
+- ``cache_hit``: ``cache_read_input_tokens > 0`` — a previously-cached
+  prefix was reused. The savings figure is ``cache_read_input_tokens``
+  (charged at ~10% of normal input rate).
+- ``cache_creation``: ``cache_creation_input_tokens > 0`` and not a hit.
+  The first call after a cache_control marker plants the cache; this
+  call paid the writeback cost (charged at ~125% of normal input).
+- ``no_cache``: usage was returned but both cache fields were 0 or
+  absent. Either the request had no ``cache_control`` markers, or the
+  marker was sent but the upstream did not honor it (the latter case
+  already triggers ``capability-degraded`` so it is not double-counted
+  here).
+- ``unknown``: the response carried no usage block at all. Common for
+  streaming responses (usage arrives via ``message_delta`` events the
+  v1.9-A path does not aggregate yet) and for ``openai_compat``
+  upstreams converted via ``to_anthropic_response`` (the OpenAI
+  Chat Completions wire has no cache fields).
+"""
+
+
+class CacheObservedPayload(TypedDict):
+    """Structured shape of the ``cache-observed`` log record.
+
+    Fields
+        provider: the ``name:`` of the ProviderConfig that handled the
+            request — same key used by ``provider-ok`` so log lines join
+            cleanly on it.
+        request_had_cache_control: True iff the inbound Anthropic request
+            carried any ``cache_control`` marker (system / tools /
+            messages). Lets dashboards distinguish "client didn't ask
+            for caching" from "client asked but nothing was cached".
+        outcome: one of :data:`CacheOutcome`. See module-level comment for
+            the four-class rationale.
+        cache_read_input_tokens: as reported by the upstream usage block
+            (Anthropic native or LM Studio /v1/messages). 0 when missing.
+        cache_creation_input_tokens: as reported by the upstream usage
+            block. 0 when missing.
+        input_tokens: total prompt tokens charged at normal rate (cache
+            tokens are reported separately by the spec).
+        output_tokens: completion tokens.
+        streaming: whether the response was returned via the streaming
+            path. Streaming aggregation lands in v1.9-B; for v1.9-A,
+            ``streaming=True`` always pairs with ``outcome=unknown``.
+    """
+
+    provider: str
+    request_had_cache_control: bool
+    outcome: CacheOutcome
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+    input_tokens: int
+    output_tokens: int
+    streaming: bool
+
+
+def log_cache_observed(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    request_had_cache_control: bool,
+    outcome: CacheOutcome,
+    cache_read_input_tokens: int,
+    cache_creation_input_tokens: int,
+    input_tokens: int,
+    output_tokens: int,
+    streaming: bool,
+) -> None:
+    """Emit a ``cache-observed`` info record with the unified shape.
+
+    Single chokepoint mirroring :func:`log_capability_degraded`. Info
+    level (not warn) — a cache miss is rarely an error; cache_read of 0
+    on the first call of a new conversation is the steady-state.
+    Operators surface anomalies via the dashboard's per-provider hit-
+    rate panel rather than per-line warnings.
+
+    Caller responsibility: derive ``outcome`` from the token fields.
+    Helper :func:`classify_cache_outcome` exists for callers that just
+    have the raw usage dict.
+    """
+    payload: CacheObservedPayload = {
+        "provider": provider,
+        "request_had_cache_control": request_had_cache_control,
+        "outcome": outcome,
+        "cache_read_input_tokens": cache_read_input_tokens,
+        "cache_creation_input_tokens": cache_creation_input_tokens,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "streaming": streaming,
+    }
+    logger.info("cache-observed", extra=payload)
+
+
+def classify_cache_outcome(
+    *,
+    usage_present: bool,
+    cache_read_input_tokens: int,
+    cache_creation_input_tokens: int,
+) -> CacheOutcome:
+    """Bucket a usage block into one of the four :data:`CacheOutcome` values.
+
+    Order matters: a response carrying both a read and a creation count
+    (rare but possible when a cached prefix is extended with a fresh
+    cache_control marker on the same call) is classified as
+    ``cache_hit`` because the read indicates the primary cache mechanism
+    fired. The creation count still rolls up into the per-provider
+    ``cache_creation_total`` counter via the collector, so no token is
+    lost from the accounting.
+    """
+    if not usage_present:
+        return "unknown"
+    if cache_read_input_tokens > 0:
+        return "cache_hit"
+    if cache_creation_input_tokens > 0:
+        return "cache_creation"
+    return "no_cache"

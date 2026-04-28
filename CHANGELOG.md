@@ -6,6 +6,95 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a1] — 2026-04-28 (v1.9-A: Cache Observability — Anthropic prompt caching を観測可能に)
+
+**Theme: v1.9 シリーズ最初の alpha pre-release。Anthropic prompt caching の動作を CodeRouter 側で観測可能にし、`cache_read_input_tokens` / `cache_creation_input_tokens` を 4 分類 (cache_hit / cache_creation / no_cache / unknown) で per-provider 集計。**
+
+`docs/inside/future.md` §5.1 の v1.9-A 範囲を実装。挙動は変えず、観測経路を追加するだけの安全な追加。LiteLLM の `cache_creation_input_tokens` undercounting バグ (future.md §3) を最初から避ける厳密 4 分類集計を導入。次の v1.9-B (cross-backend cache passthrough + capability gate / doctor cache probe) で能動的な cache 制御を追加予定。
+
+- Tests: 737 → **759** (+22: classify_cache_outcome / collector dispatch / snapshot cache panel / Prometheus exposition / engine emission)
+- Runtime deps: 5 → 5 (23 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` / `~/.coderouter/model-capabilities.yaml` / API 全部変更なし
+- Pre-release: `1.9.0a1` の `a1` は PEP 440 alpha pre-release。`pip install --pre coderouter-cli` で取得可能。`v1.9.0` 正式版は v1.9-B/E/C/D も完了次第
+
+### Changes
+
+#### `cache-observed` 構造化ログイベント新設
+
+- **`coderouter/logging.py`**: `CacheOutcome` Literal + `CacheObservedPayload` TypedDict + `log_cache_observed()` helper + `classify_cache_outcome()` 4 分類関数を追加。
+  - `cache_hit`: `cache_read_input_tokens > 0` (cache 再利用、〜10% input rate)
+  - `cache_creation`: `cache_creation_input_tokens > 0` かつ hit ではない (cache 書き込み、〜125% input rate)
+  - `no_cache`: usage 受信したが cache フィールド 0/欠損 (cache_control 無し or upstream が握り潰した)
+  - `unknown`: response に usage block 自体無し (streaming / openai_compat 経由 / pre-v1.9-A upstream)
+- **理由**: `provider-ok` event に cache フィールドを混ぜると downstream consumers (collector / JSONL mirror / tests) すべてが新 schema 検証必要。専用 event なら streaming 時の `outcome=unknown` も自然に表現できる
+
+#### Engine (`fallback.py`): 成功 response 毎に cache-observed を emit
+
+- **`coderouter/routing/fallback.py`**: `generate_anthropic` の `provider-ok` 直後に `_emit_cache_observed()` 呼び出しを追加。`AnthropicResponse.usage.model_extra` から `cache_read_input_tokens` / `cache_creation_input_tokens` を抽出 (Pydantic `extra="allow"` 経由でラウンドトリップ済み)。
+  - native Anthropic + LM Studio `/v1/messages` (`kind: anthropic`) → cache フィールド付き → 4 分類正しく出る
+  - openai_compat → anthropic 変換経由 → cache フィールド無し → `outcome=no_cache` or `unknown`
+- streaming aggregation は v1.9-B 送り (`message_delta` イベント集約が必要)、v1.9-A では非 streaming パスのみ対応
+
+#### MetricsCollector: per-provider cache 集計
+
+- **`coderouter/metrics/collector.py`**: `cache-observed` event を dispatch table に追加。新カウンタ:
+  - `_cache_read_tokens: Counter[str]` (per-provider)
+  - `_cache_creation_tokens: Counter[str]` (per-provider)
+  - `_cache_outcomes: dict[str, Counter[str]]` (per-provider × 4-class)
+  - `_cache_read_tokens_total: int` / `_cache_creation_tokens_total: int` (aggregate、毎 event で incremental 更新、snapshot 時の re-fold コスト回避)
+- `snapshot()` 拡張: `counters.cache_*` (per-provider + aggregate) + 各 provider row に `cache: {read_tokens, creation_tokens, outcomes, hit_rate, observations}` panel を追加
+  - **`hit_rate`** は `cache_hit / (cache_hit + cache_creation + no_cache)`、`unknown` は分母から除外 (signal 無しを 0% 表示するのを回避)
+  - 観測無しなら `hit_rate=None`、dashboard で「—」表示できる
+- `reset()` で v1.9-A state も clear
+
+#### Prometheus exposition: 3 つの新 counter
+
+- **`coderouter/metrics/prometheus.py`**:
+  - `coderouter_cache_read_tokens_total{provider="..."}` — cache 再利用された input token 累計
+  - `coderouter_cache_creation_tokens_total{provider="..."}` — cache 書き込み input token 累計
+  - `coderouter_cache_observed_total{provider="...", outcome="cache_hit|cache_creation|no_cache|unknown"}` — 4 分類イベント数
+- `hit_rate` を gauge で expose しないのは Prometheus 慣習に従い (`rate()` で derivative を計算する方が時間窓を正しく扱える)
+
+#### Tests (+22)
+
+- **`tests/test_metrics_cache.py`** (+11): `classify_cache_outcome` 4 cases / collector dispatch / snapshot cache panel / hit_rate=None for idle / unknown-only keeps None / reset clears state / 防御的非 int 受け入れ
+- **`tests/test_metrics_prometheus_cache.py`** (+5): empty-snapshot HELP/TYPE / per-provider read/creation labels / outcome label pair / `_total` suffix
+- **`tests/test_fallback_cache_observed.py`** (+6): cache_hit / cache_creation / no_cache outcome 別 / openai_compat 経路で no_cache or unknown / 失敗時 emit せず / chain fallthrough 時 winning provider のみ emit
+
+### Why
+
+`docs/inside/future.md` §1 で確立した Vision「Local LLM で agent を長時間回すための信頼性層」の 3 pillar 中、**P1 Connection Stability** の核心要素である Anthropic prompt caching を **観測可能に** することが v1.9 シリーズの最初のステップ。LM Studio 0.4.12 の Anthropic 互換 `/v1/messages` 経由で v1.8.4 に observed した `cache_read_input_tokens: 280` を、CodeRouter 側で **per-provider hit 率として集計・可視化** できるようになった。
+
+LiteLLM cluster は `cache_creation_input_tokens` を `no_cache` に丸めて undercount する既知バグ (future.md §3 referenced) があり、CodeRouter は最初から 4 分類厳密集計でこれを回避。Claude Code 特化 OSS の中で **唯一の cache 観測機能** として位置づけ。
+
+### Migration
+
+`pyproject.toml version 1.8.5 → 1.9.0a1`、`coderouter --version` は 1.9.0a1 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。
+
+`/metrics.json` の counters / providers schema は **追加のみ** (新 key `cache_read_tokens` / `cache_creation_tokens` / `cache_outcomes`、provider rows に `cache` panel)、既存 dashboards は壊れない。Prometheus scraper は新メトリクス自動 discovery。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+A  tests/test_fallback_cache_observed.py
+A  tests/test_metrics_cache.py
+A  tests/test_metrics_prometheus_cache.py
+```
+
+### Out of scope (次回以降)
+
+- **v1.9-B**: cross-backend cache passthrough + capability gate (`capabilities.cache_control` registry / doctor cache probe / openai_compat strip warn) — 「観測」から「保証」へ
+- **v1.9-E (前倒し)**: Long-run Guards 三段 (L2 memory pressure / L3 tool loop / L5 backend health) — Vision の核心実装
+- streaming aggregation: `message_delta` event を集約して streaming 時も `outcome=cache_hit/creation/no_cache` を出せるようにする (v1.9-B 範囲)
+
+---
+
 ## [v1.8.5] — 2026-04-28 (doctor NEEDS_TUNING メッセージを v1.8.3 thinking-aware budget の事実に揃える + `docs/lmstudio-direct.md` 新規)
 
 **Theme: 文言の整合 patch + ドキュメント補完。**v1.8.3 で `tool_calls` / `num_ctx` / `streaming` の 3 probe に thinking-aware budget (256 / 1024) を入れた。今回はその事実を NEEDS_TUNING 時の detail メッセージに反映し、operator が「probe budget が小さすぎたのでは」と疑う余地をなくす。あわせて v1.8.4 で実機検証した LM Studio 0.4.12 経由経路を `docs/llamacpp-direct.md` と対をなす形で `docs/lmstudio-direct.md` (+ `.en.md`) として正式化。

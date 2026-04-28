@@ -35,6 +35,9 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
     ``chain-paid-gate-blocked``  → ``chain_paid_gate_blocked_total``
     ``chain-uniform-auth-failure``→ ``chain_uniform_auth_failure_total``
     ``auto-router-fallthrough``  → ``auto_router_fallthrough_total``
+    ``cache-observed`` (v1.9-A)  → ``cache_*`` per-provider counters
+                                   (read tokens, creation tokens,
+                                    outcome 4-class breakdown)
     ``coderouter-startup``       → ``startup_info`` (stored for the UI header)
 
     Unrecognized events are ignored (forward-compat: adding a new log
@@ -114,6 +117,22 @@ class MetricsCollector(logging.Handler):
         # Prometheus counter so operators can watch the fall-through rate as
         # a stability signal on custom rulesets.
         self._auto_router_fallthrough_total: int = 0
+
+        # v1.9-A: cache observability. Per-provider token totals + 4-class
+        # outcome counters. The 4-class split avoids the LiteLLM
+        # cache_creation_input_tokens undercounting bug (future.md §3) by
+        # keeping "no_cache" (request lacked / lost cache_control) distinct
+        # from "unknown" (response carried no usage at all).
+        self._cache_read_tokens: Counter[str] = Counter()
+        self._cache_creation_tokens: Counter[str] = Counter()
+        # nested: provider -> outcome -> count, where outcome is one of
+        # CacheOutcome (cache_hit / cache_creation / no_cache / unknown).
+        self._cache_outcomes: dict[str, Counter[str]] = {}
+        # Aggregate (sum across providers) — kept inline so snapshot()
+        # doesn't have to re-fold every read. Cheap to maintain on every
+        # event; expensive to recompute on every /metrics.json scrape.
+        self._cache_read_tokens_total: int = 0
+        self._cache_creation_tokens_total: int = 0
 
         # Last-error snapshot per provider (overwrites previous). Enables the
         # dashboard's "last error" column without scanning the ring.
@@ -199,6 +218,24 @@ class MetricsCollector(logging.Handler):
                 # default-rule branch (no user/bundled rule matched, or
                 # ``auto_router.disabled: true``) bumps this counter.
                 self._auto_router_fallthrough_total += 1
+            elif event == "cache-observed":
+                # v1.9-A: per-provider cache token + 4-class outcome.
+                # Defensive int-coerce — log extras are typed via
+                # CacheObservedPayload at the source but the handler
+                # contract still lets us receive anything, and we never
+                # want a malformed log line to crash the metrics tap.
+                provider = _str(extras.get("provider"))
+                read_raw = extras.get("cache_read_input_tokens", 0)
+                creation_raw = extras.get("cache_creation_input_tokens", 0)
+                read = read_raw if isinstance(read_raw, int) else 0
+                creation = creation_raw if isinstance(creation_raw, int) else 0
+                outcome = _str(extras.get("outcome"))
+                self._cache_read_tokens[provider] += read
+                self._cache_creation_tokens[provider] += creation
+                self._cache_read_tokens_total += read
+                self._cache_creation_tokens_total += creation
+                if outcome:
+                    self._cache_outcomes.setdefault(provider, Counter())[outcome] += 1
             elif event == "coderouter-startup":
                 # Snapshot a subset — startup payload contains lists that are
                 # safe to surface to /metrics.json. Version / providers /
@@ -247,6 +284,9 @@ class MetricsCollector(logging.Handler):
                 set(self._provider_attempts)
                 | set(self._provider_outcomes)
                 | set(self._last_error)
+                | set(self._cache_read_tokens)
+                | set(self._cache_creation_tokens)
+                | set(self._cache_outcomes)
             )
             provider_rows = [
                 {
@@ -254,6 +294,17 @@ class MetricsCollector(logging.Handler):
                     "attempts": self._provider_attempts.get(name, 0),
                     "outcomes": dict(self._provider_outcomes.get(name, Counter())),
                     "last_error": self._last_error.get(name),
+                    # v1.9-A: per-row cache panel. ``hit_rate`` is None
+                    # rather than 0.0 when no observations have happened
+                    # yet — keeps the dashboard from rendering a flat 0%
+                    # for an idle provider that never had a chance to be
+                    # measured.
+                    "cache": _make_cache_row(
+                        name,
+                        self._cache_outcomes.get(name, Counter()),
+                        self._cache_read_tokens.get(name, 0),
+                        self._cache_creation_tokens.get(name, 0),
+                    ),
                 }
                 for name in providers
             ]
@@ -266,6 +317,10 @@ class MetricsCollector(logging.Handler):
                     "chain_paid_gate_blocked_total": self._chain_paid_gate_blocked_total,
                     "chain_uniform_auth_failure_total": self._chain_uniform_auth_failure_total,
                     "auto_router_fallthrough_total": self._auto_router_fallthrough_total,
+                    # v1.9-A: aggregate cache totals (sum across providers).
+                    # Per-provider numbers live on the provider rows.
+                    "cache_read_tokens_total": self._cache_read_tokens_total,
+                    "cache_creation_tokens_total": self._cache_creation_tokens_total,
                     "provider_attempts": dict(self._provider_attempts),
                     "provider_outcomes": {
                         name: dict(counter)
@@ -275,6 +330,15 @@ class MetricsCollector(logging.Handler):
                     "provider_skipped_unknown": dict(self._provider_skipped_unknown),
                     "capability_degraded": dict(self._capability_degraded),
                     "output_filter_applied": dict(self._output_filter_applied),
+                    # v1.9-A: per-provider cache token totals + outcome
+                    # breakdown. The Prometheus exposition flattens these
+                    # into ``coderouter_cache_*_total{provider,...}``.
+                    "cache_read_tokens": dict(self._cache_read_tokens),
+                    "cache_creation_tokens": dict(self._cache_creation_tokens),
+                    "cache_outcomes": {
+                        name: dict(counter)
+                        for name, counter in self._cache_outcomes.items()
+                    },
                 },
                 "providers": provider_rows,
                 "recent": list(self._recent),
@@ -302,6 +366,12 @@ class MetricsCollector(logging.Handler):
             self._chain_paid_gate_blocked_total = 0
             self._chain_uniform_auth_failure_total = 0
             self._auto_router_fallthrough_total = 0
+            # v1.9-A
+            self._cache_read_tokens.clear()
+            self._cache_creation_tokens.clear()
+            self._cache_outcomes.clear()
+            self._cache_read_tokens_total = 0
+            self._cache_creation_tokens_total = 0
             self._last_error.clear()
             self._recent.clear()
             self._startup_info.clear()
@@ -468,4 +538,41 @@ def _make_last_error(extras: dict[str, Any], record: logging.LogRecord) -> dict[
         "status": status if isinstance(status, int) else None,
         "retryable": bool(retryable) if retryable is not None else None,
         "error": error_text,
+    }
+
+
+def _make_cache_row(
+    _name: str,
+    outcomes: Counter[str],
+    read_tokens: int,
+    creation_tokens: int,
+) -> dict[str, Any]:
+    """Build the per-provider cache panel for the snapshot.
+
+    Hit rate is computed as ``cache_hit / (cache_hit + cache_creation +
+    no_cache)`` — ``unknown`` is excluded from the denominator because
+    the response carried no usage at all (counting it would dilute the
+    rate with provider/configuration noise rather than actual cache
+    behavior).
+
+    Returns ``None``-bearing fields when no observations exist yet, so
+    the dashboard can render "—" rather than a deceptive 0%.
+    """
+    total_observed = (
+        outcomes.get("cache_hit", 0)
+        + outcomes.get("cache_creation", 0)
+        + outcomes.get("no_cache", 0)
+    )
+    if total_observed == 0:
+        hit_rate: float | None = None
+    else:
+        hit_rate = round(outcomes.get("cache_hit", 0) / total_observed, 4)
+    return {
+        "read_tokens": read_tokens,
+        "creation_tokens": creation_tokens,
+        "outcomes": dict(outcomes),
+        "hit_rate": hit_rate,
+        "observations": (
+            sum(outcomes.values()) if outcomes else 0
+        ),
     }

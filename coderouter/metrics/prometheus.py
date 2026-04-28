@@ -153,6 +153,62 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             ],
         )
     )
+
+    # ---- v1.9-A: cache observability -----------------------------------
+    # Three counters carry the cache picture:
+    #   * cache_read_tokens_total{provider}     — tokens served from cache
+    #   * cache_creation_tokens_total{provider} — tokens written to cache
+    #   * cache_observed_total{provider,outcome} — 4-class outcome count
+    # Total token gauges aren't useful (counters are already monotone),
+    # and a "hit_rate" gauge is intentionally NOT exposed here because
+    # Prometheus best practice is to compute rates with PromQL
+    # (rate(cache_read_tokens_total) / rate(input_tokens_total)) rather
+    # than have CodeRouter compute and expose a derivative gauge that
+    # would lie about the time window.
+    lines.extend(
+        _counter(
+            name="cache_read_tokens_total",
+            help_text=(
+                "Anthropic prompt-cache read tokens served from upstream cache, "
+                "by provider. Sum across providers equals the aggregate counter."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(counters.get("cache_read_tokens", {}).items())
+            ],
+        )
+    )
+    lines.extend(
+        _counter(
+            name="cache_creation_tokens_total",
+            help_text=(
+                "Anthropic prompt-cache creation (write-back) tokens, by "
+                "provider. Cache is paid at ~125% of normal input rate when "
+                "first written; this counter sizes that cost."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(counters.get("cache_creation_tokens", {}).items())
+            ],
+        )
+    )
+    cache_outcome_samples: list[tuple[tuple[tuple[str, str], ...], int]] = []
+    for provider, outcomes in sorted(counters.get("cache_outcomes", {}).items()):
+        for outcome, count in sorted(outcomes.items()):
+            cache_outcome_samples.append(
+                ((("provider", provider), ("outcome", outcome)), count)
+            )
+    lines.extend(
+        _counter(
+            name="cache_observed_total",
+            help_text=(
+                "Cache observation events from successful Anthropic responses, "
+                "by provider and 4-class outcome (cache_hit | cache_creation | "
+                "no_cache | unknown)."
+            ),
+            samples=cache_outcome_samples,
+        )
+    )
     return "\n".join(lines) + "\n"
 
 
