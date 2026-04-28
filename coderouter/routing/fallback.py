@@ -39,11 +39,18 @@ from coderouter.adapters.base import (
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.errors import CodeRouterError
+from coderouter.guards.tool_loop import (
+    DEFAULT_LOOP_INJECT_HINT,
+    ToolLoopBreakError,
+    detect_tool_loop,
+    inject_loop_break_hint,
+)
 from coderouter.logging import (
     classify_cache_outcome,
     get_logger,
     log_cache_observed,
     log_chain_paid_gate_blocked,
+    log_tool_loop_detected,
 )
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
@@ -78,6 +85,77 @@ logger = get_logger(__name__)
 # computed in v0.5-B for the capability-degraded gate) so we don't
 # re-walk the AnthropicRequest tree twice per call.
 # ---------------------------------------------------------------------------
+
+
+# ---------------------------------------------------------------------------
+# v1.9-E (L3): tool-loop guard helpers
+#
+# The detection runs at the entry of generate_anthropic / stream_anthropic
+# before chain dispatch. Three policy actions are dispatched off the
+# resolved profile's ``tool_loop_action`` field. ``warn`` always logs;
+# ``inject`` logs + returns a mutated request; ``break`` logs + raises
+# ToolLoopBreakError which the ingress converts to a 400 response.
+#
+# Engine integration is intentionally minimal — the guard is a pure
+# function and the action dispatch is a small switch. We do NOT pass
+# the detection through to the chain itself (no per-adapter awareness)
+# because the loop signal is request-shape-only and the chain is
+# already free to fall back on a different provider for diagnosis.
+# ---------------------------------------------------------------------------
+
+
+def _apply_tool_loop_guard(
+    request: AnthropicRequest, *, config: CodeRouterConfig
+) -> AnthropicRequest:
+    """Run the L3 tool-loop guard and apply the configured action.
+
+    Returns the (possibly mutated) request. Raises
+    :class:`ToolLoopBreakError` when the configured action is ``break``
+    and a loop was detected.
+
+    Profile resolution: uses ``request.profile`` (the X-CodeRouter-Mode
+    header / explicit body field) and falls back to
+    ``config.default_profile``. The profile's
+    ``tool_loop_window`` / ``tool_loop_threshold`` /
+    ``tool_loop_action`` fields parameterize the guard. When the profile
+    is missing (e.g. test harness with a stripped config), the guard
+    is a no-op — there's no safe default for "no profile".
+    """
+    chosen = request.profile or config.default_profile
+    try:
+        profile = config.profile_by_name(chosen)
+    except (KeyError, ValueError):
+        # Profile lookup failure is handled elsewhere; the guard
+        # silently no-ops so we don't double-error before the chain
+        # resolution path produces its own diagnostic.
+        return request
+
+    detection = detect_tool_loop(
+        request,
+        window=profile.tool_loop_window,
+        threshold=profile.tool_loop_threshold,
+    )
+    if detection is None:
+        return request
+
+    log_tool_loop_detected(
+        logger,
+        profile=profile.name,
+        tool_name=detection.tool_name,
+        repeat_count=detection.repeat_count,
+        threshold=profile.tool_loop_threshold,
+        window=profile.tool_loop_window,
+        action=profile.tool_loop_action,
+    )
+
+    if profile.tool_loop_action == "warn":
+        return request
+    if profile.tool_loop_action == "inject":
+        return inject_loop_break_hint(request, hint=DEFAULT_LOOP_INJECT_HINT)
+    if profile.tool_loop_action == "break":
+        raise ToolLoopBreakError(detection, profile.name)
+    # Defensive — schema validates the literal so we never reach here.
+    return request
 
 
 def _emit_cache_observed(
@@ -476,6 +554,11 @@ class FallbackEngine:
 
     async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
         """Non-streaming Anthropic request, per-provider dispatch."""
+        # v1.9-E (L3): tool-loop guard runs before chain dispatch so the
+        # `inject` action's mutated request flows into the chain
+        # naturally. `break` raises ToolLoopBreakError, which the
+        # ingress converts to a 400 response.
+        request = _apply_tool_loop_guard(request, config=self.config)
         chain = self._resolve_anthropic_chain(request)
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
@@ -590,6 +673,8 @@ class FallbackEngine:
         the downgrade entirely (Anthropic emits structured tool_use
         blocks natively, no repair needed).
         """
+        # v1.9-E (L3): tool-loop guard mirrors the non-streaming path.
+        request = _apply_tool_loop_guard(request, config=self.config)
         chain = self._resolve_anthropic_chain(request)
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []

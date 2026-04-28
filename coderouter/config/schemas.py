@@ -173,6 +173,56 @@ class FallbackChain(BaseModel):
             "for this profile."
         ),
     )
+    # v1.9-E (L3): tool-loop detection guard.
+    #
+    # Long-running agent loops can fall into "tool stuck" states where
+    # the assistant repeatedly calls the same tool with identical args
+    # because it can't make progress. The guard inspects the assistant
+    # tool_use history in the inbound request and, when the same call
+    # repeats above the threshold, takes the configured action.
+    #
+    # Three actions trade off intervention against UX disruption:
+    #   * ``warn``   — emit a structured ``tool-loop-detected`` log only.
+    #                  Diagnostic; default for v1.9-E.
+    #   * ``inject`` — append a system message reminder ("you appear to
+    #                  be looping, try a different approach") so the
+    #                  next assistant turn has a chance to course-correct.
+    #   * ``break``  — short-circuit the request with an error response.
+    #                  Use when downstream cost / context exhaustion is
+    #                  worse than telling the agent to stop.
+    tool_loop_window: int = Field(
+        default=5,
+        ge=2,
+        le=50,
+        description=(
+            "v1.9-E (L3): how many of the most recent assistant tool_use "
+            "blocks to inspect for a loop. Default 5 covers the typical "
+            "Claude Code agent step depth without false-positiving on "
+            "legitimate same-tool repetition (e.g. iterating Read on "
+            "different files)."
+        ),
+    )
+    tool_loop_threshold: int = Field(
+        default=3,
+        ge=2,
+        le=50,
+        description=(
+            "v1.9-E (L3): how many *consecutive identical* tool calls "
+            "(same name + same args) trigger a loop verdict. Default 3 "
+            "catches the most common stuck patterns (Read same file 3x, "
+            "Bash same command 3x) while leaving headroom for "
+            "intentional repetition with intermediate observations."
+        ),
+    )
+    tool_loop_action: Literal["warn", "inject", "break"] = Field(
+        default="warn",
+        description=(
+            "v1.9-E (L3): action when a loop is detected. ``warn`` (default) "
+            "emits a log line only; ``inject`` adds a ``you-are-looping`` "
+            "system message reminder to the request; ``break`` returns an "
+            "error response. See FallbackChain comment for trade-offs."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

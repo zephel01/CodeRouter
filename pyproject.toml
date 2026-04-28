@@ -11,7 +11,7 @@
 # in plan.md §11.B; once granted, this name will become an alias and
 # `coderouter` will become the canonical distribution name.
 name = "coderouter-cli"
-version = "1.9.0a2"
+version = "1.9.0a3"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"

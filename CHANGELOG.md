@@ -6,6 +6,99 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0a3] — 2026-04-28 (v1.9-E phase 1: L3 Tool-loop detection guard)
+
+**Theme: Long-run reliability の最初の guard。** `docs/inside/future.md` §5.3 の v1.9-E は L2/L3/L5 の 3 系統障害を扱う 1-2 週間のまとまった作業。1 commit で全部やると重いので **L3 (Tool loop detection) → L2 (Memory pressure) → L5 (Backend health)** の 3 段階で alpha pre-release を切る。
+
+L3 は最も isolated で HTTP 系の依存なし、~300 LOC、self-contained。「Claude Code を 8 時間連続で local LLM に向けて使っても止まらない」を訴求するための最初の具体実装。
+
+- Tests: 779 → **795** (+16: pure detect 8 / inject mutation 3 / engine helper 5)
+- Runtime deps: 5 → 5 (25 sub-release 連続据え置き)
+- Backward compat: 完全互換、`providers.yaml` 編集不要 (新フィールドはすべて default 値あり)
+- Pre-release: `1.9.0a3`、`pip install --pre coderouter-cli` で取得可能
+
+### Changes
+
+#### `coderouter/guards/` 新パッケージ + L3 detector
+
+- **`coderouter/guards/__init__.py`** 新規 — Long-run guards のパッケージドッジ。L2 / L5 が今後追加される予定地。
+- **`coderouter/guards/tool_loop.py`** 新規 (~250 LOC):
+  - `detect_tool_loop(request, *, window, threshold) -> ToolLoopDetection | None` 純関数。直近 `window` 件の assistant `tool_use` ブロックの**末尾連続**で同一 `(name, args)` が `threshold` 回以上発生していると検知
+  - `ToolUseRecord` / `ToolLoopDetection` データクラス
+  - `inject_loop_break_hint(request, *, hint)` — system フィールドに hint を append (str / None / list-of-blocks の 3 形を吸収)
+  - `ToolLoopBreakError` (CodeRouterError 派生) — `break` action 用 exception
+  - `DEFAULT_LOOP_INJECT_HINT` 定数 — 「You appear to be calling the same tool with the same arguments repeatedly...」
+  - **canonical-form JSON 比較** (`json.dumps(args, sort_keys=True)`) で `{"a":1,"b":2}` と `{"b":2,"a":1}` を同一視
+  - **trailing-run only** 検出 — 過去に脱出済みの streak は無視 (現在状態のみが actionable)
+
+#### Engine integration
+
+- **`coderouter/routing/fallback.py`**: `_apply_tool_loop_guard(request, config)` ヘルパ追加。`generate_anthropic` / `stream_anthropic` の chain dispatch 直前で呼ばれる。Action 別の挙動:
+  - `warn`: log のみ、request はそのまま
+  - `inject`: log + `inject_loop_break_hint` で system 注入された新 request を返す
+  - `break`: log + `raise ToolLoopBreakError`
+- profile lookup 失敗時は silent no-op (chain resolution が別経路で error を出すので二重診断にならない)
+
+#### Config schema
+
+- **`coderouter/config/schemas.py`** `FallbackChain` 拡張:
+  - `tool_loop_window: int = 5` (range 2-50)
+  - `tool_loop_threshold: int = 3` (range 2-50)
+  - `tool_loop_action: Literal["warn", "inject", "break"] = "warn"`
+- 既存 profile はすべて default で warn-only として動作 → 既存 deployment はゼロ変更
+
+#### Logging
+
+- **`coderouter/logging.py`**: `tool-loop-detected` warn-level log shape を新設
+  - `ToolLoopDetectedPayload` TypedDict (profile / tool_name / repeat_count / threshold / window / action)
+  - `log_tool_loop_detected()` helper — 単一の chokepoint
+- 3 つの action すべてが同じ log line を fire するので dashboard は detection 全件を捕捉できる (action は label として区別)
+
+### Why
+
+`docs/inside/future.md` §1 で確立した Vision「Local LLM で agent を長時間回すための信頼性層」の P3 (Long-run Reliability) の最初の具体実装。L3 が最も isolated で実装シンプル / テスト容易 / 単独で価値があり、最初の sub-release に最適。
+
+「Claude Code が同じファイルを 5 回 Read し続ける」「Bash で同じコマンドを 3 回叩いて止まらない」というのは長時間 agent loop で頻出する典型症状で、L3 はその検知を request shape だけで完結させる (Claude Code は full conversation history を毎回送るので tail inspection で十分)。
+
+**競合状況** (future.md §3 referenced): L3 を体系的に対処する Claude Code 系 OSS は 2026-04-27 時点で調査リスト中ゼロ。本実装は単独差別化軸として位置づく。
+
+### Migration
+
+`pyproject.toml version 1.9.0a2 → 1.9.0a3`、`coderouter --version` は 1.9.0a3 を返す。**手元の `~/.coderouter/providers.yaml` は触らない限り完全に変化なし**。新 schema フィールドはすべて default 値ありなので、既存 yaml はそのままロード可能で、警告の挙動も warn level (ログ出力のみ) なので既存処理に副作用なし。
+
+明示的に有効化したい operator は profile に以下を追加:
+
+```yaml
+profiles:
+  - name: long-running-agent
+    providers: [...]
+    tool_loop_window: 5
+    tool_loop_threshold: 3
+    tool_loop_action: inject   # または warn / break
+```
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/logging.py
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+A  coderouter/guards/__init__.py
+A  coderouter/guards/tool_loop.py
+A  tests/test_guards_tool_loop.py
+```
+
+### Out of scope (次回以降の v1.9-E phase)
+
+- **L2 (Memory pressure awareness)**: Ollama `/api/ps` / LM Studio `/v1/models` / llama.cpp `/proc/meminfo` 直読みで backend memory probe、95% 超で軽量 model に swap
+- **L5 (Backend health continuous monitoring)**: 60s 周期の健康 probe、UNHEALTHY を chain 末尾に降格 / 復帰時に元 priority 戻し、dashboard に effective chain order
+- **MetricsCollector への loop event 集計**: 現在は構造化 log のみ、将来 dashboard panel で「直近 24h の loop 検知 N 件」表示
+- **inject hint の operator override**: 現在 `DEFAULT_LOOP_INJECT_HINT` のみ、将来 profile-level `tool_loop_inject_hint` で日本語化等可能に
+
+---
+
 ## [v1.9.0a2] — 2026-04-28 (v1.9-B: Cross-backend cache passthrough + capability gate + doctor cache probe)
 
 **Theme: v1.9-A の「観測」を「保証」へ。** capability registry に `cache_control` フィールドを新設し、Claude 4 family + LM Studio 経由 Qwen3.5/3.6 を bundled で宣言。doctor に新 probe `_probe_cache` を追加し、cache_control の round-trip (1 回目 creation → 2 回目 read) を実機 verify。

@@ -538,6 +538,86 @@ def log_cache_observed(
     logger.info("cache-observed", extra=payload)
 
 
+# ---------------------------------------------------------------------------
+# v1.9-E (L3): tool-loop-detected log shape (Long-run Guards / loop detection)
+#
+# Motivation (docs/inside/future.md §5.3.2):
+#   Long-running agent sessions can fall into "stuck loops" where the
+#   assistant repeatedly calls the same tool with identical args
+#   because it can't make progress. The guard inspects the assistant
+#   tool_use history in the inbound request and, when the same call
+#   repeats above the configured threshold, emits this log line.
+#
+#   The log line is the ``warn`` action's only effect. The ``inject``
+#   and ``break`` actions both fire this log too (so dashboards can
+#   surface every detection regardless of the action), but they also
+#   modify the outbound request / response.
+#
+# Why warn-level
+#   Mid-session loop detection is operationally significant — it
+#   indicates the agent ran out of progress signal — but rarely a
+#   crisis (the agent often unsticks itself on the next turn). Warn
+#   matches the existing severity of ``chain-paid-gate-blocked`` and
+#   ``chain-claude-code-suitability-degraded``: visible in the default
+#   log level, but not error-level.
+# ---------------------------------------------------------------------------
+
+
+class ToolLoopDetectedPayload(TypedDict):
+    """Structured shape of the ``tool-loop-detected`` log record.
+
+    Fields
+        profile: the profile name in effect for this request. Lets
+            dashboards filter loop detections per-profile.
+        tool_name: the tool that was called repeatedly.
+        repeat_count: how many consecutive identical calls were
+            observed in the assistant's recent history. Always >=
+            ``threshold`` (the threshold is the trigger condition).
+        threshold: the configured ``tool_loop_threshold`` for this
+            profile — surfaced in the log so operators can correlate
+            against their config without grep'ing providers.yaml.
+        window: the configured ``tool_loop_window`` (how many recent
+            tool_use blocks were inspected).
+        action: the configured ``tool_loop_action`` (``warn`` /
+            ``inject`` / ``break``). Lets a single log query
+            distinguish "fired but only logged" from "fired and broke
+            the request".
+    """
+
+    profile: str
+    tool_name: str
+    repeat_count: int
+    threshold: int
+    window: int
+    action: Literal["warn", "inject", "break"]
+
+
+def log_tool_loop_detected(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    tool_name: str,
+    repeat_count: int,
+    threshold: int,
+    window: int,
+    action: Literal["warn", "inject", "break"],
+) -> None:
+    """Emit a ``tool-loop-detected`` warn record with the unified shape.
+
+    Single chokepoint mirroring :func:`log_capability_degraded`. Warn
+    level — see module-level rationale.
+    """
+    payload: ToolLoopDetectedPayload = {
+        "profile": profile,
+        "tool_name": tool_name,
+        "repeat_count": repeat_count,
+        "threshold": threshold,
+        "window": window,
+        "action": action,
+    }
+    logger.warning("tool-loop-detected", extra=payload)
+
+
 def classify_cache_outcome(
     *,
     usage_present: bool,
