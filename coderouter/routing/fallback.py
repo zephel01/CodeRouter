@@ -156,7 +156,12 @@ def _apply_tool_loop_guard(
     if profile.tool_loop_action == "inject":
         return inject_loop_break_hint(request, hint=DEFAULT_LOOP_INJECT_HINT)
     if profile.tool_loop_action == "break":
-        raise ToolLoopBreakError(detection, profile.name)
+        raise ToolLoopBreakError(
+            detection,
+            profile.name,
+            threshold=profile.tool_loop_threshold,
+            window=profile.tool_loop_window,
+        )
     # Defensive — schema validates the literal so we never reach here.
     return request
 

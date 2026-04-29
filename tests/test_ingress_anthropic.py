@@ -21,6 +21,7 @@ from fastapi.testclient import TestClient
 
 from coderouter.adapters.base import AdapterError
 from coderouter.config.schemas import CodeRouterConfig, FallbackChain, ProviderConfig
+from coderouter.guards.tool_loop import ToolLoopBreakError, ToolLoopDetection
 from coderouter.ingress.app import create_app
 from coderouter.routing import MidStreamError, NoProvidersAvailableError
 from coderouter.translation import (
@@ -221,6 +222,42 @@ class _MidStreamFailingEngine:
         )
 
 
+class _LoopBreakingEngine:
+    """Engine that always short-circuits with :class:`ToolLoopBreakError`.
+
+    Models the v1.9-E ``break`` action's behavior at the ingress
+    boundary: ``_apply_tool_loop_guard`` raises before the chain is
+    consulted, so neither path ever touches a provider. The detection
+    fields are fixed so tests can assert on exact values.
+    """
+
+    _DETECTION = ToolLoopDetection(
+        tool_name="Read",
+        repeat_count=3,
+        args_canonical='{"path": "a.py"}',
+    )
+
+    def __init__(self, profile: str = "default") -> None:
+        self.profile = profile
+
+    def _make_error(self) -> ToolLoopBreakError:
+        return ToolLoopBreakError(
+            self._DETECTION,
+            self.profile,
+            threshold=3,
+            window=5,
+        )
+
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
+        raise self._make_error()
+
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        raise self._make_error()
+        yield  # pragma: no cover  # generator protocol
+
+
 @pytest.fixture
 def client_and_engine(
     two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
@@ -261,6 +298,21 @@ def client_and_midstream_engine(
     )
     app = create_app()
     engine = _MidStreamFailingEngine()
+    app.state.engine = engine
+    app.state.config = two_profile_config
+    return TestClient(app), engine
+
+
+@pytest.fixture
+def client_and_loop_breaking_engine(
+    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _LoopBreakingEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: two_profile_config,
+    )
+    app = create_app()
+    engine = _LoopBreakingEngine(profile="default")
     app.state.engine = engine
     app.state.config = two_profile_config
     return TestClient(app), engine
@@ -697,3 +749,91 @@ def test_streaming_midstream_failure_emits_api_error_event(
     assert err_payload["error"]["type"] == "api_error"
     # The engine was only consulted once — the ingress does not retry.
     assert engine.stream_calls == 1
+
+
+# ----------------------------------------------------------------------
+# v1.9-E (L3): tool-loop ``break`` action — ingress translation
+#
+# The guard itself (warn/inject/break dispatch) is covered in
+# tests/test_guards_tool_loop.py. These two tests cover ONLY the
+# ingress-layer translation: ToolLoopBreakError → 400 (non-streaming)
+# and ToolLoopBreakError → SSE error event (streaming).
+# ----------------------------------------------------------------------
+
+
+def test_break_action_non_streaming_returns_400_with_structured_detail(
+    client_and_loop_breaking_engine: tuple[TestClient, _LoopBreakingEngine],
+) -> None:
+    """``break`` must surface as 400 with a structured ``detail`` dict.
+
+    Programmatic clients branch on ``detail.error == "tool_loop_detected"``
+    and read ``tool_name`` / ``repeat_count`` / ``profile`` to react
+    (stop, switch approach, notify the user). The shape is stable —
+    new fields may be added but existing ones must not be renamed
+    without a version bump.
+    """
+    client, _ = client_and_loop_breaking_engine
+    resp = client.post("/v1/messages", json=_MINIMAL_BODY)
+    assert resp.status_code == 400, resp.text
+
+    body = resp.json()
+    detail = body["detail"]
+    assert isinstance(detail, dict), detail
+    # Discriminator clients branch on.
+    assert detail["error"] == "tool_loop_detected"
+    # Detection fields — straight from the exception.
+    assert detail["profile"] == "default"
+    assert detail["tool_name"] == "Read"
+    assert detail["repeat_count"] == 3
+    assert detail["threshold"] == 3
+    assert detail["window"] == 5
+    # Human-readable message mirrors str(exc) for log-grep parity.
+    assert "tool loop detected" in detail["message"]
+    assert "'Read'" in detail["message"]
+    # ``args_canonical`` must NOT leak into the response — it can
+    # contain user data (file paths, shell commands, etc.) and the
+    # client doesn't need it to react.
+    assert "args_canonical" not in detail
+
+
+def test_break_action_streaming_emits_invalid_request_error_event(
+    client_and_loop_breaking_engine: tuple[TestClient, _LoopBreakingEngine],
+) -> None:
+    """Streaming counterpart: ``break`` must emit a single SSE error event.
+
+    The HTTP status stays 200 because StreamingResponse has already
+    committed headers by the time the iterator runs (same constraint
+    as MidStreamError). The Anthropic-shaped envelope uses
+    ``error.type == "invalid_request_error"`` so existing SDKs render
+    a sensible message; the structured detection fields live under a
+    ``tool_loop`` extension key for CodeRouter-aware clients.
+    """
+    client, _ = client_and_loop_breaking_engine
+    body = {**_MINIMAL_BODY, "stream": True}
+    with client.stream("POST", "/v1/messages", json=body) as resp:
+        assert resp.status_code == 200
+        raw = b"".join(resp.iter_bytes()).decode("utf-8")
+
+    events = _parse_sse(raw)
+    event_types = [t for t, _ in events]
+    # The guard fires before any provider event ships, so the only
+    # event in the stream is the error event itself.
+    assert event_types == ["error"], raw
+
+    import json as _json
+
+    err_data = _json.loads(events[0][1])
+    assert err_data["type"] == "error"
+    err = err_data["error"]
+    # Anthropic-standard envelope for SDK compatibility.
+    assert err["type"] == "invalid_request_error"
+    assert "tool loop detected" in err["message"]
+    # Structured detection fields under the extension key.
+    tl = err["tool_loop"]
+    assert tl["profile"] == "default"
+    assert tl["tool_name"] == "Read"
+    assert tl["repeat_count"] == 3
+    assert tl["threshold"] == 3
+    assert tl["window"] == 5
+    # Same hygiene as the non-streaming path: no args_canonical leakage.
+    assert "args_canonical" not in tl

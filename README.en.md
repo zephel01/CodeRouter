@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.8.5-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.9.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -45,7 +45,9 @@
 - `coderouter doctor --check-model <provider>` runs live probes against the provider and tells you whether it actually supports tool_calls / streaming / thinking — with a copy-paste YAML patch when declarations and behavior disagree
 - Scrubs reasoning leaks (`<think>...</think>` tags and six variants of `<|turn|>` / `<|eot_id|>` / `<|im_end|>` stop markers) across SSE chunk boundaries
 - Automatic fallback from local → free cloud (OpenRouter free / NVIDIA NIM 40 req/min free tier) → paid APIs, with `ALLOW_PAID=false` as the default so billing is opt-in
-- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 710 tests green
+- v1.9.0 records **Anthropic prompt-cache hit/miss for every request** with `hit_rate`, saved tokens, and USD cost (cache savings tracked separately) visible at `/dashboard`
+- v1.9.0 ships **adaptive routing** that auto-demotes a temporarily-slow provider (set `adaptive: true` on a profile) and a **tool-loop guard** that catches stuck-loop patterns with a 3-tier policy (`warn` / `inject` / `break`)
+- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 830 tests green
 
 → **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
 
@@ -61,7 +63,7 @@
 | **llama.cpp direct** | [llama.cpp direct guide](./docs/llamacpp-direct.en.md) | Rescue path for Qwen3.6 (Ollama is brittle). 7-step recipe: `llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter wiring. Real-machine verified in v1.8.3. |
 | **LM Studio direct** | [LM Studio direct guide](./docs/lmstudio-direct.en.md) | Second rescue path for `qwen35` / `qwen35moe`. LM Studio 0.4.12+ Local Server with both OpenAI-compatible and Anthropic-compatible (`/v1/messages`) routes — prompt caching survives end-to-end. Real-machine verified in v1.8.4. |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.8.5 — doctor NEEDS_TUNING messages aligned with v1.8.3 thinking-aware budget + new `docs/lmstudio-direct.md`) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.9.0 — Cache observability (A) + Cross-backend cache passthrough (B) + Adaptive routing (C) + Cost-aware dashboard (D) + Tool-loop guard (E) shipped in one minor) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [LM Studio 直接](./docs/lmstudio-direct.md) · [Security](./docs/security.md)
@@ -136,7 +138,7 @@ Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friend
 
 ## Quickstart (2 commands)
 
-**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.8.2 made the `doctor` probe thinking-model-aware**. `uvx` installs and runs in one shot (Python 3.12+ required):
+**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.8.2 made the `doctor` probe thinking-model-aware**, **v1.9.0 promoted cache observability / adaptive routing / cost-aware dashboard / tool-loop guard to first-class pillars**. `uvx` installs and runs in one shot (Python 3.12+ required):
 
 ```bash
 # 1. Drop a sample config

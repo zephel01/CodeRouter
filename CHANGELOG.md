@@ -6,6 +6,126 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.0] — 2026-04-29 (Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability)
+
+**Theme: 「観測 → 理解 → 行動 → 信頼性」を 1 minor で揃える、observability pillar の成熟。** v1.9.0 は 6 sub-release (v1.9-A〜E) を通じて、CodeRouter を「動いてはいるが何が起きているか分からない」状態から、「**何にいくら使った / どこで遅くなった / 何で詰まった**」が運用ログ 1 行で分かる状態に押し上げる。具体的には:
+
+- **観測 (v1.9-A)** — Anthropic prompt cache の hit/miss を全リクエストで `cache-observed` ログに記録、`/dashboard` から hit_rate / saved tokens が見える
+- **透過 (v1.9-B)** — openai_compat 経路でも cache_control / thinking 等の Anthropic 拡張を可能な限り保持、不可能な場合は `capability-degraded` で明示
+- **動的最適化 (v1.9-C)** — profile に `adaptive: true` を付けると、normally-fast な provider が一時的に遅くなったとき自動で後ろに送り、user-felt latency を保護
+- **コスト把握 (v1.9-D)** — providers.yaml の `cost:` で USD pricing を宣言、cache savings は別計算 (LiteLLM 等の競合品が落としている粒度) で dashboard に出る
+- **信頼性ガード (v1.9-E phase 1, L3)** — 同じツールを同じ引数で連続呼び出しする「stuck loop」を検出、profile-level policy (`warn` / `inject` / `break`) で対処
+
+最後の v1.9.0 GA では v1.9.0a6 以降の実機検証で発見された **L3 `break` action の ingress 取りこぼし** (`ToolLoopBreakError` が catch されず 500 が返っていた) を 400 + 構造化 detail に修正、両 ingress 経路 (非 streaming HTTPException / streaming SSE error event) で揃えました。
+
+- Tests: 828 → **830** (+2: break action 非 streaming 400 / streaming SSE error event)
+- Runtime deps: 5 → 5 (29 sub-release 連続据え置き)
+- Backward compat: 完全互換、profile / providers.yaml / API 全部変化なし
+- v1.9.0a1〜a6 をまとめての GA、各 sub-release の詳細は本ファイル下部の alpha entry を参照
+
+### Changes since v1.9.0a6 — E-4 break action の ingress 修正
+
+#### `coderouter/guards/tool_loop.py`
+
+- `ToolLoopBreakError.__init__` に `threshold: int` / `window: int` をキーワード必須で追加。ingress 側で 400 detail を組むときに config を再 lookup せずに済むよう、検出パラメータを exception 自体に carry させる
+- docstring に「Anthropic ingress が catch して 400 + 構造化 detail に変換する」を明記 (a3 で約束していたが実装が伴っていなかった)
+
+#### `coderouter/routing/fallback.py`
+
+- `_apply_tool_loop_guard` の `raise ToolLoopBreakError(...)` で `threshold=profile.tool_loop_threshold, window=profile.tool_loop_window` を渡すよう更新
+
+#### `coderouter/ingress/anthropic_routes.py`
+
+- `ToolLoopBreakError` を import
+- 非 streaming `messages()` に `except ToolLoopBreakError → HTTPException(status_code=400, detail=_tool_loop_break_detail(exc))` を追加。`detail` は flat dict:
+
+  ```json
+  {
+    "error": "tool_loop_detected",
+    "message": "tool loop detected on profile='test-loop-break': tool 'Read' repeated 3 times consecutively.",
+    "profile": "test-loop-break",
+    "tool_name": "Read",
+    "repeat_count": 3,
+    "threshold": 3,
+    "window": 5
+  }
+  ```
+
+  クライアントは `detail.error == "tool_loop_detected"` で branch 可能、`message` は `str(exc)` と同一でログ grep フレンドリー
+- streaming `_anthropic_sse_iterator` に `except ToolLoopBreakError` ブランチを追加、Anthropic 標準 envelope (`error.type == "invalid_request_error"`) + `error.tool_loop` ネストで構造化フィールドを露出。HTTP は 200 のまま (StreamingResponse はヘッダ確定後で 4xx に切り替えられない、midstream-error と同じ事情)
+- helper 2 つ: `_tool_loop_break_extension(exc)` (両形式で共有する detection payload) / `_tool_loop_break_detail(exc)` (非 streaming flat dict 構築)
+- `args_canonical` は両形式から意図的に除外 (tool input にはユーザデータが含まれうるため、400 detail / SSE error event に流出させない)
+
+#### Tests
+
+- **`tests/test_ingress_anthropic.py`** + 2:
+  - `_LoopBreakingEngine` クラス + `client_and_loop_breaking_engine` fixture を追加
+  - `test_break_action_non_streaming_returns_400_with_structured_detail` — 400 + `detail.error="tool_loop_detected"` + 5 detection field + `args_canonical` 不在を検証
+  - `test_break_action_streaming_emits_invalid_request_error_event` — 200 + 単発 SSE error event + Anthropic 標準 envelope + `error.tool_loop` ネスト + `args_canonical` 不在を検証
+
+### v1.9 series summary
+
+| sub | release | feature |
+|---|---|---|
+| a1 | v1.9-A | Cache Observability — `cache-observed` log + dashboard panel |
+| a2 | v1.9-B | Cross-backend cache passthrough + capability gate + doctor cache probe |
+| a3 | v1.9-E phase 1 | L3 Tool-loop detection guard (warn / inject / break) |
+| a4 | v1.9-C | Adaptive Routing — health-based dynamic chain priority |
+| a5 | v1.9-D | Cost-aware Dashboard — Anthropic prompt-cache aware |
+| a6 | v1.9-A streaming patch | `_emit_cache_observed` を `stream_anthropic` に追加 (実装漏れ修正) |
+| **GA** | **v1.9-E phase 1 patch** | **`break` action の ingress 400 取りこぼし修正** (本 entry) |
+
+### Real-machine verification (2026-04-29, LM Studio + ollama)
+
+```
+E-2 (warn):    tool-loop-detected ... action: "warn"   → 200 OK + provider 応答
+E-3 (inject):  tool-loop-detected ... action: "inject" → system に hint 追加 + 200 OK
+                                                         + cache_read_input_tokens: 453 (prefix キャッシュ命中)
+E-4 (break, non-stream): 400 + {"detail":{"error":"tool_loop_detected","profile":"test-loop-break",
+                                           "tool_name":"Read","repeat_count":3,...}}
+E-4 (break, stream):     200 + event: error
+                               data: {"type":"error","error":{"type":"invalid_request_error",
+                                      "tool_loop":{"profile":"test-loop-break","repeat_count":3,...}}}
+
+C  (adaptive, 静止):  全 provider 同速 → static order 維持、`adaptive-routing-applied` 出ない
+C  (adaptive, 発火):  サイズ差 chain (lmstudio 27B-dense 474ms / ollama qwen-coder-1.5b 134ms / openrouter-free n/a)
+                      → global_median 304ms × 1.5 = 456ms、lmstudio 474ms ≥ 456ms → demote +1
+                      → effective_order: [ollama-qwen-coder-1_5b, openrouter-free, lmstudio-...]
+                      → 試験 4 回目から ollama-qwen-coder-1_5b 行きに切り替わって着地、
+                         debounce 30s で oscillation も観察されず
+```
+
+E-2/E-3 は a3 で観察済み、E-4 (両形式) と C 発火パスは GA 直前に実機で初観察。verification.md には MoE モデルの罠 (Qwen3.6-35B-A3B は active 3.8B で速い) と rolling-window タイミング制約の注意を後追いで加筆予定 (本リリースには含まず)。
+
+### Migration
+
+不要。**v1.8.x / v1.9.0a* からの自然なアップグレード**:
+
+- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
+- `tool_loop_action` を未指定または `warn` / `inject` で運用していた profile は挙動完全変化なし
+- `tool_loop_action: break` を既に使っていた profile のみ status code が 5xx → 4xx に変化 (a3〜a6 では実装バグで 500 Internal Server Error が返っていた、1.9.0 で docstring が約束する 400 + 構造化 detail に修正)。実運用で `break` を本番投入していたケースは想定されにくく、検証用途であれば修正後の方が期待挙動
+
+### Out of scope (v1.10 以降)
+
+v1.9 series は意図的に閉じる:
+
+- **v1.9-B2** — `message_delta` event の usage 集約で、streaming 経路でも実 token 数 / cache_read / cache_creation を取得 (現状は `outcome=unknown` 固定)
+- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder)
+- **v1.10-?** — plan.md §13 系 (multi-tenant routing, etc.) — 別 minor
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/guards/tool_loop.py
+M  coderouter/ingress/anthropic_routes.py
+M  coderouter/routing/fallback.py
+M  pyproject.toml
+M  tests/test_ingress_anthropic.py
+```
+
+---
+
 ## [v1.9.0a6] — 2026-04-28 (v1.9-A streaming パスの cache-observed emit 漏れ patch)
 
 **Theme: 実機検証で発見した v1.9-A の小さな実装ギャップを潰す。** v1.9-A の CHANGELOG / `CacheOutcome` docstring で「streaming レスポンスは `outcome=unknown` で記録される」と約束していたが、`stream_anthropic` 経路に `_emit_cache_observed` の呼び出しが実装漏れしていた (非 streaming `generate_anthropic` のみ実装済み)。実機で `curl -N stream:true` を投げても JSONL に `cache-observed` event が現れない事で発覚。doc で約束していた動作に実装を揃える。

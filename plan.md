@@ -13,9 +13,10 @@
 ### 実装スケジュール
 
 > 過去の出荷済み機能・リリース詳細は [`CHANGELOG.md`](./CHANGELOG.md) を参照。
-> 本ドキュメントは **現在進行中 (v1.9) 系の実装スケジュール** に集中。長期 Vision / 競合分析 / 市場分析等は内部メモとして別途整理 (公開しない)。
+> 本ドキュメントは **現在進行中の実装スケジュール** に集中。長期 Vision / 競合分析 / 市場分析等は内部メモとして別途整理 (公開しない)。
+> **v1.9.0 GA 出荷済み (2026-04-29)** — 以下のロードマップは shipping 済みアーカイブ、次の active milestone は本セクション末尾の「v1.10 / v1.9.x 残課題」。
 
-#### 進行中: v1.9 ロードマップ (Adaptive Caching + Long-run Guards)
+#### 完了: v1.9 ロードマップ (Adaptive Caching + Long-run Guards) — v1.9.0 GA で全 sub-release 出荷
 
 各 sub-release の規模・想定期間・差別化軸:
 
@@ -27,7 +28,7 @@
 | **v1.9-C** | Adaptive Routing (実 latency / error rate を rolling window、health-based 動的 priority、デバウンス) | ~500-700 LOC、tests +12 | 1-2 週間 | claude-code-router の task-based と被らない補完軸 |
 | **v1.9-D** | Cost-aware Dashboard (provider 別 cost config、cache savings 別枠表示、`coderouter stats --cost`) | ~300-500 LOC、tests +8 | 5-7 日 | LiteLLM ですら未対応の cache savings 計算 |
 
-順序: **A → B → ★ E → C → D** (B 顧客優先で E を 3 番目に前倒し、2026-04-27 確定)。
+順序: **A → B → ★ E → C → D** (B 顧客優先で E を 3 番目に前倒し、2026-04-27 確定)。**全 sub-release は v1.9.0a1〜a6 + GA で出荷済み (2026-04-28〜29)**。詳細は [CHANGELOG `[v1.9.0]`](./CHANGELOG.md) を参照。
 
 #### v1.9 note 記事計画 (4 連作の続き)
 
@@ -88,13 +89,13 @@ CodeRouter は `kind: openai_compat` 一種類で **Ollama / llama.cpp / LM Stud
 
 LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 3.5/3.6 性能改善が入った。CodeRouter からは **OpenAI 互換 / Anthropic 互換** の 2 経路で接続可能、後者は `kind: anthropic` で adapter 翻訳ゼロ透過。
 
-検証手順 + providers.yaml の sample は `examples/providers.yaml` の `lmstudio-*` 4 entry を参照。詳細ガイド `docs/lmstudio-direct.md` は v1.9 で予定。
+検証手順 + providers.yaml の sample は `examples/providers.yaml` の `lmstudio-*` 4 entry を参照。詳細ガイド [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) は v1.8.5 で出荷済み。
 
-### v1.8.x patch 候補 (実機検証フィードバック反映、未着手分)
+### v1.10 候補 / v1.9.x 残課題 (実機検証フィードバック反映、未着手分)
 
-- **`docs/lmstudio-direct.md` 新規作成** (LM Studio 経由 backend ガイド、v1.8.4 検証データを記載)
-- **`docs/troubleshooting.md` §4-2 に LM Studio 救出パスを追記** (Qwopus3.5 系は LM Studio 0.4.12+ で動く)
-- **v1.8.5 patch 候補**: doctor の thinking probe suggestion message 更新 (v1.8.3 の `_is_reasoning_model()` 効果を反映)
+- **v1.9-B2 候補**: `message_delta` event の usage 集約で、streaming 経路でも実 token 数 / cache_read / cache_creation を取得 (現状は `outcome=unknown` 固定で記録、実装は v1.9-A の延長線)
+- **v1.9-E phase 2 候補**: L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder) — phase 1 (L3 Tool-loop guard) は v1.9.0 で出荷済み
+- **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
 - **v1.10 候補**: longContext auto-switch (claude-code-router の task-based を auto_router に取り込み)
 
 > v2.0 以降の機能 (Pillar 別 deepening / プラグイン / MCP server / Web UI) は内部メモで別途整理

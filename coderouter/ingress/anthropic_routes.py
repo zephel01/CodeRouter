@@ -28,6 +28,7 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
+from coderouter.guards.tool_loop import ToolLoopBreakError
 from coderouter.logging import get_logger
 from coderouter.routing import (
     FallbackEngine,
@@ -141,6 +142,18 @@ async def messages(
         anth_resp = await engine.generate_anthropic(anth_req)
     except NoProvidersAvailableError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except ToolLoopBreakError as exc:
+        # v1.9-E (L3): the ``break`` action short-circuits the request
+        # before any provider is called. Surface as a structured 400 so
+        # programmatic clients can branch on ``error == "tool_loop_detected"``
+        # and read ``tool_name`` / ``repeat_count`` without regex-parsing
+        # the message string. (NoProvidersAvailableError → 502 stays as
+        # a plain string because it's a runtime / chain-failure event;
+        # break is policy and meant to be machine-readable.)
+        raise HTTPException(
+            status_code=400,
+            detail=_tool_loop_break_detail(exc),
+        ) from exc
 
     return anth_resp.model_dump(exclude_none=True)
 
@@ -167,6 +180,29 @@ async def _anthropic_sse_iterator(
                 "error": {
                     "type": "overloaded_error",
                     "message": str(exc),
+                },
+            },
+        )
+        yield _format_anthropic_sse(err_event)
+    except ToolLoopBreakError as exc:
+        # v1.9-E (L3) streaming counterpart of the non-streaming 400. The
+        # guard runs at the top of stream_anthropic — before any event
+        # has been yielded — so this is the "no bytes yet" case in
+        # principle. We still emit the error inside the SSE stream
+        # (rather than a 400) because StreamingResponse has already
+        # committed HTTP 200 + text/event-stream headers by the time
+        # we iterate the generator. Mirrors the NoProvidersAvailableError
+        # branch above. The error body uses the Anthropic-shaped
+        # ``invalid_request_error`` type with a ``tool_loop`` extension
+        # block that carries the structured detection fields.
+        err_event = AnthropicStreamEvent(
+            type="error",
+            data={
+                "type": "error",
+                "error": {
+                    "type": "invalid_request_error",
+                    "message": str(exc),
+                    "tool_loop": _tool_loop_break_extension(exc),
                 },
             },
         )
@@ -203,3 +239,53 @@ def _format_anthropic_sse(ev: AnthropicStreamEvent) -> str:
     """
     payload = json.dumps(ev.data, ensure_ascii=False)
     return f"event: {ev.type}\ndata: {payload}\n\n"
+
+
+# ---------------------------------------------------------------------------
+# v1.9-E (L3): structured payloads for the ``break`` action
+#
+# Both shapes carry the same underlying detection fields. Differences:
+#
+#   * The non-streaming 400 ``detail`` is a flat dict whose ``error``
+#     field is the discriminator — clients branch on that. ``message``
+#     duplicates the str(exc) for log-grep friendliness.
+#   * The streaming SSE event nests the detection fields under a
+#     ``tool_loop`` key inside Anthropic's standard
+#     ``{"type":"error","error":{"type":...,"message":...}}`` envelope,
+#     so existing Anthropic SDKs that read ``error.type`` /
+#     ``error.message`` keep working and CodeRouter-aware clients can
+#     also look at ``error.tool_loop`` for the structured fields.
+# ---------------------------------------------------------------------------
+
+
+def _tool_loop_break_extension(exc: ToolLoopBreakError) -> dict[str, object]:
+    """Build the structured detection payload (shared by both shapes).
+
+    Carries only fields the client can act on — ``args_canonical`` is
+    intentionally omitted because tool input often contains user data
+    we don't want to leak into a 400 detail or an SSE error event.
+    """
+    return {
+        "profile": exc.profile,
+        "tool_name": exc.detection.tool_name,
+        "repeat_count": exc.detection.repeat_count,
+        "threshold": exc.threshold,
+        "window": exc.window,
+    }
+
+
+def _tool_loop_break_detail(exc: ToolLoopBreakError) -> dict[str, object]:
+    """Build the flat ``detail`` dict for the non-streaming 400.
+
+    ``error: "tool_loop_detected"`` is the stable string clients should
+    branch on; ``message`` mirrors ``str(exc)`` so a human reading the
+    log gets the same line whether they look at the response or the
+    server log. The remaining fields come straight from
+    :func:`_tool_loop_break_extension`.
+    """
+    detail: dict[str, object] = {
+        "error": "tool_loop_detected",
+        "message": str(exc),
+    }
+    detail.update(_tool_loop_break_extension(exc))
+    return detail

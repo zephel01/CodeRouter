@@ -151,14 +151,28 @@ class ToolLoopDetection:
 class ToolLoopBreakError(CodeRouterError):
     """Raised when a loop is detected and the configured action is ``break``.
 
-    The engine catches this at the top of ``generate_anthropic`` /
-    ``stream_anthropic`` and converts it into a ``400`` response so
-    the client sees a structured failure rather than a 5xx. Subclasses
+    The Anthropic ingress layer catches this and converts it into a
+    structured ``400`` response (with ``error: "tool_loop_detected"`` +
+    detection fields in ``detail``) so the client sees a programmable
+    failure rather than a 5xx. Subclasses
     :class:`coderouter.errors.CodeRouterError` so callers that grep
     for the broad base class catch this too.
+
+    The ``threshold`` / ``window`` fields are carried on the exception
+    (rather than re-looked-up from the config in the ingress) so the
+    ingress doesn't need to take a config dependency just to render
+    the 400 detail. The values are the profile's at the moment of
+    detection — they parameterize the detection that fired.
     """
 
-    def __init__(self, detection: ToolLoopDetection, profile: str) -> None:
+    def __init__(
+        self,
+        detection: ToolLoopDetection,
+        profile: str,
+        *,
+        threshold: int,
+        window: int,
+    ) -> None:
         super().__init__(
             f"tool loop detected on profile={profile!r}: "
             f"tool {detection.tool_name!r} repeated "
@@ -166,6 +180,8 @@ class ToolLoopBreakError(CodeRouterError):
         )
         self.detection = detection
         self.profile = profile
+        self.threshold = threshold
+        self.window = window
 
 
 # ---------------------------------------------------------------------------
