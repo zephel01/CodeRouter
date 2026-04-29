@@ -216,7 +216,7 @@ In the CodeRouter logs you should see `dropped=["reasoning", "reasoning_content"
 - [`troubleshooting.md` §4-2-A](./troubleshooting.md#4-2-a-qwen36) — known Qwen3.6 + Ollama pitfalls.
 - [`hf-ollama-models.md`](./hf-ollama-models.md) — pulling HF models through Ollama.
 - [`examples/providers.yaml`](../examples/providers.yaml) — bundled `llamacpp-qwen3-6-35b-a3b` provider example.
-- The session that produced this guide: [v1.8.1 note](./articles/note-v1-8-1-reality-check.md) → [v1.8.2 note](./articles/note-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](./articles/note-v1-8-3-llamacpp-rescue.md).
+- The session that produced this guide: [v1.8.1 note](./articles/v1-saga/note-1-v1-8-1-reality-check.md) → [v1.8.2 note](./articles/v1-saga/note-2-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](./articles/v1-saga/note-3-v1-8-3-llamacpp-rescue.md).
 
 ---
 

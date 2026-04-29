@@ -841,7 +841,7 @@ M  coderouter/doctor.py
 M  pyproject.toml
 M  plan.md
 M  docs/troubleshooting.md
-M  docs/articles/note-v1-8-1-reality-check.md   (or new file v1-8-2)
+M  docs/articles/v1-saga/note-1-v1-8-1-reality-check.md   (or new file v1-8-2)
 M  tests/test_doctor.py
 ```
 

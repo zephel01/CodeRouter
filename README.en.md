@@ -136,6 +136,21 @@ If you're on an OpenAI-compatible agent with a well-behaved model and don't need
 
 Design invariants and the roadmap are in [`plan.md`](./plan.md). Beginner-friendly articles on *why the same local model sometimes works and sometimes doesn't* are published separately on Zenn / Note.
 
+## Ecosystem
+
+CodeRouter is a **backend router layer** that runs as its own service, so it pairs naturally with other projects that consume local LLMs. Just point the client's `OPENAI_BASE_URL` (or `OLLAMA_BASE_URL`) at CodeRouter and the client gets fallback / observability for free, with no changes on its side:
+
+- **[Voice Bridge](https://github.com/zephel01/voice-bridge)** — Real-time voice translation + AI voice chat (Japanese characters like Zundamon / Lirin via VOICEVOX & CoeiroInk + Live2D avatar). Pointing chat-mode's `OLLAMA_BASE_URL` at CodeRouter means **Zundamon keeps talking even when the local LLM stutters** — the request automatically falls back to OpenRouter free / anthropic-direct.
+
+```bash
+# Example: run Voice Bridge through CodeRouter
+$ coderouter serve --port 8088 --mode coding &
+$ export OLLAMA_BASE_URL=http://localhost:8088/v1
+$ python main.py --mode chat --vad   # in voice-bridge
+```
+
+CodeRouter and Voice Bridge live in separate repos and evolve independently, connected loosely over HTTP. They are intentionally not coupled as a plugin — each project owns its own responsibilities.
+
 ## Quickstart (2 commands)
 
 **v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.8.2 made the `doctor` probe thinking-model-aware**, **v1.9.0 promoted cache observability / adaptive routing / cost-aware dashboard / tool-loop guard to first-class pillars**. `uvx` installs and runs in one shot (Python 3.12+ required):

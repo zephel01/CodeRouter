@@ -384,7 +384,7 @@ No `capability-degraded` log lines (Anthropic-native shape has nothing to strip)
 - [troubleshooting.md §4-2](./troubleshooting.md) — known issues across Ollama / llama.cpp / LM Studio.
 - [hf-ollama-models.md](./hf-ollama-models.md) — pulling HF models through Ollama.
 - [examples/providers.yaml](../examples/providers.yaml) — bundled `lmstudio-*` provider stanzas + `test-lmstudio-openai` / `test-lmstudio-anthropic` profiles.
-- Real-machine narrative: [v1.8.4 note (JP)](./articles/note-v1-8-4-lmstudio-revival.md) — the day a "framework wait" verdict expired in 24 hours.
+- Real-machine narrative: [v1.8.4 note (JP)](./articles/v1-saga/note-4-v1-8-4-lmstudio-revival.md) — the day a "framework wait" verdict expired in 24 hours.
 
 ---
 

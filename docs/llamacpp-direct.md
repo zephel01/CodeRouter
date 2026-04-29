@@ -269,7 +269,7 @@ provider-ok provider=llamacpp-qwen3-6-35b-a3b
 - [troubleshooting.md §4-2-A](./troubleshooting.md#4-2-a-qwen36) — Qwen3.6 + Ollama の既知問題
 - [hf-ollama-models.md](./hf-ollama-models.md) — Ollama 経由 HF モデル取得
 - [examples/providers.yaml](../examples/providers.yaml) — `llamacpp-qwen3-6-35b-a3b` provider 例同梱
-- 実機検証の経緯: [v1.8.1 note](./articles/note-v1-8-1-reality-check.md) → [v1.8.2 note](./articles/note-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](./articles/note-v1-8-3-llamacpp-rescue.md)
+- 実機検証の経緯: [v1.8.1 note](./articles/v1-saga/note-1-v1-8-1-reality-check.md) → [v1.8.2 note](./articles/v1-saga/note-2-v1-8-2-doctor-self-diagnosis.md) → [v1.8.3 note](./articles/v1-saga/note-3-v1-8-3-llamacpp-rescue.md)
 
 ---
 

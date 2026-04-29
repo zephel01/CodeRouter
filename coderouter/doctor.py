@@ -448,7 +448,7 @@ _STREAMING_PROBE_MIN_EXPECTED_CHARS = 40
 # trace plus the actual answer.
 #
 # Numbers picked from the v1.8.1 reality-check session
-# (docs/articles/note-v1-8-1-reality-check.md):
+# (docs/articles/v1-saga/note-1-v1-8-1-reality-check.md):
 #   * Gemma 4 26B reasoning prefix observed at ~150-300 tokens before
 #     content starts → 1024 covers reasoning + 30-line count comfortably.
 #   * Non-thinking baseline kept conservative-but-non-tight (256/512) to
