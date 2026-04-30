@@ -299,11 +299,11 @@ class _StreamUsageAccumulator:
     """
 
     __slots__ = (
+        "_observed",
+        "cache_creation_input_tokens",
+        "cache_read_input_tokens",
         "input_tokens",
         "output_tokens",
-        "cache_read_input_tokens",
-        "cache_creation_input_tokens",
-        "_observed",
     )
 
     def __init__(self) -> None:
