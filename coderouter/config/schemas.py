@@ -128,6 +128,27 @@ class CostConfig(BaseModel):
             "(unusual but theoretically supported by the schema)."
         ),
     )
+    monthly_budget_usd: float | None = Field(
+        default=None,
+        ge=0.0,
+        description=(
+            "v1.10 (LiteLLM 由来 / v1.9-D の累積版): per-provider "
+            "monthly USD spend cap. When set, the engine's chain "
+            "resolver skips this provider and emits "
+            "``skip-budget-exceeded`` once the running per-provider "
+            "total for the current calendar month (UTC) reaches or "
+            "exceeds this value. Unset (None) = no cap (default). "
+            "\n\n"
+            "Reset semantics: in-memory only — running totals zero "
+            "out on process restart and on UTC calendar-month "
+            "rollover. Operators who need durable budget state "
+            "across restarts should pair this with external "
+            "monitoring on the cost dashboard's ``cost_total_usd`` "
+            "panel; persistent budget state is out of scope for "
+            "v1.10 (no on-disk store, no Redis, etc., per the "
+            "5-deps invariant in plan.md §5.4)."
+        ),
+    )
 
 
 class ProviderConfig(BaseModel):
@@ -317,6 +338,95 @@ class FallbackChain(BaseModel):
             "error response. See FallbackChain comment for trade-offs."
         ),
     )
+    # v1.9-E phase 2 (L2): memory-pressure detection + cooldown.
+    #
+    # Local backends (Ollama / LM Studio / llama.cpp) report VRAM
+    # exhaustion via 5xx responses with bodies like "out of memory" /
+    # "CUDA out of memory" / "insufficient memory". When the chain
+    # encounters one of these, marking the provider as "pressured"
+    # for a cooldown window prevents the engine from re-hammering the
+    # same exhausted backend on the very next request — the chain
+    # falls through to the next provider, which is typically a
+    # lighter-weight model or a remote fallback that has the headroom.
+    #
+    # Three actions trade off intervention against operator preference:
+    #   * ``off``   — no detection / no logging / no skip. Backward-compat default.
+    #   * ``warn``  — emit ``memory-pressure-detected`` log when an OOM
+    #                 error is observed; do not skip on subsequent calls.
+    #   * ``skip``  — ``warn`` + put the provider in a cooldown window;
+    #                 subsequent chain resolves filter it out and emit
+    #                 ``skip-memory-pressure`` until the cooldown expires.
+    memory_pressure_action: Literal["off", "warn", "skip"] = Field(
+        default="warn",
+        description=(
+            "v1.9-E (L2 phase 2): action on observed backend OOM "
+            "(provider failure with an out-of-memory error body). "
+            "``warn`` (default) logs only — diagnostic, no chain "
+            "behavior change. ``skip`` enters a cooldown window so "
+            "the next request's chain resolver filters the pressured "
+            "provider out and falls through to the next entry. "
+            "``off`` disables the detector entirely (zero "
+            "observation overhead, identical to v1.9.x behavior)."
+        ),
+    )
+    memory_pressure_cooldown_s: int = Field(
+        default=120,
+        ge=10,
+        le=3600,
+        description=(
+            "v1.9-E (L2 phase 2): cooldown window in seconds applied "
+            "after an OOM detection when ``memory_pressure_action`` "
+            "is ``skip``. Default 120 s gives the local backend "
+            "enough time to release model state from VRAM before the "
+            "engine re-attempts. Capped at 3600 s (1 hour) — anything "
+            "longer is better expressed as marking the provider "
+            "``paid: true`` and bouncing the process."
+        ),
+    )
+    # v1.9-E phase 2 (L5): backend health monitoring (passive).
+    #
+    # A consecutive-failure state machine per provider:
+    #   * HEALTHY   — no recent failures (initial state).
+    #   * DEGRADED  — ``backend_health_threshold`` consecutive failures
+    #                 observed; the provider has lost its "fresh" status
+    #                 but is still attempted in chain order.
+    #   * UNHEALTHY — ``2 x backend_health_threshold`` consecutive
+    #                 failures; depending on the action, the provider
+    #                 is either demoted to chain end or skipped entirely.
+    # A single success on ``provider-ok`` resets the counter and the
+    # state to HEALTHY immediately — no rolling window, no debounce.
+    # Distinct from the v1.9-C ``adaptive`` gradient (continuous
+    # latency / error-rate buffer with debounce) which handles the
+    # "slow but alive" case; L5 handles the "hard crash" case.
+    backend_health_action: Literal["off", "warn", "demote"] = Field(
+        default="warn",
+        description=(
+            "v1.9-E (L5 phase 2): action when a provider transitions "
+            "to UNHEALTHY (consecutive failures crossed the threshold). "
+            "``warn`` (default) emits a state-change log line only — "
+            "diagnostic, no chain reorder. ``demote`` additionally "
+            "moves the UNHEALTHY provider to the back of the chain "
+            "for the next ``_resolve_chain`` (similar to v1.9-C "
+            "adaptive demotion but state-machine-based, not "
+            "rolling-window-based). ``off`` disables the monitor "
+            "entirely (zero observation overhead, identical to "
+            "v1.9.x behavior)."
+        ),
+    )
+    backend_health_threshold: int = Field(
+        default=3,
+        ge=2,
+        le=20,
+        description=(
+            "v1.9-E (L5 phase 2): consecutive-failure count that "
+            "triggers the HEALTHY → DEGRADED transition. The "
+            "DEGRADED → UNHEALTHY transition fires at ``2x`` this "
+            "value. Default 3 catches "
+            "Ollama / LM Studio crashes (which produce a deterministic "
+            "5xx pattern on every retry) without flapping on transient "
+            "blips that the v1.9-C adaptive adjuster already handles."
+        ),
+    )
     adaptive: bool = Field(
         default=False,
         description=(
@@ -370,6 +480,24 @@ class RuleMatcher(BaseModel):
       ``content_regex``) because model identifiers are structured tokens
       — users typically describe the whole identifier with a wildcard
       tail, not an arbitrary substring.
+
+    Variants ([Unreleased] / longContext auto-switch, claude-code-router
+    由来):
+
+    - ``content_token_count_min: 32000`` — char-count ÷ 4 heuristic
+      across **all** messages in the request body (not just the
+      latest user message — this matcher describes the request's
+      overall size). When the estimated token count is ``>=`` the
+      threshold, route to a long-context profile (typically pointing
+      at Gemini Flash 1M ctx, Haiku 200K, etc.). Distinct from the
+      other content matchers which operate on the latest user
+      message only — context-window pressure is a request-shape
+      property, not a per-turn property. The estimator deliberately
+      avoids tiktoken / SentencePiece (forbidden by the 5-deps
+      invariant in plan.md §5.4); operators with non-English-heavy
+      workloads can compensate by tuning the threshold, since the
+      char/4 heuristic is conservative for CJK and looser for
+      English code.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -379,6 +507,7 @@ class RuleMatcher(BaseModel):
     content_contains: str | None = None
     content_regex: str | None = None
     model_pattern: str | None = None
+    content_token_count_min: int | None = Field(default=None, ge=1)
 
     _MATCHER_FIELDS: tuple[str, ...] = (
         "has_image",
@@ -386,6 +515,7 @@ class RuleMatcher(BaseModel):
         "content_contains",
         "content_regex",
         "model_pattern",
+        "content_token_count_min",
     )
 
     @model_validator(mode="after")

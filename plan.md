@@ -5,7 +5,7 @@
 
 最終更新: 2026-05-01
 作成者: zephel01
-状態: **v1.9.1 — patch release** (2026-05-01、CHANGELOG `[v1.9.1]` 参照)。v1.9.0 GA で「v1.10 候補」と整理した backlog のうち構造的負債を伴わない quick win 2 件を patch として束ねて出荷: (a) **v1.9-B2** streaming 経路の usage 集約 — `_StreamUsageAccumulator` + `_emit_cache_observed_streaming` で `cache-observed` log の streaming `outcome=unknown` placeholder を観測値に置換、(b) **per-model auto-routing** — `RuleMatcher.model_pattern` 5 番目 matcher 追加、`re.fullmatch` で body の `model` field を評価して Opus/Sonnet/Haiku で profile 分岐 (free-claude-code 由来)。Tests: 830 → **838** (+8)、Runtime deps: 5 → 5 (30 sub-release 連続据え置き)、完全互換。直前の出荷は v1.9.0 GA (2026-04-29、6 sub-release 統合 — Cache observability + Adaptive routing + Cost-aware + L3 Tool-loop guard)。
+状態: **v1.10.0 — minor release** (2026-05-01、CHANGELOG `[v1.10.0]` 参照)。v1.9.0 GA + v1.9.1 patch で取り切ったほか、本 minor で v1.10 候補の残り 3 件 (#3 provider 月次予算 / #4 v1.9-E phase 2 L2/L5 / #5 longContext auto-switch) を一括出荷。**Vision pillar の達成**: P2 Long-run Reliability の v1.x 担当分 (L2/L3/L5) が完成、6 系統障害体系 (L1〜L6) のうち v1.x で取りに行くと宣言した分が揃った。**Cost pillar**: v1.9-A 観測 → v1.9-D 理解 → v1.10 制約 (`monthly_budget_usd`) で経路が閉じた。**Auto-router**: 6 matcher (has_image / code_fence_ratio_min / content_contains / content_regex / model_pattern / content_token_count_min) で feature complete。Tests: 830 (v1.9.0 GA) → **871** (+41 累積)、Runtime deps: 5 → 5 (33 sub-release 連続据え置き)、完全互換。直前の出荷は v1.9.1 patch (2026-05-01、v1.9-B2 + per-model auto-routing)。
 - **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: 内部メモとして別途整理 (公開リポジトリには含まれない)
 - **本ドキュメント**: 現在進行中の実装スケジュール (v1.9 系) + ローカル backend 別接続マトリクス + 検討中 / やらないこと
@@ -91,16 +91,31 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 
 検証手順 + providers.yaml の sample は `examples/providers.yaml` の `lmstudio-*` 4 entry を参照。詳細ガイド [`docs/lmstudio-direct.md`](./docs/lmstudio-direct.md) は v1.8.5 で出荷済み。
 
-### v1.10 候補 / v1.9.x 残課題 (実機検証フィードバック反映、未着手分)
+### v1.10 候補 — **全完了 (v1.9.1 + v1.10.0、2026-05-01)**
 
-> **v1.9.1 で完了済 (2026-05-01)**:
-> - **v1.9-B2** streaming 経路の usage 集約 (`_StreamUsageAccumulator` + `_emit_cache_observed_streaming`、+3 tests)
-> - **per-model auto-routing** (`RuleMatcher.model_pattern` + `re.fullmatch` semantics + signals payload に model 追記、+5 tests)
-> 詳細は CHANGELOG `[v1.9.1]` 参照。
+`docs/inside/future.md §6.6` で整理した v1.10 着手順序 5 件すべてが完了。詳細は CHANGELOG `[v1.9.1]` / `[v1.10.0]` 参照。
 
-- **v1.9-E phase 2 候補**: L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder) — phase 1 (L3 Tool-loop guard) は v1.9.0 で出荷済み。**Vision の核心 (8 時間 agent ループでも止まらない)** を完成させる pillar、~900 LOC / 1-2 週間
-- **provider 月次予算上限** (LiteLLM 由来、v1.9-D の累積版) — `monthly_budget_usd` で provider 単位の running total + 超過時 skip + log。~400 LOC / 3-5 日
-- **longContext auto-switch** — `auto_router` rule type 5 として `content_token_count_min` matcher 追加 (claude-code-router task-based 取込)。~200 LOC / 3-5 日
+| # | sub-release | 出荷先 |
+|---|---|---|
+| 1 | v1.9-B2 streaming usage 集約 | v1.9.1 |
+| 2 | per-model auto-routing | v1.9.1 |
+| 3 | provider 月次予算上限 | v1.10.0 |
+| 4 | v1.9-E phase 2 (L2/L5) | v1.10.0 |
+| 5 | longContext auto-switch | v1.10.0 |
+
+#### 残作業 (実機検証フィードバック反映、v1.10.x 系の patch 候補)
+
+- **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
+- **examples の v1.10 機能サンプル追加**: `monthly_budget_usd` / `memory_pressure_action` / `backend_health_action` / `model_pattern` / `content_token_count_min` を組み合わせた典型的 production yaml の `examples/providers.production-grade.yaml` 雛形
+
+#### 次フェーズ (v2.0 候補、中長期)
+
+`docs/inside/future.md §7` で整理。短期 patch (v1.10.x) で取り切れない長期 deepening:
+
+- **v2.0-F**: Context budget management (L1 対処、semantic compression)
+- **v2.0-G**: Drift detection (L4 対処、response 品質 rolling window)
+- **v2.0-H**: Mid-stream stitching 強化 (L6 拡張、resumable continuation)
+- **v2.0-I**: Continuous probing (Pillar 3 拡張、毎時/毎日 model ヘルス + Public benchmark)
 - **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
 
 > v2.0 以降の機能 (Pillar 別 deepening / プラグイン / MCP server / Web UI) は内部メモで別途整理
@@ -132,11 +147,11 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 
 | Ver | 日付 | タグ | 一言 |
 | --- | --- | --- | --- |
-| **v1.9.1** | 2026-05-01 | `v1.9.1` | v1.10 候補から quick win 2 件を patch で先行刈取り — (a) v1.9-B2 streaming 経路の usage 集約 (`_StreamUsageAccumulator` で `cache-observed` log の placeholder を観測値に置換)、(b) per-model auto-routing (`RuleMatcher.model_pattern` 5 番目 matcher、Opus/Sonnet/Haiku で profile 分岐、free-claude-code 由来)。tests +8 (830→838)、Runtime deps 据え置き 30 連続、完全互換 |
+| **v1.10.0** | 2026-05-01 | `v1.10.0` | Umbrella tag — **Cost enforcement + Long-run reliability completion + Auto-router feature complete**。v1.10 候補 5 件全完了 (v1.9.1 で #1 v1.9-B2 + #2 per-model auto-routing、本 minor で #3 monthly budget + #4 v1.9-E phase 2 L2/L5 + #5 longContext auto-switch)。Vision pillar P2 が完成 (L2/L3/L5)、Cost pillar が観測→制約まで閉じる、Auto-router 6 matcher feature complete。tests +41 累積 (830→871)、Runtime deps 据え置き 33 連続、完全互換 |
+| **v1.9.1** | 2026-05-01 | `v1.9.1` | v1.10 候補から quick win 2 件を patch で先行刈取り — (a) v1.9-B2 streaming 経路の usage 集約、(b) per-model auto-routing (`RuleMatcher.model_pattern` 5 番目 matcher、Opus/Sonnet/Haiku で profile 分岐) |
 | **v1.9.0** | 2026-04-29 | `v1.9.0` | Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability (6 sub-release 統合 a1〜a6 + GA、L3 break action ingress fix 含む) |
 | **v1.8.4** | 2026-04-27 | (検証 release、PyPI 未 publish) | LM Studio 0.4.12 で Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 全動作確認 + Anthropic prompt caching 成立 (`cache_read_input_tokens: 280`)、`examples/providers.yaml` に lmstudio-* 4 entry + test profile 2 件 |
 | **v1.8.3** | 2026-04-26 | `v1.8.3` | tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip — llama.cpp 直叩きで Qwen3.6 復権、active-harmful 誤診断 (tools=false suggestion) を解消 |
-| **v1.8.2** | 2026-04-26 | `v1.8.2` | doctor probe を thinking モデル対応 (num_ctx 32→256/1024、streaming 128→512/1024) — Gemma 4 偽陽性解消、メタ教訓「diagnostic ツール自身も diagnostic され続ける必要がある」 |
 
 過去のリリース (v0.1.0〜v1.7.0) は [`CHANGELOG.md`](./CHANGELOG.md) の各エントリ、各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
 

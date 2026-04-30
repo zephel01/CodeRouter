@@ -147,6 +147,7 @@ def _match_rule(
     message: dict[str, Any] | None,
     text: str,
     model: str | None,
+    estimated_tokens: int,
 ) -> bool:
     m = rule.match
     if m.has_image is True:
@@ -166,7 +167,57 @@ def _match_rule(
         if model is None:
             return False
         return re.fullmatch(m.model_pattern, model) is not None
+    if m.content_token_count_min is not None:
+        # [Unreleased]: longContext auto-switch (claude-code-router 由来).
+        # Walks ALL messages in the request body (vs the latest-only
+        # behavior of content_contains / content_regex / has_image)
+        # because context-window pressure is a request-shape signal,
+        # not a per-turn signal. The token estimator is char/4 (see
+        # ``_estimate_total_tokens``) — conservative for CJK, looser
+        # for English code; operators tune the threshold to match
+        # their input distribution.
+        return estimated_tokens >= m.content_token_count_min
     return False  # pragma: no cover — _exactly_one guards against this
+
+
+# Char-to-token ratio for the longContext heuristic. 4 chars ≈ 1 token
+# is OpenAI's documented rule of thumb for English; CJK runs roughly
+# 1:1 (so the heuristic *under*-counts there, which is conservative —
+# operators won't accidentally route a 100k CJK char prompt to a 200k
+# Anthropic ctx model expecting ~25k tokens). Operators who care can
+# tune the threshold; the alternative (tiktoken / SentencePiece) is
+# blocked by the 5-deps invariant in plan.md §5.4.
+_CHARS_PER_TOKEN_HEURISTIC: int = 4
+
+
+def _estimate_total_tokens(body: dict[str, Any]) -> int:
+    """Estimate the prompt's token count via char/4 across all messages.
+
+    Walks every message's ``content`` (string or list-of-blocks form,
+    same shape :func:`_extract_text` accepts) and sums the character
+    counts, then divides by :data:`_CHARS_PER_TOKEN_HEURISTIC`. Image
+    blocks contribute 0 — they're billed differently and don't fill
+    the text-token side of the context window in any provider.
+
+    System prompts (``body["system"]``) are also counted because they
+    sit in the same context window as the message history.
+    """
+    total_chars = 0
+    system = body.get("system")
+    if isinstance(system, str):
+        total_chars += len(system)
+    elif isinstance(system, list):
+        for block in system:
+            if isinstance(block, dict):
+                text = block.get("text")
+                if isinstance(text, str):
+                    total_chars += len(text)
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for msg in messages:
+            if isinstance(msg, dict):
+                total_chars += len(_extract_text(msg))
+    return total_chars // _CHARS_PER_TOKEN_HEURISTIC
 
 
 def _extract_model(body: dict[str, Any]) -> str | None:
@@ -202,10 +253,22 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
     user_msg = _latest_user_message(body)
     text = _extract_text(user_msg) if user_msg is not None else ""
     model = _extract_model(body)
+    # [Unreleased]: estimate the prompt's total token count once for
+    # the ``content_token_count_min`` matcher (and for the signals
+    # payload). Char/4 across system + all messages; image blocks
+    # contribute 0. See ``_estimate_total_tokens`` for the heuristic
+    # rationale and the 5-deps tradeoff.
+    estimated_tokens = _estimate_total_tokens(body)
 
     auto_cfg = config.auto_router
     if auto_cfg is not None and auto_cfg.disabled:
-        _emit_fallthrough(auto_cfg.default_rule_profile, text, model, disabled=True)
+        _emit_fallthrough(
+            auto_cfg.default_rule_profile,
+            text,
+            model,
+            estimated_tokens,
+            disabled=True,
+        )
         return auto_cfg.default_rule_profile
 
     rules = auto_cfg.rules if (auto_cfg is not None and auto_cfg.rules) else BUNDLED_RULES
@@ -215,16 +278,17 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
         else BUNDLED_DEFAULT_RULE_PROFILE
     )
 
-    # ``model_pattern`` matchers can fire even without a user message
-    # (e.g. an empty messages list with only a model field). Other
-    # matchers still require ``user_msg`` to be present — they short
-    # out via ``_match_rule``'s message-None handling.
+    # ``model_pattern`` and ``content_token_count_min`` matchers can
+    # fire even without a user message (e.g. system-only prompts or a
+    # request body that carries only a model field). Other matchers
+    # still require ``user_msg`` to be present — they short out via
+    # ``_match_rule``'s message-None handling.
     for rule in rules:
-        if _match_rule(rule, user_msg, text, model):
-            _emit_resolved(rule, user_msg, text, model)
+        if _match_rule(rule, user_msg, text, model, estimated_tokens):
+            _emit_resolved(rule, user_msg, text, model, estimated_tokens)
             return rule.profile
 
-    _emit_fallthrough(default_profile, text, model)
+    _emit_fallthrough(default_profile, text, model, estimated_tokens)
     return default_profile
 
 
@@ -233,6 +297,7 @@ def _emit_resolved(
     message: dict[str, Any] | None,
     text: str,
     model: str | None,
+    estimated_tokens: int,
 ) -> None:
     logger.info(
         "auto-router-resolved",
@@ -244,13 +309,18 @@ def _emit_resolved(
                 "code_fence_ratio": round(_code_fence_ratio(text), 3),
                 "content_len": len(text),
                 "model": model,
+                "estimated_tokens": estimated_tokens,
             },
         },
     )
 
 
 def _emit_fallthrough(
-    profile: str, text: str, model: str | None, disabled: bool = False
+    profile: str,
+    text: str,
+    model: str | None,
+    estimated_tokens: int,
+    disabled: bool = False,
 ) -> None:
     logger.info(
         "auto-router-fallthrough",
@@ -260,6 +330,7 @@ def _emit_fallthrough(
                 "code_fence_ratio": round(_code_fence_ratio(text), 3),
                 "content_len": len(text),
                 "model": model,
+                "estimated_tokens": estimated_tokens,
                 "disabled": disabled,
             },
         },

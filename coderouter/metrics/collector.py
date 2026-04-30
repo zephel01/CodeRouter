@@ -30,9 +30,15 @@ Event inventory (dispatch table in :meth:`MetricsCollector._dispatch`)
     ``provider-failed-midstream``→ ``provider_outcomes[...]["failed_midstream"]``
     ``skip-paid-provider``       → ``provider_skipped_paid``
     ``skip-unknown-provider``    → ``provider_skipped_unknown``
+    ``skip-budget-exceeded``     → ``provider_skipped_budget`` (v1.10)
+    ``skip-memory-pressure``     → ``provider_skipped_memory_pressure`` (v1.9-E p2)
+    ``backend-health-changed``   → ``backend_health_transitions[provider][state]`` (v1.9-E p2)
+    ``demote-unhealthy-provider``→ ``provider_demoted_unhealthy`` (v1.9-E p2)
     ``capability-degraded``      → ``capability_degraded[capability]``
     ``output-filter-applied``    → ``output_filter_applied[filter]``
     ``chain-paid-gate-blocked``  → ``chain_paid_gate_blocked_total``
+    ``chain-budget-exceeded``    → ``chain_budget_exceeded_total`` (v1.10)
+    ``chain-memory-pressure-blocked``→ ``chain_memory_pressure_blocked_total`` (v1.9-E p2)
     ``chain-uniform-auth-failure``→ ``chain_uniform_auth_failure_total``
     ``auto-router-fallthrough``  → ``auto_router_fallthrough_total``
     ``cache-observed`` (v1.9-A)  → ``cache_*`` per-provider counters
@@ -108,9 +114,37 @@ class MetricsCollector(logging.Handler):
         self._provider_outcomes: dict[str, Counter[str]] = {}
         self._provider_skipped_paid: Counter[str] = Counter()
         self._provider_skipped_unknown: Counter[str] = Counter()
+        # v1.10: per-provider count of times the monthly-budget gate
+        # filtered the provider out of a chain. Mirror of
+        # ``_provider_skipped_paid``; surfaced as its own Prometheus
+        # counter so operators can watch budget pressure separately
+        # from paid-gate blocks.
+        self._provider_skipped_budget: Counter[str] = Counter()
+        # v1.9-E phase 2 (L2): per-provider count of times the
+        # memory-pressure cooldown filtered the provider out. Mirror
+        # of the paid / budget skip counters.
+        self._provider_skipped_memory_pressure: Counter[str] = Counter()
+        # v1.9-E phase 2 (L5): per-provider count of times the
+        # backend-health gate moved the provider to chain end. Not
+        # a "skip" — UNHEALTHY providers are still attempted, just
+        # last; counter naming reflects that distinction.
+        self._provider_demoted_unhealthy: Counter[str] = Counter()
+        # v1.9-E phase 2 (L5): per-provider state-transition counts,
+        # keyed on the *new* state of each transition. Lets dashboards
+        # show "providers currently DEGRADED" by walking
+        # transitions[*]["DEGRADED"] minus transitions[*]["HEALTHY"]
+        # for the recovery deltas.
+        self._backend_health_transitions: dict[str, Counter[str]] = {}
         self._capability_degraded: Counter[str] = Counter()
         self._output_filter_applied: Counter[str] = Counter()
         self._chain_paid_gate_blocked_total: int = 0
+        # v1.10: chain-level aggregate of ``chain-budget-exceeded``
+        # warns. Counterpart to ``_chain_paid_gate_blocked_total`` for
+        # the budget gate.
+        self._chain_budget_exceeded_total: int = 0
+        # v1.9-E phase 2 (L2): chain-level aggregate. Counterpart to
+        # ``_chain_paid_gate_blocked_total`` for the OOM gate.
+        self._chain_memory_pressure_blocked_total: int = 0
         self._chain_uniform_auth_failure_total: int = 0
         # v1.6-B: classifier ran, no user rule matched, and the
         # ``default_rule_profile`` was returned instead. Surfaced as its own
@@ -208,6 +242,39 @@ class MetricsCollector(logging.Handler):
             elif event == "skip-unknown-provider":
                 provider = _str(extras.get("provider"))
                 self._provider_skipped_unknown[provider] += 1
+            elif event == "skip-budget-exceeded":
+                # v1.10: per-provider budget-gate filter count.
+                provider = _str(extras.get("provider"))
+                self._provider_skipped_budget[provider] += 1
+            elif event == "chain-budget-exceeded":
+                # v1.10: chain-level aggregate (whole chain blocked
+                # by the budget gate). Symmetric with
+                # ``chain-paid-gate-blocked``.
+                self._chain_budget_exceeded_total += 1
+            elif event == "skip-memory-pressure":
+                # v1.9-E phase 2 (L2): per-provider OOM-cooldown
+                # filter count. Same shape as the paid / budget
+                # skip counters.
+                provider = _str(extras.get("provider"))
+                self._provider_skipped_memory_pressure[provider] += 1
+            elif event == "chain-memory-pressure-blocked":
+                # v1.9-E phase 2 (L2): chain-level aggregate.
+                self._chain_memory_pressure_blocked_total += 1
+            elif event == "backend-health-changed":
+                # v1.9-E phase 2 (L5): per-provider state-transition
+                # counter, keyed on the new state. Lets dashboards
+                # render a "providers degraded right now" panel by
+                # comparing transition counts to recovery counts.
+                provider = _str(extras.get("provider"))
+                new_state = _str(extras.get("new_state"))
+                if new_state:
+                    self._backend_health_transitions.setdefault(
+                        provider, Counter()
+                    )[new_state] += 1
+            elif event == "demote-unhealthy-provider":
+                # v1.9-E phase 2 (L5): per-provider demote count.
+                provider = _str(extras.get("provider"))
+                self._provider_demoted_unhealthy[provider] += 1
             elif event == "capability-degraded":
                 dropped = extras.get("dropped") or []
                 if isinstance(dropped, list):
@@ -370,6 +437,8 @@ class MetricsCollector(logging.Handler):
                 "counters": {
                     "requests_total": self._requests_total,
                     "chain_paid_gate_blocked_total": self._chain_paid_gate_blocked_total,
+                    "chain_budget_exceeded_total": self._chain_budget_exceeded_total,
+                    "chain_memory_pressure_blocked_total": self._chain_memory_pressure_blocked_total,
                     "chain_uniform_auth_failure_total": self._chain_uniform_auth_failure_total,
                     "auto_router_fallthrough_total": self._auto_router_fallthrough_total,
                     # v1.9-A: aggregate cache totals (sum across providers).
@@ -383,6 +452,17 @@ class MetricsCollector(logging.Handler):
                     },
                     "provider_skipped_paid": dict(self._provider_skipped_paid),
                     "provider_skipped_unknown": dict(self._provider_skipped_unknown),
+                    "provider_skipped_budget": dict(self._provider_skipped_budget),
+                    "provider_skipped_memory_pressure": dict(
+                        self._provider_skipped_memory_pressure
+                    ),
+                    "provider_demoted_unhealthy": dict(
+                        self._provider_demoted_unhealthy
+                    ),
+                    "backend_health_transitions": {
+                        name: dict(counter)
+                        for name, counter in self._backend_health_transitions.items()
+                    },
                     "capability_degraded": dict(self._capability_degraded),
                     "output_filter_applied": dict(self._output_filter_applied),
                     # v1.9-A: per-provider cache token totals + outcome
@@ -435,9 +515,15 @@ class MetricsCollector(logging.Handler):
             self._provider_outcomes.clear()
             self._provider_skipped_paid.clear()
             self._provider_skipped_unknown.clear()
+            self._provider_skipped_budget.clear()
+            self._provider_skipped_memory_pressure.clear()
+            self._provider_demoted_unhealthy.clear()
+            self._backend_health_transitions.clear()
             self._capability_degraded.clear()
             self._output_filter_applied.clear()
             self._chain_paid_gate_blocked_total = 0
+            self._chain_budget_exceeded_total = 0
+            self._chain_memory_pressure_blocked_total = 0
             self._chain_uniform_auth_failure_total = 0
             self._auto_router_fallthrough_total = 0
             # v1.9-A

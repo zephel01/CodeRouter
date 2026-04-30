@@ -72,6 +72,33 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
             samples=[((), counters.get("chain_paid_gate_blocked_total", 0))],
         )
     )
+    # v1.10: chain-level aggregate of the monthly-budget gate. Mirrors
+    # ``chain_paid_gate_blocked_total`` so dashboards can render both
+    # series side-by-side.
+    lines.extend(
+        _counter(
+            name="chain_budget_exceeded_total",
+            help_text=(
+                "Chains where the v1.10 monthly-budget gate filtered every "
+                "provider out (per-provider current-month USD total at or "
+                "above ``cost.monthly_budget_usd``)."
+            ),
+            samples=[((), counters.get("chain_budget_exceeded_total", 0))],
+        )
+    )
+    # v1.9-E phase 2 (L2): chain-level aggregate of the memory-pressure
+    # gate.
+    lines.extend(
+        _counter(
+            name="chain_memory_pressure_blocked_total",
+            help_text=(
+                "Chains where the v1.9-E L2 memory-pressure gate filtered "
+                "every provider out (every provider in the chain is in OOM "
+                "cooldown at the same time)."
+            ),
+            samples=[((), counters.get("chain_memory_pressure_blocked_total", 0))],
+        )
+    )
     lines.extend(
         _counter(
             name="chain_uniform_auth_failure_total",
@@ -124,11 +151,68 @@ def format_prometheus(snapshot: dict[str, Any]) -> str:
         skipped_samples.append(
             ((("provider", provider), ("reason", "unknown")), count)
         )
+    # v1.10: monthly-budget gate skip count, surfaced under the same
+    # ``coderouter_provider_skipped_total`` counter as the paid /
+    # unknown reasons so dashboards can stack the bars by reason.
+    for provider, count in sorted(counters.get("provider_skipped_budget", {}).items()):
+        skipped_samples.append(
+            ((("provider", provider), ("reason", "budget")), count)
+        )
+    # v1.9-E phase 2 (L2): memory-pressure gate skip count, same
+    # provider_skipped_total counter as the other reason labels.
+    for provider, count in sorted(
+        counters.get("provider_skipped_memory_pressure", {}).items()
+    ):
+        skipped_samples.append(
+            ((("provider", provider), ("reason", "memory_pressure")), count)
+        )
     lines.extend(
         _counter(
             name="provider_skipped_total",
             help_text="Providers skipped before a call was attempted, by reason.",
             samples=skipped_samples,
+        )
+    )
+
+    # v1.9-E phase 2 (L5): per-provider demote count (UNHEALTHY → chain
+    # end). Distinct from the skip counter because demoted providers
+    # are still attempted, just last.
+    lines.extend(
+        _counter(
+            name="provider_demoted_unhealthy_total",
+            help_text=(
+                "Providers moved to the back of the chain by the v1.9-E "
+                "L5 backend-health gate (still attempted, just last)."
+            ),
+            samples=[
+                ((("provider", p),), v)
+                for p, v in sorted(
+                    counters.get("provider_demoted_unhealthy", {}).items()
+                )
+            ],
+        )
+    )
+
+    # v1.9-E phase 2 (L5): per-provider state-transition count, keyed
+    # by the new state. Lets dashboards render
+    # ``DEGRADED → HEALTHY`` recovery deltas.
+    transition_samples: list[tuple[tuple[tuple[str, str], ...], int]] = []
+    for provider, transitions in sorted(
+        counters.get("backend_health_transitions", {}).items()
+    ):
+        for state, count in sorted(transitions.items()):
+            transition_samples.append(
+                ((("provider", provider), ("state", state)), count)
+            )
+    lines.extend(
+        _counter(
+            name="backend_health_transitions_total",
+            help_text=(
+                "v1.9-E L5 state-machine transitions, by provider and the "
+                "destination state of each transition (HEALTHY | DEGRADED | "
+                "UNHEALTHY)."
+            ),
+            samples=transition_samples,
         )
     )
 

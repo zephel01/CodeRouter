@@ -19,7 +19,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.9.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.10.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -47,7 +47,9 @@
 - ローカル → 無料クラウド（OpenRouter free / NVIDIA NIM 40 req/min 無料枠）→ 有料 API の自動フォールバック。既定で `ALLOW_PAID=false` なので課金はオプトイン制
 - v1.9.0 から **Anthropic prompt cache の hit/miss を全リクエストで記録**、`/dashboard` で hit_rate / saved tokens / USD コストが見える（cache savings は別計算）
 - v1.9.0 から **adaptive routing** で「いま遅い provider」を自動降格（profile に `adaptive: true` を付けるだけ）、**tool-loop guard** で stuck loop を検出（`warn` / `inject` / `break` の 3 段階 policy）
-- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 830 本緑
+- **v1.10.0 で Long-run reliability pillar が完成**: `cost.monthly_budget_usd` で provider 月次 USD 予算を強制、**L2 memory pressure detector**（Ollama / LM Studio が VRAM 切れで OOM になった時に自動クールダウン）、**L5 backend health 状態機械**（連続失敗で UNHEALTHY → chain 末尾に降格、1 回成功で即復帰）
+- **v1.10.0 で auto-router が 6 matcher に揃う**: `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` / `model_pattern`（Opus/Sonnet/Haiku 分岐）/ `content_token_count_min`（長文 → 1M ctx Gemini Flash 等へ自動切替）
+- ランタイム依存 5 個（`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`）— 純 Python、MIT、テスト 871 本緑
 
 → **Claude Code / gemini-cli / codex + Ollama / llama.cpp / NVIDIA NIM で、破綻しない local-first agent が組める**
 
@@ -63,7 +65,7 @@
 | **llama.cpp 直叩き** | [llama.cpp 直叩きガイド](./docs/llamacpp-direct.md) | Qwen3.6 を Ollama 詰みから救出する経路。`llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter 接続を 7 step で（v1.8.3 実機検証済）|
 | **LM Studio 直接** | [LM Studio 直接ガイド](./docs/lmstudio-direct.md) | `qwen35` / `qwen35moe` を救う第 2 経路。LM Studio 0.4.12+ Local Server 経由で OpenAI 互換 + Anthropic 互換 (`/v1/messages`) 両対応、prompt caching 透過（v1.8.4 実機検証済）|
 | **安全に使う** | [セキュリティ方針](./docs/security.md) | 脅威モデル・秘密情報の扱い・脆弱性報告経路 |
-| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.9.0 — Cache observability (A) + Cross-backend cache passthrough (B) + Adaptive routing (C) + Cost-aware dashboard (D) + Tool-loop guard (E) を 1 minor で出荷） |
+| **履歴** | [CHANGELOG](./CHANGELOG.md) | 全リリース履歴（最新: v1.10.0 — Cost enforcement (`monthly_budget_usd`) + Long-run reliability completion (L2 memory pressure / L5 backend health) + Auto-router feature complete (6 matcher) を 1 minor で出荷） |
 | **設計を追う** | [plan.md](./plan.md) | 設計不変項・マイルストーン・今後のロードマップ |
 
 English versions: [Quickstart](./docs/quickstart.en.md) · [Usage guide](./docs/usage-guide.en.md) · [Free-tier guide](./docs/free-tier-guide.en.md) · [When you need it](./docs/when-do-i-need-coderouter.en.md) · [Troubleshooting](./docs/troubleshooting.en.md) · [llama.cpp direct](./docs/llamacpp-direct.en.md) · [LM Studio direct](./docs/lmstudio-direct.en.md) · [Security](./docs/security.en.md)
@@ -79,7 +81,7 @@ CodeRouter は、コーディングエージェント（Claude Code / gemini-cli
 - **うっかり課金しない。** `ALLOW_PAID=false` が既定。有料プロバイダをチェーンから外したときは理由を 1 行ログに出すので、なぜ使われなかったかが後で grep できます。
 - **ローカル Ollama の上で Claude Code / gemini-cli / codex が動く。** Claude Code は Anthropic のワイアフォーマット、Ollama / llama.cpp / LM Studio は OpenAI。CodeRouter が双方向に変換し、小さいローカルモデルがテキストで吐いてしまう `{"name":..., "arguments":...}` を tool_use ブロックへ復元してからエージェントに渡します。
 - **「なぜか動かない」の原因を教えてくれる。** `coderouter doctor --check-model <provider>` が 6 種類の典型的な失敗モード（コンテキスト切り詰め / ストリーム早期終了 / ツール呼び出し欠落 / reasoning フィールド漏れ / 認証 / Anthropic `thinking`）を実地プローブし、コピペ可能な YAML パッチを出します。
-- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 710 本緑。
+- **監査しやすい。** ランタイム依存 5 個（LiteLLM は 100+）。Pure Python、MIT、テスト 871 本緑。
 
 ```
 クライアント (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -153,7 +155,7 @@ CodeRouter / Voice Bridge ともに独立した repo で進化していて、HTT
 
 ## クイックスタート（3 コマンド）
 
-**v1.7.0 で PyPI 公開**、**v1.8.0 で用途別 4 プロファイル + Z.AI/GLM 連携**、**v1.8.2 で doctor probe を thinking モデル対応**、**v1.9.0 で Cache observability / Adaptive routing / Cost-aware dashboard / Tool-loop guard を pillar 化**しました。`uvx` 一発で動きます (Python 3.12 以上必須):
+**v1.7.0 で PyPI 公開**、**v1.8.0 で用途別 4 プロファイル + Z.AI/GLM 連携**、**v1.9.0 で Cache observability / Adaptive routing / Cost-aware dashboard / Tool-loop guard を pillar 化**、**v1.10.0 で Cost enforcement (`monthly_budget_usd`) / Long-run reliability (L2 memory pressure + L5 backend health) / Auto-router 6 matcher feature complete を出荷**しました。`uvx` 一発で動きます (Python 3.12 以上必須):
 
 ```bash
 # 1. サンプル設定を置く
@@ -221,9 +223,9 @@ CodeRouter 自体は純 Python 3.12+ で、実質的な OS 対応範囲は `min(
 
 注意点や「ローカル GPU なし」向けレシピを含むフル版マトリクス: [利用ガイド §1](./docs/usage-guide.md#1-os-互換性)
 
-## ステータス — v1.0 安定版 (2026-04)
+## ステータス — v1.10.0 minor (2026-05)
 
-**テスト 710 本通過。ランタイム依存 5 個。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定しています。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
+**テスト 871 本通過。ランタイム依存 5 個 (33 sub-release 連続据え置き)。macOS / Linux / Windows WSL2 で動作。** ルーターは日常的な Claude Code 用途で安定し、v1.10.0 で **Vision pillar P2 Long-run Reliability** が完成 (L2/L3/L5)、**Cost pillar** が観測 → 制約まで閉じる、**Auto-router** が 6 matcher で feature complete に到達しました。v1.0 の総まとめは [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md)。
 
 今日の CodeRouter が届ける価値:
 

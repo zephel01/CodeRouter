@@ -844,3 +844,149 @@ def test_model_pattern_first_match_wins_over_later_content_rule(
         "messages": [{"role": "user", "content": "hello world"}],
     }
     assert classify(body, cfg) == "multi"
+
+
+# ---------------------------------------------------------------------------
+# Group 7: longContext auto-switch ([Unreleased] / claude-code-router 由来)
+# ---------------------------------------------------------------------------
+
+
+def _longcontext_config(
+    base: CodeRouterConfig,
+    *,
+    threshold: int,
+    longcontext_provider: str = "ollama-coder",
+) -> CodeRouterConfig:
+    """Augment the 3-profile fixture with a 4th ``longcontext`` profile +
+    a single-rule ``content_token_count_min`` ruleset."""
+    return base.model_copy(
+        update={
+            "profiles": [
+                *base.profiles,
+                FallbackChain(
+                    name="longcontext", providers=[longcontext_provider]
+                ),
+            ],
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:long-context",
+                        profile="longcontext",
+                        match=RuleMatcher(content_token_count_min=threshold),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+
+
+def test_classify_long_prompt_routes_to_longcontext(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: prompt above the token threshold → longcontext profile.
+
+    Token estimator is char/4 — a 200,000-char prompt is ~50,000
+    tokens, well above the 32,000 threshold from
+    ``docs/inside/future.md §6.4``.
+    """
+    cfg = _longcontext_config(three_profile_config, threshold=32_000)
+    long_text = "a" * 200_000  # ~50_000 tokens via char/4
+    body = {"messages": [{"role": "user", "content": long_text}]}
+    assert classify(body, cfg) == "longcontext"
+
+
+def test_classify_short_prompt_below_threshold_falls_through(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """A prompt comfortably below the token threshold falls through to
+    ``default_rule_profile`` (no other rules in this fixture)."""
+    cfg = _longcontext_config(three_profile_config, threshold=32_000)
+    short_text = "a" * 1_000  # ~250 tokens via char/4
+    body = {"messages": [{"role": "user", "content": short_text}]}
+    assert classify(body, cfg) == "writing"
+
+
+def test_classify_long_context_walks_all_messages_not_just_latest(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """Distinct from ``content_contains`` / ``content_regex`` (latest
+    user msg only), the longContext matcher counts ALL messages —
+    a long conversation history with a short final question still
+    crosses the threshold."""
+    cfg = _longcontext_config(three_profile_config, threshold=10_000)
+    # Build a conversation: 3 long history messages + 1 short
+    # latest user message. The latest alone (~10 tokens) is far
+    # below 10,000; the full history (~30,000 tokens) is comfortably
+    # above. Pin the all-messages-walk semantics.
+    long_block = "x" * 40_000  # ~10,000 tokens each
+    body = {
+        "messages": [
+            {"role": "user", "content": long_block},
+            {"role": "assistant", "content": long_block},
+            {"role": "user", "content": long_block},
+            {"role": "assistant", "content": "OK."},
+            {"role": "user", "content": "what next?"},
+        ]
+    }
+    assert classify(body, cfg) == "longcontext"
+
+
+def test_content_token_count_min_rejects_non_positive_at_load() -> None:
+    """[Unreleased]: schema rejects 0 / negative thresholds (pydantic ge=1).
+
+    A 0-token threshold would make every request match (the empty
+    body has 0 estimated tokens, ``0 >= 0`` is True), which is
+    almost certainly a misconfiguration.
+    """
+    with pytest.raises(ValueError, match=r"content_token_count_min|greater than"):
+        RuleMatcher(content_token_count_min=0)
+    with pytest.raises(ValueError, match=r"content_token_count_min|greater than"):
+        RuleMatcher(content_token_count_min=-5)
+
+
+def test_long_context_first_match_wins_over_later_image_rule(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """First-match-wins precedence holds across matcher types.
+
+    A token-count rule placed before an image-detection rule fires
+    even when the body would also match the image rule — pinning
+    that the longContext matcher integrates cleanly into the
+    existing rule iteration.
+    """
+    base = _longcontext_config(three_profile_config, threshold=10_000)
+    cfg = base.model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:long-first",
+                        profile="longcontext",
+                        match=RuleMatcher(content_token_count_min=10_000),
+                    ),
+                    AutoRouteRule(
+                        id="user:image-second",
+                        profile="multi",
+                        match=RuleMatcher(has_image=True),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+    long_image_body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "z" * 50_000},  # ~12,500 tokens
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,AAAA"},
+                    },
+                ],
+            }
+        ]
+    }
+    assert classify(long_image_body, cfg) == "longcontext"

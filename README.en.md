@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
   <a href=""><img src="https://img.shields.io/badge/status-stable-brightgreen" alt="status"></a>
-  <a href=""><img src="https://img.shields.io/badge/version-1.9.0-blue" alt="version"></a>
+  <a href=""><img src="https://img.shields.io/badge/version-1.10.0-blue" alt="version"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/runtime%20deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -47,7 +47,9 @@
 - Automatic fallback from local → free cloud (OpenRouter free / NVIDIA NIM 40 req/min free tier) → paid APIs, with `ALLOW_PAID=false` as the default so billing is opt-in
 - v1.9.0 records **Anthropic prompt-cache hit/miss for every request** with `hit_rate`, saved tokens, and USD cost (cache savings tracked separately) visible at `/dashboard`
 - v1.9.0 ships **adaptive routing** that auto-demotes a temporarily-slow provider (set `adaptive: true` on a profile) and a **tool-loop guard** that catches stuck-loop patterns with a 3-tier policy (`warn` / `inject` / `break`)
-- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 830 tests green
+- **v1.10.0 completes the long-run reliability pillar**: `cost.monthly_budget_usd` enforces a per-provider monthly USD cap, the **L2 memory-pressure detector** automatically cools down a backend when Ollama / LM Studio reports VRAM exhaustion, and the **L5 backend-health state machine** demotes UNHEALTHY providers to the back of the chain (consecutive-failure threshold, single-success recovery)
+- **v1.10.0 brings the auto-router to 6 matchers**: `has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex` / `model_pattern` (Opus/Sonnet/Haiku branching) / `content_token_count_min` (long prompts → 1M-ctx Gemini Flash, etc.)
+- Five runtime dependencies (`fastapi` / `uvicorn` / `httpx` / `pydantic` / `pyyaml`) — pure Python, MIT, 871 tests green
 
 → **Claude Code / gemini-cli / codex on top of Ollama / llama.cpp / NVIDIA NIM, without the agent falling apart.**
 
@@ -63,7 +65,7 @@
 | **llama.cpp direct** | [llama.cpp direct guide](./docs/llamacpp-direct.en.md) | Rescue path for Qwen3.6 (Ollama is brittle). 7-step recipe: `llama.cpp` build → Unsloth GGUF → `llama-server` → CodeRouter wiring. Real-machine verified in v1.8.3. |
 | **LM Studio direct** | [LM Studio direct guide](./docs/lmstudio-direct.en.md) | Second rescue path for `qwen35` / `qwen35moe`. LM Studio 0.4.12+ Local Server with both OpenAI-compatible and Anthropic-compatible (`/v1/messages`) routes — prompt caching survives end-to-end. Real-machine verified in v1.8.4. |
 | **Operate safely** | [Security](./docs/security.en.md) | Threat model, secret handling, vulnerability reporting |
-| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.9.0 — Cache observability (A) + Cross-backend cache passthrough (B) + Adaptive routing (C) + Cost-aware dashboard (D) + Tool-loop guard (E) shipped in one minor) |
+| **History** | [CHANGELOG](./CHANGELOG.md) | All releases (latest: v1.10.0 — Cost enforcement (`monthly_budget_usd`) + Long-run reliability completion (L2 memory pressure / L5 backend health) + Auto-router feature complete (6 matchers) shipped in one minor) |
 | **Track the design** | [plan.md](./plan.md) | Design invariants, milestones, roadmap |
 
 日本語版: [Quickstart](./docs/quickstart.md) · [利用ガイド](./docs/usage-guide.md) · [無料枠ガイド](./docs/free-tier-guide.md) · [要否判定](./docs/when-do-i-need-coderouter.md) · [トラブルシューティング](./docs/troubleshooting.md) · [LM Studio 直接](./docs/lmstudio-direct.md) · [Security](./docs/security.md)
@@ -79,7 +81,7 @@ Concretely, it takes care of things most beginners hit the hard way:
 - **No surprise bill.** `ALLOW_PAID=false` is the default; when CodeRouter drops a paid provider from the chain it logs one clear line so you can see why.
 - **Use Claude Code / gemini-cli / codex on top of local Ollama.** Claude Code speaks Anthropic wire format, Ollama / llama.cpp / LM Studio speak OpenAI. CodeRouter translates both directions, and repairs the malformed `{"name":..., "arguments":...}` JSON that small local models emit as plain text.
 - **Know *why* your local model is acting weird.** `coderouter doctor --check-model <provider>` probes six common failure modes (context truncation, streaming cutoff, missing tool-use, reasoning leaks, auth, Anthropic `thinking`) and prints a copy-paste YAML patch.
-- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 710 tests passing.
+- **Auditable.** 5 runtime dependencies (vs. 100+ for LiteLLM). Pure Python, MIT, 871 tests passing.
 
 ```
 Client (Claude Code / OpenAI SDK / gemini-cli / codex / curl)
@@ -153,7 +155,7 @@ CodeRouter and Voice Bridge live in separate repos and evolve independently, con
 
 ## Quickstart (2 commands)
 
-**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.8.2 made the `doctor` probe thinking-model-aware**, **v1.9.0 promoted cache observability / adaptive routing / cost-aware dashboard / tool-loop guard to first-class pillars**. `uvx` installs and runs in one shot (Python 3.12+ required):
+**v1.7.0 published to PyPI**, **v1.8.0 added use-case-aware 4 profiles + Z.AI/GLM integration**, **v1.9.0 promoted cache observability / adaptive routing / cost-aware dashboard / tool-loop guard to first-class pillars**, **v1.10.0 shipped Cost enforcement (`monthly_budget_usd`) / Long-run reliability completion (L2 memory pressure + L5 backend health) / Auto-router feature complete (6 matchers)**. `uvx` installs and runs in one shot (Python 3.12+ required):
 
 ```bash
 # 1. Drop a sample config
@@ -222,9 +224,9 @@ CodeRouter is pure Python 3.12+; OS support is effectively `min(coderouter, olla
 
 Full matrix with caveats and the "no local GPU" recipe: [usage guide §1](./docs/usage-guide.en.md#1-os-compatibility).
 
-## Status — v1.0 stable (2026-04)
+## Status — v1.10.0 minor (2026-05)
 
-**710 tests pass. 5 runtime dependencies. Works on macOS / Linux / Windows WSL2.** The router is stable for day-to-day Claude Code use; the v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
+**871 tests pass. 5 runtime dependencies (33 sub-releases held to the same 5).** Works on macOS / Linux / Windows WSL2. The router is stable for day-to-day Claude Code use, and v1.10.0 closes out the **Vision pillar P2 (Long-run reliability, L2/L3/L5)**, the **Cost pillar (observation → enforcement)**, and **Auto-router feature complete (6 matchers)**. The v1.0 wrap-up is in [`docs/retrospectives/v1.0.md`](./docs/retrospectives/v1.0.md).
 
 What CodeRouter can do for you today:
 

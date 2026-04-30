@@ -41,6 +41,11 @@ from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
 from coderouter.cost import compute_cost_for_attempt
 from coderouter.errors import CodeRouterError
+from coderouter.guards.backend_health import BackendHealthMonitor
+from coderouter.guards.memory_pressure import (
+    MemoryPressureGuard,
+    is_memory_pressure_error,
+)
 from coderouter.guards.tool_loop import (
     DEFAULT_LOOP_INJECT_HINT,
     ToolLoopBreakError,
@@ -50,11 +55,19 @@ from coderouter.guards.tool_loop import (
 from coderouter.logging import (
     classify_cache_outcome,
     get_logger,
+    log_backend_health_changed,
     log_cache_observed,
+    log_chain_budget_exceeded,
+    log_chain_memory_pressure_blocked,
     log_chain_paid_gate_blocked,
+    log_demote_unhealthy_provider,
+    log_memory_pressure_detected,
+    log_skip_budget_exceeded,
+    log_skip_memory_pressure,
     log_tool_loop_detected,
 )
 from coderouter.routing.adaptive import AdaptiveAdjuster
+from coderouter.routing.budget import BudgetTracker
 from coderouter.routing.capability import (
     anthropic_request_has_cache_control,
     anthropic_request_requires_thinking,
@@ -173,6 +186,7 @@ def _emit_cache_observed(
     request_had_cache_control: bool,
     streaming: bool,
     provider_config: ProviderConfig | None = None,
+    budget: BudgetTracker | None = None,
 ) -> None:
     """Extract usage / cache fields from an AnthropicResponse and log them.
 
@@ -234,6 +248,12 @@ def _emit_cache_observed(
         cache_read_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
     )
+
+    # v1.10: feed the per-provider monthly running total. The
+    # budget tracker is opt-in (None → no recording), so test
+    # harnesses that bypass the engine's __init__ skip this branch.
+    if budget is not None and cost.total_usd > 0.0:
+        budget.record(provider, cost.total_usd)
 
     log_cache_observed(
         logger,
@@ -365,6 +385,7 @@ def _emit_cache_observed_streaming(
     provider: str,
     request_had_cache_control: bool,
     provider_config: ProviderConfig | None = None,
+    budget: BudgetTracker | None = None,
 ) -> None:
     """Streaming counterpart of :func:`_emit_cache_observed` (v1.9-B2).
 
@@ -398,6 +419,12 @@ def _emit_cache_observed_streaming(
         cache_read_input_tokens=cache_read,
         cache_creation_input_tokens=cache_creation,
     )
+
+    # v1.10: same monthly-budget bookkeeping as the non-streaming
+    # sibling — record the attempt's USD cost into the per-provider
+    # current-month total when a tracker is supplied.
+    if budget is not None and cost.total_usd > 0.0:
+        budget.record(provider, cost.total_usd)
 
     log_cache_observed(
         logger,
@@ -550,6 +577,26 @@ class FallbackEngine:
         # via ``__new__`` get a lazily-built default instance instead
         # of an AttributeError.
         self._adaptive_adjuster: AdaptiveAdjuster = AdaptiveAdjuster()
+        # v1.10: per-process monthly USD budget tracker. Same lazy
+        # property pattern as ``_adaptive`` — legacy tests that
+        # construct via ``__new__`` see an auto-built empty tracker.
+        # The tracker's running totals reset on UTC calendar-month
+        # rollover and on process restart (in-memory only).
+        self._budget_tracker: BudgetTracker = BudgetTracker()
+        # v1.9-E phase 2 (L2): per-process OOM cooldown tracker.
+        # Same lazy-property pattern. Legacy tests via ``__new__``
+        # auto-build an empty guard that records nothing — no
+        # observation overhead in deployments that leave
+        # ``memory_pressure_action`` unset (default ``warn`` is
+        # log-only and similarly cheap).
+        self._memory_pressure_guard: MemoryPressureGuard = MemoryPressureGuard()
+        # v1.9-E phase 2 (L5): per-process backend health state
+        # machine. Counts consecutive failures and demotes
+        # UNHEALTHY providers to the back of the chain (when the
+        # active profile's ``backend_health_action`` is ``demote``).
+        # Distinct from v1.9-C ``adaptive`` which handles the
+        # gradient case via a rolling window.
+        self._backend_health_monitor: BackendHealthMonitor = BackendHealthMonitor()
 
     @property
     def _adaptive(self) -> AdaptiveAdjuster:
@@ -566,6 +613,167 @@ class FallbackEngine:
             self._adaptive_adjuster = AdaptiveAdjuster()
             existing = self._adaptive_adjuster
         return existing
+
+    @property
+    def _budget(self) -> BudgetTracker:
+        """Return the monthly budget tracker, lazily building one if absent.
+
+        Same legacy-test compatibility pattern as :py:attr:`_adaptive`:
+        when the engine is constructed via ``FallbackEngine.__new__``
+        (which bypasses ``__init__``), the property hands back a
+        freshly built tracker instead of raising ``AttributeError``.
+        """
+        existing = getattr(self, "_budget_tracker", None)
+        if existing is None:
+            self._budget_tracker = BudgetTracker()
+            existing = self._budget_tracker
+        return existing
+
+    @property
+    def _memory_pressure(self) -> MemoryPressureGuard:
+        """Return the L2 memory-pressure cooldown guard, lazily building one if absent.
+
+        Same legacy-test compatibility pattern as :py:attr:`_adaptive` /
+        :py:attr:`_budget`: ``__new__``-constructed engines get a
+        fresh empty guard so ``is_pressured`` is always answerable.
+        """
+        existing = getattr(self, "_memory_pressure_guard", None)
+        if existing is None:
+            self._memory_pressure_guard = MemoryPressureGuard()
+            existing = self._memory_pressure_guard
+        return existing
+
+    @property
+    def _backend_health(self) -> BackendHealthMonitor:
+        """Return the L5 backend-health monitor, lazily building one if absent.
+
+        Same legacy-test compatibility pattern as the other guard
+        properties — ``__new__``-constructed engines get a fresh
+        empty monitor so ``state_for`` is always answerable.
+        """
+        existing = getattr(self, "_backend_health_monitor", None)
+        if existing is None:
+            self._backend_health_monitor = BackendHealthMonitor()
+            existing = self._backend_health_monitor
+        return existing
+
+    def _observe_provider_failure(
+        self,
+        provider: str,
+        exc: AdapterError,
+        *,
+        profile: str | None,
+    ) -> None:
+        """Run L2 memory-pressure + L5 backend-health observation on one ``AdapterError``.
+
+        Single chokepoint called from every ``except AdapterError`` site
+        in the engine — six call sites total across the four entry
+        points (generate / stream / generate_anthropic / stream_anthropic
+        x non-stream + mid-stream variants).
+
+        L2 dispatch:
+          * action ``off``  → no detection (zero overhead).
+          * action ``warn`` → emit ``memory-pressure-detected`` info
+                              when the error matches an OOM phrase.
+                              Provider is **not** marked pressured, so
+                              the chain still tries it on the next
+                              request.
+          * action ``skip`` → emit ``memory-pressure-detected`` AND
+                              ``mark_pressured(provider, cooldown_s)``,
+                              so the chain resolver filters the
+                              provider out for ``cooldown_s`` seconds.
+
+        L5 dispatch (independent of L2):
+          * action ``off``  → no monitoring.
+          * action ``warn`` / ``demote`` → record the failure into the
+                              :class:`BackendHealthMonitor`. State
+                              transitions emit ``backend-health-changed``
+                              info. Demotion (``action=demote``) is
+                              applied at chain-resolve time, not here.
+
+        The helper is no-op when the profile resolution fails (config
+        edge cases, e.g. ``__new__``-constructed engines without
+        profiles).
+        """
+        chosen = profile or self.config.default_profile
+        try:
+            chain = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return
+
+        # L2: memory-pressure detection.
+        if is_memory_pressure_error(exc):
+            mp_action = chain.memory_pressure_action
+            if mp_action != "off":
+                cooldown_s = chain.memory_pressure_cooldown_s
+                log_memory_pressure_detected(
+                    logger,
+                    provider=provider,
+                    profile=chosen,
+                    action=mp_action,
+                    cooldown_s=cooldown_s,
+                    error=str(exc),
+                )
+                if mp_action == "skip":
+                    self._memory_pressure.mark_pressured(provider, cooldown_s)
+
+        # L5: backend health.
+        bh_action = chain.backend_health_action
+        if bh_action != "off":
+            transition = self._backend_health.record_attempt(
+                provider,
+                success=False,
+                threshold=chain.backend_health_threshold,
+            )
+            if transition is not None:
+                log_backend_health_changed(
+                    logger,
+                    provider=transition.provider,
+                    profile=chosen,
+                    old_state=transition.old_state,
+                    new_state=transition.new_state,
+                    consecutive_failures=transition.consecutive_failures,
+                )
+
+    def _observe_provider_success(
+        self,
+        provider: str,
+        *,
+        profile: str | None,
+    ) -> None:
+        """Record one successful attempt into the L5 backend-health monitor.
+
+        A success snaps the provider's state to ``HEALTHY`` and resets
+        the consecutive-failure counter to 0. When the transition is
+        non-trivial (e.g. UNHEALTHY → HEALTHY recovery), the helper
+        emits a ``backend-health-changed`` info line so the recovery
+        is visible in the log trail.
+
+        No-op when ``backend_health_action == "off"`` or profile
+        resolution fails — same defensive shape as
+        :meth:`_observe_provider_failure`.
+        """
+        chosen = profile or self.config.default_profile
+        try:
+            chain = self.config.profile_by_name(chosen)
+        except (KeyError, ValueError):
+            return
+        if chain.backend_health_action == "off":
+            return
+        transition = self._backend_health.record_attempt(
+            provider,
+            success=True,
+            threshold=chain.backend_health_threshold,
+        )
+        if transition is not None:
+            log_backend_health_changed(
+                logger,
+                provider=transition.provider,
+                profile=chosen,
+                old_state=transition.old_state,
+                new_state=transition.new_state,
+                consecutive_failures=transition.consecutive_failures,
+            )
 
     def _resolve_profile_overrides(self, profile_name: str | None) -> ProviderCallOverrides:
         """v0.6-B: build the ProviderCallOverrides for the active profile.
@@ -590,11 +798,34 @@ class FallbackEngine:
         ``skip-paid-provider`` info lines are still emitted (one per
         blocked provider) so per-provider traceability is intact; the
         warn sits at chain granularity for operator diagnosis.
+
+        v1.10 monthly-budget gate: applied AFTER the paid gate. Each
+        provider whose ``cost.monthly_budget_usd`` is set is checked
+        against the in-memory ``BudgetTracker`` running total for the
+        current UTC calendar month; over-budget providers are filtered
+        out with a per-provider ``skip-budget-exceeded`` info line
+        (mirror of ``skip-paid-provider``). When the budget gate
+        leaves the chain empty *and at least one provider was filtered
+        out by the budget gate*, ``chain-budget-exceeded`` warn fires
+        — symmetric with ``chain-paid-gate-blocked``.
+
+        v1.9-E phase 2 (L2) memory-pressure gate: applied AFTER the
+        budget gate. When the active profile's
+        ``memory_pressure_action`` is ``skip``, providers in the
+        :class:`MemoryPressureGuard` cooldown window are filtered out
+        with ``skip-memory-pressure`` info; when every provider is
+        pressured, ``chain-memory-pressure-blocked`` warn fires.
+        Action ``warn`` and ``off`` skip the gate entirely (warn
+        logging happens at the per-attempt failure site, not at chain
+        resolve).
         """
         chosen = profile_name or self.config.default_profile
         chain = self.config.profile_by_name(chosen)
 
-        adapters: list[BaseAdapter] = []
+        # Pass 1: paid gate. Same shape as v0.6-C; produces the
+        # post-paid candidate list and tracks the names that were
+        # filtered out for the aggregate warn at the bottom.
+        post_paid: list[tuple[str, BaseAdapter, ProviderConfig]] = []
         blocked_by_paid: list[str] = []
         for prov_name in chain.providers:
             try:
@@ -612,18 +843,120 @@ class FallbackEngine:
                 )
                 blocked_by_paid.append(prov_name)
                 continue
-            adapters.append(self._adapters[prov_name])
+            post_paid.append((prov_name, self._adapters[prov_name], provider_cfg))
 
-        # v0.6-C: aggregate warn fires ONLY when the paid gate left the
-        # chain empty. A mixed chain where at least one free provider
-        # survives stays quiet (the normal try-provider / provider-
-        # failed trail already narrates what happened).
-        if not adapters and blocked_by_paid:
-            log_chain_paid_gate_blocked(
-                logger,
-                profile=chosen,
-                blocked_providers=blocked_by_paid,
-            )
+        # Pass 2: budget gate. Only applies to providers whose
+        # ``cost.monthly_budget_usd`` is set; unset providers are
+        # admitted unconditionally. This keeps the gate opt-in —
+        # operators with no cost config see zero behavior change.
+        post_budget: list[tuple[str, BaseAdapter]] = []
+        blocked_by_budget: list[str] = []
+        for prov_name, adapter, provider_cfg in post_paid:
+            cost_cfg = provider_cfg.cost
+            budget_usd = cost_cfg.monthly_budget_usd if cost_cfg is not None else None
+            if budget_usd is not None and self._budget.is_over_budget(
+                prov_name, budget_usd
+            ):
+                log_skip_budget_exceeded(
+                    logger,
+                    provider=prov_name,
+                    profile=chosen,
+                    monthly_budget_usd=budget_usd,
+                    current_total_usd=self._budget.total_for_provider(prov_name),
+                    month=self._budget.current_month(),
+                )
+                blocked_by_budget.append(prov_name)
+                continue
+            post_budget.append((prov_name, adapter))
+
+        # Pass 3: L2 memory-pressure gate. Only applies when the
+        # active profile's ``memory_pressure_action`` is ``skip``;
+        # ``warn`` and ``off`` do not filter at chain-resolve time.
+        # The detector runs on per-attempt failures (see
+        # ``_observe_provider_failure``); this pass consumes the
+        # cooldown state the detector populated.
+        adapters: list[BaseAdapter] = []
+        blocked_by_pressure: list[str] = []
+        mp_action = chain.memory_pressure_action
+        for prov_name, adapter in post_budget:
+            if mp_action == "skip" and self._memory_pressure.is_pressured(prov_name):
+                # Round up to >=1 so the ``seconds_until_eligible``
+                # field never reports 0 (which would imply already
+                # released — but the lazy-expiry sweep would have
+                # cleared the entry by the time we read it).
+                deadline = self._memory_pressure.pressured_until(prov_name)
+                seconds = max(int(deadline - time.monotonic()), 1)
+                log_skip_memory_pressure(
+                    logger,
+                    provider=prov_name,
+                    profile=chosen,
+                    seconds_until_eligible=seconds,
+                )
+                blocked_by_pressure.append(prov_name)
+                continue
+            adapters.append(adapter)
+
+        # Aggregate warns — same precedence rule as the paid gate:
+        # fire ONLY when the gate left the chain empty AND at least
+        # one provider was filtered out by the gate. A mixed chain
+        # with surviving providers stays quiet (normal try-provider
+        # narrative covers it).
+        # Order of preference for the aggregate warn: pressure → budget
+        # → paid. The most recent pass to filter the entire chain
+        # gets the warn (later passes see fewer survivors, so a
+        # pressure-blocked empty chain should be diagnosed as such
+        # even if budget / paid also filtered something earlier).
+        if not adapters:
+            if blocked_by_pressure:
+                log_chain_memory_pressure_blocked(
+                    logger,
+                    profile=chosen,
+                    blocked_providers=blocked_by_pressure,
+                )
+            elif blocked_by_budget:
+                log_chain_budget_exceeded(
+                    logger,
+                    profile=chosen,
+                    blocked_providers=blocked_by_budget,
+                    month=self._budget.current_month(),
+                )
+            elif blocked_by_paid:
+                log_chain_paid_gate_blocked(
+                    logger,
+                    profile=chosen,
+                    blocked_providers=blocked_by_paid,
+                )
+            return adapters
+
+        # Pass 4: L5 backend-health demotion. Only applies when the
+        # active profile's ``backend_health_action`` is ``demote`` AND
+        # the chain has at least one UNHEALTHY provider AND at least
+        # one HEALTHY-or-DEGRADED provider (otherwise demoting a
+        # uniformly-UNHEALTHY chain is a no-op). Stable partition:
+        # healthy/degraded entries keep their relative order, then
+        # all UNHEALTHY entries in their original relative order.
+        # NOT a filter — UNHEALTHY providers are still attempted, just
+        # last; the engine relies on the existing per-attempt failure
+        # path for the actual error reporting.
+        if chain.backend_health_action == "demote":
+            healthy: list[BaseAdapter] = []
+            unhealthy: list[BaseAdapter] = []
+            for adapter in adapters:
+                if self._backend_health.is_unhealthy(adapter.name):
+                    unhealthy.append(adapter)
+                else:
+                    healthy.append(adapter)
+            if unhealthy and healthy:
+                # Only emit demote logs when the demotion actually
+                # changes the order — uniformly UNHEALTHY chain stays
+                # in original order without spamming the log.
+                for adapter in unhealthy:
+                    log_demote_unhealthy_provider(
+                        logger,
+                        provider=adapter.name,
+                        profile=chosen,
+                    )
+                adapters = healthy + unhealthy
         return adapters
 
     def _resolve_anthropic_chain(self, request: AnthropicRequest) -> list[tuple[BaseAdapter, bool]]:
@@ -707,6 +1040,12 @@ class FallbackEngine:
                     "provider-ok",
                     extra={"provider": adapter.name, "stream": False},
                 )
+                # v1.9-E phase 2 (L5): record success so an UNHEALTHY
+                # provider can recover to HEALTHY on a single good
+                # response. No-op when ``backend_health_action: off``.
+                self._observe_provider_success(
+                    adapter.name, profile=request.profile
+                )
                 return response
             except AdapterError as exc:
                 logger.warning(
@@ -717,6 +1056,11 @@ class FallbackEngine:
                         "retryable": exc.retryable,
                         "error": str(exc)[:500],
                     },
+                )
+                # v1.9-E phase 2 (L2 + L5): observe per-attempt failures
+                # for OOM patterns + backend-health state machine.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
                 )
                 errors.append(exc)
                 if not exc.retryable:
@@ -757,6 +1101,10 @@ class FallbackEngine:
                         "error": str(exc)[:500],
                     },
                 )
+                # v1.9-E phase 2 (L2): observe pre-stream OOM.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
+                )
                 errors.append(exc)
                 if not exc.retryable:
                     break
@@ -765,6 +1113,13 @@ class FallbackEngine:
             logger.info(
                 "provider-ok",
                 extra={"provider": adapter.name, "stream": True},
+            )
+            # v1.9-E phase 2 (L5): the first chunk landed → treat as
+            # success for backend-health bookkeeping. Mid-stream
+            # failures don't roll the state back; they're recorded
+            # via ``_observe_provider_failure`` separately.
+            self._observe_provider_success(
+                adapter.name, profile=request.profile
             )
             yield first
             # Mid-stream fallback guard: once the first byte is out the door,
@@ -783,6 +1138,13 @@ class FallbackEngine:
                         "retryable": exc.retryable,
                         "error": str(exc)[:500],
                     },
+                )
+                # v1.9-E phase 2 (L2): observe mid-stream OOM too —
+                # llama.cpp / Ollama can exhaust VRAM partway through
+                # generation when context grows; the next request
+                # should respect the cooldown.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
                 )
                 raise MidStreamError(adapter.name, exc) from exc
             return
@@ -900,6 +1262,11 @@ class FallbackEngine:
                         "error": str(exc)[:500],
                     },
                 )
+                # v1.9-E phase 2 (L2): observe per-attempt OOM
+                # signals on the Anthropic-shaped path too.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
+                )
                 errors.append(exc)
                 if not exc.retryable:
                     break
@@ -920,6 +1287,13 @@ class FallbackEngine:
                     "native_anthropic": is_native,
                 },
             )
+            # v1.9-E phase 2 (L5): record success on the Anthropic
+            # non-streaming path too — recovery transitions emit
+            # backend-health-changed when an UNHEALTHY provider
+            # comes back.
+            self._observe_provider_success(
+                adapter.name, profile=request.profile
+            )
             # v1.9-A: pair every successful Anthropic response with a
             # cache-observed log line. Native Anthropic / LM Studio
             # /v1/messages report cache_read_input_tokens /
@@ -934,6 +1308,7 @@ class FallbackEngine:
                 request_had_cache_control=request_had_cache_control,
                 streaming=False,
                 provider_config=adapter.config,
+                budget=self._budget,
             )
             return resp
 
@@ -1044,6 +1419,11 @@ class FallbackEngine:
                         "error": str(exc)[:500],
                     },
                 )
+                # v1.9-E phase 2 (L2): observe per-attempt OOM
+                # signals on the Anthropic streaming path.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
+                )
                 errors.append(exc)
                 if not exc.retryable:
                     break
@@ -1057,6 +1437,11 @@ class FallbackEngine:
                     "native_anthropic": is_native,
                     "downgrade": downgrading,
                 },
+            )
+            # v1.9-E phase 2 (L5): first chunk landed → success for
+            # the L5 health monitor on the Anthropic streaming path.
+            self._observe_provider_success(
+                adapter.name, profile=request.profile
             )
             acc.observe(first)
             yield first
@@ -1076,6 +1461,11 @@ class FallbackEngine:
                         "error": str(exc)[:500],
                     },
                 )
+                # v1.9-E phase 2 (L2): observe mid-stream OOM on
+                # the Anthropic streaming path.
+                self._observe_provider_failure(
+                    adapter.name, exc, profile=request.profile
+                )
                 raise MidStreamError(adapter.name, exc) from exc
             # v1.9-B2: pair the successful stream with a cache-observed
             # log line carrying the aggregated usage counters that the
@@ -1090,6 +1480,7 @@ class FallbackEngine:
                 provider=adapter.name,
                 request_had_cache_control=request_had_cache_control,
                 provider_config=adapter.config,
+                budget=self._budget,
             )
             return
 

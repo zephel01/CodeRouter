@@ -244,6 +244,358 @@ def log_chain_paid_gate_blocked(
 
 
 # ---------------------------------------------------------------------------
+# v1.10: budget-gate log shapes (skip-budget-exceeded / chain-budget-exceeded)
+#
+# Mirrors the v0.6-C paid-gate pattern exactly: per-provider INFO event
+# for each provider that the chain resolver skipped because its
+# current-month running cost reached or exceeded the configured
+# ``cost.monthly_budget_usd``, plus a chain-level WARN aggregate when
+# the budget gate filters the entire chain to zero adapters.
+#
+# Scope:
+#   - ``skip-budget-exceeded`` fires per-provider once per chain
+#     resolution. Useful for the cost dashboard's "budget pressure"
+#     panel + Prometheus counter mirror of the paid-gate counter.
+#   - ``chain-budget-exceeded`` fires once per request, only when the
+#     budget gate left ZERO providers usable. Warn-level because, like
+#     the paid-gate, an empty chain is a configuration / spend
+#     problem the operator must see.
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_BUDGET_GATE_HINT: str = (
+    "raise ``cost.monthly_budget_usd`` for at least one provider, "
+    "wait for the calendar-month rollover, or restart the process to "
+    "zero the in-memory running totals"
+)
+
+
+class SkipBudgetExceededPayload(TypedDict):
+    """Structured shape of the ``skip-budget-exceeded`` log record.
+
+    Fields
+        provider: name of the provider being skipped.
+        profile: active profile resolving the chain (resolved name,
+            not user-supplied — so after falling back to
+            ``default_profile``).
+        monthly_budget_usd: configured cap from
+            :class:`coderouter.config.schemas.CostConfig`.
+        current_total_usd: per-provider running USD total for the
+            current calendar-month, observed at the time of the
+            skip decision (rounded to 6 decimal places to match the
+            cost dashboard's display precision).
+        month: ``YYYY-MM`` UTC bucket the totals belong to. Useful
+            for cross-referencing with the dashboard / external
+            cost reports across month boundaries.
+    """
+
+    provider: str
+    profile: str
+    monthly_budget_usd: float
+    current_total_usd: float
+    month: str
+
+
+class ChainBudgetExceededPayload(TypedDict):
+    """Structured shape of the ``chain-budget-exceeded`` log record.
+
+    Same layout as :class:`ChainPaidGateBlockedPayload` (profile +
+    blocked list + hint) so dashboards / log aggregators can render
+    both with the same template.
+    """
+
+    profile: str
+    blocked_providers: list[str]
+    month: str
+    hint: str
+
+
+def log_skip_budget_exceeded(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    monthly_budget_usd: float,
+    current_total_usd: float,
+    month: str,
+) -> None:
+    """Emit a ``skip-budget-exceeded`` info line for one filtered provider.
+
+    Info level (not warn) — same severity as ``skip-paid-provider``.
+    The chain may still be viable; the chain-level warn fires only
+    when ALL providers are filtered out.
+    """
+    payload: SkipBudgetExceededPayload = {
+        "provider": provider,
+        "profile": profile,
+        "monthly_budget_usd": monthly_budget_usd,
+        "current_total_usd": round(current_total_usd, 6),
+        "month": month,
+    }
+    logger.info("skip-budget-exceeded", extra=payload)
+
+
+def log_chain_budget_exceeded(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    blocked_providers: list[str],
+    month: str,
+    hint: str = _DEFAULT_BUDGET_GATE_HINT,
+) -> None:
+    """Emit a ``chain-budget-exceeded`` warn aggregate.
+
+    Single chokepoint mirroring :func:`log_chain_paid_gate_blocked`.
+    Warn level because an empty chain is always a config / spend
+    problem the operator must see.
+    """
+    payload: ChainBudgetExceededPayload = {
+        "profile": profile,
+        "blocked_providers": blocked_providers,
+        "month": month,
+        "hint": hint,
+    }
+    logger.warning("chain-budget-exceeded", extra=payload)
+
+
+# ---------------------------------------------------------------------------
+# v1.9-E phase 2 (L2): memory-pressure log shapes
+#
+# Three event lanes mirror the paid-gate / budget-gate triplet:
+#   * ``memory-pressure-detected``    — info: an OOM-coded failure was
+#                                        observed; the provider has been
+#                                        marked pressured (when action=skip)
+#                                        or is logged-only (when action=warn).
+#   * ``skip-memory-pressure``         — info: chain resolver filtered a
+#                                        provider out because it's still in
+#                                        cooldown.
+#   * ``chain-memory-pressure-blocked``— warn: the L2 gate filtered every
+#                                        provider out (chain empty). Operator
+#                                        must see this — every backend in
+#                                        this profile is OOM at once.
+# ---------------------------------------------------------------------------
+
+
+_DEFAULT_MEMORY_PRESSURE_HINT: str = (
+    "shorten the prompt, switch to a smaller model, increase backend RAM/VRAM, "
+    "or wait for the cooldown window to elapse"
+)
+
+
+class MemoryPressureDetectedPayload(TypedDict):
+    """Structured shape of the ``memory-pressure-detected`` log record.
+
+    Fields
+        provider: the provider whose error body matched an OOM phrase.
+        profile: active profile name (resolved, not user-supplied).
+        action: configured ``memory_pressure_action`` for this profile
+            (``warn`` or ``skip``). ``off`` never fires this event.
+        cooldown_s: configured cooldown window in seconds. Echoed
+            even when ``action=warn`` (no cooldown is applied) so
+            downstream tooling can correlate with the action.
+        error: short prefix of the upstream error message that
+            triggered the detection (truncated to keep the log
+            line bounded; full body lives in the prior
+            ``provider-failed`` line).
+    """
+
+    provider: str
+    profile: str
+    action: str
+    cooldown_s: int
+    error: str
+
+
+class SkipMemoryPressurePayload(TypedDict):
+    """Structured shape of the ``skip-memory-pressure`` log record.
+
+    Fields
+        provider: the provider being skipped.
+        profile: active profile resolving the chain.
+        seconds_until_eligible: how many seconds remain in the
+            cooldown window (rounded to int). 0 implies "this is
+            the call that just released the entry" — which the
+            tracker filters out, so the value is always >= 1 in
+            practice.
+    """
+
+    provider: str
+    profile: str
+    seconds_until_eligible: int
+
+
+class ChainMemoryPressureBlockedPayload(TypedDict):
+    """Structured shape of the ``chain-memory-pressure-blocked`` log record.
+
+    Same field set as :class:`ChainPaidGateBlockedPayload` /
+    :class:`ChainBudgetExceededPayload` so dashboards / log aggregators
+    can render all three with the same template.
+    """
+
+    profile: str
+    blocked_providers: list[str]
+    hint: str
+
+
+def log_memory_pressure_detected(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    action: str,
+    cooldown_s: int,
+    error: str,
+) -> None:
+    """Emit a ``memory-pressure-detected`` info line.
+
+    Info level (not warn) — the engine still has the chain to fall
+    through to. The chain-level warn fires only when the gate
+    filters every provider out.
+    """
+    payload: MemoryPressureDetectedPayload = {
+        "provider": provider,
+        "profile": profile,
+        "action": action,
+        "cooldown_s": cooldown_s,
+        "error": error[:200],
+    }
+    logger.info("memory-pressure-detected", extra=payload)
+
+
+def log_skip_memory_pressure(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    seconds_until_eligible: int,
+) -> None:
+    """Emit a ``skip-memory-pressure`` info line.
+
+    Mirror of :func:`log_skip_budget_exceeded`. Info level — the
+    chain may still be viable.
+    """
+    payload: SkipMemoryPressurePayload = {
+        "provider": provider,
+        "profile": profile,
+        "seconds_until_eligible": seconds_until_eligible,
+    }
+    logger.info("skip-memory-pressure", extra=payload)
+
+
+def log_chain_memory_pressure_blocked(
+    logger: logging.Logger,
+    *,
+    profile: str,
+    blocked_providers: list[str],
+    hint: str = _DEFAULT_MEMORY_PRESSURE_HINT,
+) -> None:
+    """Emit a ``chain-memory-pressure-blocked`` warn aggregate.
+
+    Mirrors :func:`log_chain_paid_gate_blocked` — warn level
+    because every provider being OOM at once is a real operator-
+    visible problem.
+    """
+    payload: ChainMemoryPressureBlockedPayload = {
+        "profile": profile,
+        "blocked_providers": blocked_providers,
+        "hint": hint,
+    }
+    logger.warning("chain-memory-pressure-blocked", extra=payload)
+
+
+# ---------------------------------------------------------------------------
+# v1.9-E phase 2 (L5): backend-health log shapes
+#
+# Two event lanes:
+#   * ``backend-health-changed`` — info: a provider's state machine
+#                                  transitioned (HEALTHY ↔ DEGRADED ↔
+#                                  UNHEALTHY). Operator-visible
+#                                  diagnostic; quiet when the provider
+#                                  is steadily HEALTHY.
+#   * ``demote-unhealthy-provider``— info: chain resolver moved an
+#                                    UNHEALTHY provider to the back of
+#                                    the chain. Mirror of v1.9-C
+#                                    adaptive's demotion log but
+#                                    state-machine-driven, not
+#                                    rolling-window-driven.
+#
+# No chain-level warn for L5 — even when every provider in the chain
+# is UNHEALTHY, the resolver still attempts them all (best-effort);
+# the existing ``chain-uniform-auth-failure`` and
+# ``provider-failed`` log trails surface the cascade.
+# ---------------------------------------------------------------------------
+
+
+class BackendHealthChangedPayload(TypedDict):
+    """Structured shape of the ``backend-health-changed`` log record.
+
+    Fields
+        provider: the provider whose state transitioned.
+        profile: active profile resolving the chain.
+        old_state / new_state: the two endpoints of the transition.
+            String-typed (not the ``HealthState`` Literal) so the
+            log payload survives JSON round-trip without typing
+            tooling complaining at the consumer site.
+        consecutive_failures: counter snapshot at transition time.
+            Useful for diagnosing "how many failures did it take to
+            cross the threshold" without grepping the full
+            ``provider-failed`` trail.
+    """
+
+    provider: str
+    profile: str
+    old_state: str
+    new_state: str
+    consecutive_failures: int
+
+
+class DemoteUnhealthyProviderPayload(TypedDict):
+    """Structured shape of the ``demote-unhealthy-provider`` log record."""
+
+    provider: str
+    profile: str
+
+
+def log_backend_health_changed(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+    old_state: str,
+    new_state: str,
+    consecutive_failures: int,
+) -> None:
+    """Emit a ``backend-health-changed`` info line on a state transition."""
+    payload: BackendHealthChangedPayload = {
+        "provider": provider,
+        "profile": profile,
+        "old_state": old_state,
+        "new_state": new_state,
+        "consecutive_failures": consecutive_failures,
+    }
+    logger.info("backend-health-changed", extra=payload)
+
+
+def log_demote_unhealthy_provider(
+    logger: logging.Logger,
+    *,
+    provider: str,
+    profile: str,
+) -> None:
+    """Emit a ``demote-unhealthy-provider`` info line.
+
+    Fires per chain-resolve when an UNHEALTHY provider is moved to
+    the back. Quiet when no demotion happens (state-machine
+    UNHEALTHY but action != demote → no log).
+    """
+    payload: DemoteUnhealthyProviderPayload = {
+        "provider": provider,
+        "profile": profile,
+    }
+    logger.info("demote-unhealthy-provider", extra=payload)
+
+
+# ---------------------------------------------------------------------------
 # v1.0-A: output-filter-applied log shape
 #
 # Motivation (plan.md §10.2 "出力クリーニング" / retrospective v0.7 "transformation

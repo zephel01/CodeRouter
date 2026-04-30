@@ -6,6 +6,390 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.10.0] — 2026-05-01 (Umbrella tag — Cost enforcement + Long-run reliability completion + Auto-router feature complete)
+
+**Theme: 「観測 → 理解 → 行動」を 3 軸で完成、Vision pillar P2/P3 が揃う。** v1.9.1 (patch) で取り切った 2 機能 (v1.9-B2 streaming usage 集約 + per-model auto-routing) は事実上 v1.10 backlog の助走、本 v1.10.0 で残り 3 機能を minor として束ねて出荷。CodeRouter は **「Local LLM で agent を長時間回すための信頼性層」** という Vision の v1.x 担当分が完成 — context overflow (L1) と quality drift (L4) を除く 4 系統障害 (L2/L3/L5/L6) を体系的に対処、auto-router の declarative 6 matcher も揃い、cost 系は観測 (v1.9-D) → enforcement (v1.10) で経路が閉じた。
+
+含まれる出荷 5 件 (`docs/inside/future.md §6.6` の v1.10 着手順序、本 release で全完了):
+
+| # | sub-release | テーマ | LOC | tests | 出荷先 |
+|---|---|---|---|---|---|
+| 1 | **v1.9-B2** | streaming 経路の usage 集約 (`_StreamUsageAccumulator`、placeholder→観測値) | ~150 | +3 | v1.9.1 |
+| 2 | **per-model auto-routing** | `RuleMatcher.model_pattern` (Opus/Sonnet/Haiku 分岐、free-claude-code 由来) | ~120 | +5 | v1.9.1 |
+| 3 | **provider 月次予算上限** | `BudgetTracker` + `cost.monthly_budget_usd` (LiteLLM 由来 / v1.9-D 累積版) | ~250 | +8 | **v1.10.0** |
+| 4 | **v1.9-E phase 2 (L2/L5)** | Memory pressure detector + Backend health 状態機械 (Vision pillar 完成) | ~370 | +27 | **v1.10.0** |
+| 5 | **longContext auto-switch** | `RuleMatcher.content_token_count_min` (claude-code-router 由来) | ~80 | +5 | **v1.10.0** |
+
+- Tests: 838 (v1.9.1) → **871** (+33: 本 minor 単独 +27 from v1.9-E phase 2 + 8 budget + 5 longContext から、v1.10.0 で純増 +33)
+- Runtime deps: 5 → 5 (**33 sub-release 連続据え置き**) — 最初から守ってきた `fastapi / uvicorn / httpx / pydantic / pyyaml` のみ
+- pyproject version: 1.9.1 → 1.10.0
+
+### Pillar 別の達成
+
+#### P2 Long-run Reliability (v1.9-E 系) — Vision の核心が揃う
+
+6 系統障害体系 (`docs/inside/future.md §1`) のうち v1.x で取りに行くと宣言した分が完成:
+
+| # | 障害 | v1.x 担当 | 状態 |
+|---|---|---|---|
+| **L1** | Context overflow | (v2.0-F) | ⏳ |
+| **L2** | Memory pressure | v1.9-E phase 2 | ✅ v1.10.0 |
+| **L3** | Tool loop | v1.9-E phase 1 | ✅ v1.9.0 |
+| **L4** | Quality drift | (v2.0-G) | ⏳ |
+| **L5** | Backend crash / health | v1.9-E phase 2 | ✅ v1.10.0 |
+| **L6** | Mid-stream interrupt | v0.3-A 既存 + (v2.0-H 強化) | ✅ baseline |
+
+L2/L3/L5 の 3 兄弟が `coderouter/guards/` 配下に並び、それぞれ `MemoryPressureGuard` / `_apply_tool_loop_guard` / `BackendHealthMonitor` が pure module として独立。engine 統合は `_observe_provider_failure` / `_observe_provider_success` の 2 chokepoint で済む綺麗な設計に着地。
+
+#### Cost pillar (v1.9-D 系) — 観測 → 制約の経路が閉じる
+
+| 段階 | sub-release | 役割 |
+|---|---|---|
+| **観測** | v1.9-A | `cache-observed` log + cache hit/miss 4-class outcome |
+| **観測のカバレッジ** | v1.9-B2 (v1.9.1) | streaming 経路まで完全カバー、placeholder ゼロ化 |
+| **理解** | v1.9-D | per-provider USD cost + cache savings 別計算 (LiteLLM 既存品が落とす精度) |
+| **制約** | **v1.10.0** | `monthly_budget_usd` で per-provider 月次 cap、UTC 暦月 in-memory bucketing |
+
+v1.9.0 GA 時点で「観測の 4-class 精度」「LiteLLM 既存品より精度高い cost 計算」が CodeRouter の差別化軸として確立、v1.10.0 でそれを enforcement に活用できる経路が閉じた。
+
+#### Auto-router (v1.6 系) — 6 matcher で feature complete
+
+| # | matcher | 由来 | 出荷 |
+|---|---|---|---|
+| 1 | `has_image` | v1.6-A bundled | v1.6.0 |
+| 2 | `code_fence_ratio_min` | v1.6-A bundled | v1.6.0 |
+| 3 | `content_contains` | v1.6-A user-defined | v1.6.0 |
+| 4 | `content_regex` | v1.6-A user-defined | v1.6.0 |
+| 5 | `model_pattern` | free-claude-code 由来 | v1.9.1 |
+| 6 | `content_token_count_min` | claude-code-router 由来 | **v1.10.0** |
+
+declarative routing が「latest message の content / 画像 (per-turn signal) + request 全体の model id / token count (request-shape signal)」で完備、competitive analysis で抽出した v1.10 候補の取り込みは打ち止め、これ以降の追加は要望ドリブンで再開する想定。
+
+### Migration
+
+不要。**v1.9.1 / v1.9.0 / v1.9.0a* からの自然なアップグレード**:
+
+- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
+- 新しい schema field (`cost.monthly_budget_usd` / `memory_pressure_*` / `backend_health_*` / `content_token_count_min`) は全部 optional + 安全側 default (`monthly_budget_usd: None` / action は `warn` か `off`)、未指定 deployment は v1.9.x と挙動完全一致
+- 新しい log event (`skip-budget-exceeded` / `chain-budget-exceeded` / `memory-pressure-detected` / `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider`) は既存 `cache-observed` / `provider-failed` / etc. と同じ JSON 形式、外部 consumer は受信側に dispatch 追加するだけで対応可能
+
+### Out of scope (v2.0 以降)
+
+- **L1 Context overflow** → v2.0-F (semantic compression、context budget per-mode)
+- **L4 Quality drift detection** → v2.0-G (response 品質 rolling window 観測)
+- **L6 Mid-stream stitching 強化** → v2.0-H (resumable continuation)
+- **Continuous probing** → v2.0-I (毎時/毎日 model ヘルスチェック、HF dataset 公開)
+- **Persistent budget state** (sqlite / Redis) — 5-deps 不変原則で v1.x 範囲では却下
+- **L5 active probing** (60s 間隔の能動 GET /api/version) — v2.0-I の領域、passive で 80% カバーできているため後回し
+- **tiktoken / SentencePiece による正確なトークンカウント** — 5-deps 不変原則で却下
+
+詳細は `docs/inside/future.md §7` を参照。
+
+### Files touched
+
+```
+A  coderouter/guards/backend_health.py
+A  coderouter/guards/memory_pressure.py
+A  coderouter/routing/budget.py
+A  tests/test_backend_health.py
+A  tests/test_budget.py
+A  tests/test_memory_pressure.py
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/routing/auto_router.py
+M  coderouter/routing/fallback.py
+M  docs/inside/future.md
+M  plan.md
+M  pyproject.toml
+M  tests/test_auto_router.py
+```
+
+---
+
+### v1.10 候補 #5: longContext auto-switch (claude-code-router 由来)
+
+**Theme: コンテキスト窓圧迫の自動逃がし。** 長文プロンプト (会話ヒストリーの累積、コードベース貼り付け等) が来た時、context window の小さいモデル (200K Anthropic) ではなく 1M ctx の Gemini Flash 系へ自動切替する仕組み。`auto_router.rules[].if.content_token_count_min` を 6 番目の matcher として追加、既存 5 種と同じ "exactly one" 規約を継承。
+
+ユースケース例:
+
+```yaml
+auto_router:
+  rules:
+    - if: { content_token_count_min: 32000 }
+      route_to: longcontext
+  default_rule_profile: writing
+
+profiles:
+  - name: longcontext
+    providers:
+      - openrouter-gemini-flash-free   # 1M ctx
+      - anthropic-haiku-direct          # 200K ctx
+  - name: writing
+    providers: [anthropic-sonnet-direct]
+```
+
+agent が短いやり取りを 100 ターン続けて context が膨らんだ時、自動で 1M ctx チェーンに切り替わる。`free-claude-code` / `claude-code-router` 由来のニーズを CodeRouter の declarative auto_router framework に取り込んだ形。
+
+#### 設計判断: char/4 ヒューリスティック vs tiktoken
+
+token カウントは `len(text) // 4` の素朴ヒューリスティック (OpenAI 公式の rule of thumb)。**5-deps 不変原則** (`plan.md §5.4`) を守るため tiktoken / SentencePiece は導入しない。トレードオフ:
+
+- **English 散文 / コード**: char/4 はやや緩い (実際は ~3.5/token)、`min` 比較なので大きい threshold で安全側に倒せる
+- **CJK (日本語/中国語/韓国語)**: char/4 は **保守的にカウント不足** (実際は ~1.5-2 char/token)、つまり 100k 文字の日本語プロンプトを ~25k tokens と過小評価。これは積極的に context overflow を引き起こす方向ではないので fail-safe な誤差
+- **トレードオフ判断**: tiktoken なら正確だが 100MB 級の依存追加、SentencePiece でも 50MB 級。CodeRouter は「個人開発者用の signal-based router」なので、operator が threshold を実機運用フィードバックで調整する前提のヒューリスティックで十分
+
+#### Other matchers との違い
+
+`content_contains` / `content_regex` / `has_image` は **latest user message** に対して評価 (per-turn signal)、`content_token_count_min` は **request 全体 (system + 全 messages)** を walk して合算 (request-shape signal)。context-window pressure はリクエスト全体の性質なので latest-only では誤検出する。
+
+- Tests: 866 → **871** (+5: long-prompt match / 短文 fallthrough / 全 messages walk / 負値 reject / first-match-wins precedence)
+- Runtime deps: 5 → 5 (33 sub-release 連続据え置き)
+- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない
+
+#### Changes
+
+- `coderouter/config/schemas.py`:
+  - `RuleMatcher` に `content_token_count_min: int | None = None` (`ge=1`) を追加、`_MATCHER_FIELDS` に登録 (既存の "exactly one" バリデータが自動適用、`ge=1` で 0/負値は schema load で reject)。
+  - docstring の Variants セクションに 6 番目として明記、char/4 ヒューリスティック + 全 messages 対象 (latest-only の他 matcher と差別化) + 5-deps トレードオフを文書化。
+
+- `coderouter/routing/auto_router.py`:
+  - `_estimate_total_tokens(body)` ヘルパを新設 — `body["system"]` (str / list-of-blocks 両対応) と `body["messages"]` の全 message を walk、`_extract_text` で text を抽出、char 合算を `_CHARS_PER_TOKEN_HEURISTIC=4` で除して token 推定。image / non-text blocks は 0 寄与。
+  - `_match_rule` に `estimated_tokens: int` パラメータを追加、6 番目の分岐として `content_token_count_min` 比較を実装。
+  - `classify(...)` 内で `_estimate_total_tokens(body)` を 1 回計算、ルール評価ループに流す。`_emit_resolved` / `_emit_fallthrough` の signals payload に `estimated_tokens` を追記、dashboard / Prometheus exporter から「何トークン推定でその profile に流れたか」が見える。
+
+- `tests/test_auto_router.py` Group 7 を新設、5 ケース:
+  - `test_classify_long_prompt_routes_to_longcontext` — 200,000 chars (~50,000 tokens) → 32,000 threshold を超えて longcontext profile。
+  - `test_classify_short_prompt_below_threshold_falls_through` — 1,000 chars (~250 tokens) → default_rule_profile (writing) に落ちる。
+  - `test_classify_long_context_walks_all_messages_not_just_latest` — 長い会話 history + 短い最新ユーザー msg、latest-only matcher なら拾えないケースを longContext は拾うことを pin。
+  - `test_content_token_count_min_rejects_non_positive_at_load` — `0` / `-5` を `RuleMatcher` 構築時に reject (pydantic `ge=1`)。
+  - `test_long_context_first_match_wins_over_later_image_rule` — token-count rule を先に置けば長文+画像 body でも longcontext が勝つ、先勝順序を pin。
+
+#### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/auto_router.py
+M  tests/test_auto_router.py
+```
+
+#### Why now
+
+`docs/inside/future.md §6.6` の v1.10 着手順序 **#5 (最終)**。実装規模 ~80 LOC + tests ~150 LOC、半日工数 (見積 ~150-200 LOC / 3-5 日より大幅短縮 — auto_router の matcher 追加パターンが per-model auto-routing で確立済み、全 messages walk 用の `_estimate_total_tokens` ヘルパだけ新設で済んだ)。
+
+これで **v1.10 候補 5 件全完了** (#1 v1.9-B2 / #2 per-model auto-routing は v1.9.1、#3 monthly budget / #4 v1.9-E phase 2 / #5 longContext auto-switch は本 [Unreleased] umbrella)。次回 PyPI publish 時に **v1.10.0 minor として umbrella tag 化**できる位置 (Vision pillar 完成 + auto-router 全 6 matcher 揃 + cost enforcement 完成)。
+
+#### Out of scope (v2.0 以降 / 将来の精緻化)
+
+- **tiktoken / SentencePiece による正確なトークンカウント** — 5-deps 不変原則で却下。実機運用で threshold tuning が困難になったら再検討。
+- **Provider 別 context-window 自動推測** — `model-capabilities.yaml` に `max_context_tokens` を加えれば自動推測できる方向もあるが、operator の運用シナリオ次第なので明示宣言で十分。
+- **動的 threshold (chain の最小 max_context_tokens に応じて)** — 同上、明示宣言で十分。
+
+---
+
+### v1.10 候補 #4: v1.9-E phase 2 (L2 memory pressure + L5 backend health) — Vision 完成
+
+**Theme: 「8 時間 agent ループでも止まらない」を約束する Long-run Reliability pillar (P2) を完成させる。** v1.9.0 で L3 (tool-loop guard) を phase 1 として先行出荷したが、Vision で謳う 6 系統障害体系のうち **L2 (Memory pressure)** と **L5 (Backend crash / health)** が phase 2 として残っていた。本 release で両方を opt-in guard として実装、`coderouter/guards/` 配下に並ぶ 3 兄弟 (tool_loop / memory_pressure / backend_health) で長時間運用の中核 3 障害をカバーする。
+
+#### L2: Memory pressure detection + cooldown
+
+ローカル backend (Ollama / LM Studio / llama.cpp) が VRAM 枯渇で 5xx を返す時、エラー本文に `out of memory` / `CUDA out of memory` / `insufficient memory` / `model requires more system memory` 等の OOM フレーズが入る。L2 はこれを観察して当該 provider をクールダウンに入れ、次の chain resolve から `memory_pressure_cooldown_s` 秒間 skip する:
+
+```yaml
+profiles:
+  - name: default
+    providers: [ollama-large, ollama-small, openrouter-fallback]
+    memory_pressure_action: skip       # off / warn / skip (default: warn)
+    memory_pressure_cooldown_s: 120    # default 120s, 10〜3600 s
+```
+
+`action=skip` の時、ollama-large が OOM → 120 秒間 ollama-large を chain から除外、ollama-small や openrouter-fallback に流れる → クールダウン明けで再度 ollama-large を試す。`action=warn` (default) は log のみ、`off` は完全に無効化 (zero overhead)。
+
+#### L5: Backend health (consecutive failure state machine)
+
+backend が突発 crash した時の defacto demote。`BackendHealthMonitor` が provider ごとに consecutive failure 数を数え、`backend_health_threshold` (default 3) で `HEALTHY → DEGRADED`、`2 x threshold` で `DEGRADED → UNHEALTHY` に遷移。1 回の成功で即 HEALTHY 復帰。`backend_health_action: demote` の時、UNHEALTHY な provider は chain 末尾に降格 (skip ではなく **demote** — 死活確認の 1 リクエストは飛ばす、best-effort principle):
+
+```yaml
+profiles:
+  - name: default
+    providers: [ollama-local, anthropic-fallback]
+    backend_health_action: demote       # off / warn / demote (default: warn)
+    backend_health_threshold: 3
+```
+
+v1.9-C の `adaptive` (rolling-window 連続観測 + debounce) とは直交関係 — adaptive が「徐々に遅くなった」勾配ケース、L5 が「突発 crash」二値ケース。両者重ね掛け可能で、両方 enable した chain では「latency 劣化 → adaptive demote」「crash → L5 demote」の両方の信号で並べ替え。
+
+#### Numbers
+
+- Tests: 839 → **866** (+27 累積、L2 +19 / L5 +8)
+- Runtime deps: 5 → 5 (32 sub-release 連続据え置き)
+- Backward compat: 完全互換、両 `*_action` のデフォルトは `warn` (= log のみ、行動変化なし)。`off` で完全無効化。既存 v1.9.x deployment は yaml 変更なしで自然継続
+
+#### Changes
+
+- `coderouter/guards/memory_pressure.py` 新設 (~170 LOC):
+  - `is_memory_pressure_error(exc)` — 純関数、9 種の OOM フレーズに対する case-insensitive substring match (Ollama / LM Studio / llama.cpp / 汎用 CUDA / Metal の実観測パターン)。
+  - `MemoryPressureGuard` — per-provider TTL cooldown tracker、`mark_pressured` / `is_pressured` / `pressured_until` API、`time.monotonic` ベースで wall-clock skew 耐性、tests は `now=` 引数で deterministic 注入。
+
+- `coderouter/guards/backend_health.py` 新設 (~200 LOC):
+  - `BackendHealthMonitor` — per-provider 状態機械 (HEALTHY / DEGRADED / UNHEALTHY)、`record_attempt(success, threshold)` で観測、状態遷移時のみ `HealthTransition` を返す (no log spam on stable state)、threshold は per-call で profile 違いに対応。
+  - 状態機械の遷移ルール: 失敗 N 回 (= threshold) で DEGRADED、2N 回で UNHEALTHY、1 回成功で即 HEALTHY 復帰。
+
+- `coderouter/config/schemas.py`:
+  - `FallbackChain` に `memory_pressure_action` / `memory_pressure_cooldown_s` (L2) と `backend_health_action` / `backend_health_threshold` (L5) を追加。L3 (`tool_loop_*`) と同じ命名 + 同じ "off / warn / 行動" tri-state パターン。
+  - 各 field に `Literal` 型 + range 制約 + 詳細 docstring (どの障害を見るか、L2/L5 の使い分け、v1.9-C adaptive との関係)。
+
+- `coderouter/logging.py`:
+  - L2: `log_memory_pressure_detected` / `log_skip_memory_pressure` / `log_chain_memory_pressure_blocked` ヘルパ + 3 つの TypedDict payload。paid-gate / budget-gate と完全 symmetric。
+  - L5: `log_backend_health_changed` (state transition、payload に old_state/new_state/consecutive_failures) / `log_demote_unhealthy_provider` ヘルパ + 2 つの TypedDict。
+
+- `coderouter/routing/fallback.py`:
+  - `FallbackEngine` に `_memory_pressure` / `_backend_health` lazy property を追加 (`_adaptive` / `_budget` と同じパターン、`__new__` 経由 legacy tests 対応)。
+  - `_observe_provider_failure(provider, exc, profile)` ヘルパ — L2 OOM 検出 + L5 失敗カウンタを single chokepoint で dispatch、6 つの failure site (4 entry point × non-stream/mid-stream) から呼ぶ。
+  - `_observe_provider_success(provider, profile)` 新設 — L5 状態機械の成功遷移を 4 success site (provider-ok 時) から呼ぶ。
+  - `_resolve_chain` を 4-pass に拡張: paid → budget → **L2 pressure skip** → L5 demote。L2 は filter (skip)、L5 は reorder (demote)、両者の役割分担を明確化。L5 demote は `unhealthy and healthy` 両方ある時のみ実施 (uniformly UNHEALTHY chain は no-op、log spam 抑制)。
+
+- `coderouter/metrics/collector.py`:
+  - `_provider_skipped_memory_pressure: Counter` + `_chain_memory_pressure_blocked_total: int` (L2)。
+  - `_provider_demoted_unhealthy: Counter` + `_backend_health_transitions: dict[str, Counter]` (L5、transition を destination state でキー)。
+  - `skip-memory-pressure` / `chain-memory-pressure-blocked` / `backend-health-changed` / `demote-unhealthy-provider` event の dispatch + snapshot/reset 配線。
+
+- `coderouter/metrics/prometheus.py`:
+  - `coderouter_provider_skipped_total{reason="memory_pressure"}` を既存 `paid` / `unknown` / `budget` と同 counter に同居。
+  - `coderouter_provider_demoted_unhealthy_total{provider}` (L5)、`coderouter_backend_health_transitions_total{provider, state}` (L5)、`coderouter_chain_memory_pressure_blocked_total` (L2) を追加。
+
+- `tests/test_memory_pressure.py` 新設 (~360 LOC、+19 tests):
+  - **Group 1 (detector)**: 8 種の OOM フレーズを parameterize で網羅、5 種の非 OOM 失敗で false 確認。
+  - **Group 2 (guard)**: TTL cooldown / lazy expiry / re-mark 拡張。
+  - **Group 3 (engine)**: action=warn は log only / action=skip は cooldown 中 chain skip + fallback / action=off は完全無効 / 全 provider pressured で `chain-memory-pressure-blocked` warn + `NoProvidersAvailableError`。
+
+- `tests/test_backend_health.py` 新設 (~340 LOC、+8 tests):
+  - **Group 1 (monitor)**: 初期状態 HEALTHY、threshold/2x threshold での状態遷移、success で UNHEALTHY → HEALTHY 即復帰、stable state で transition 返さない。
+  - **Group 2 (engine action)**: warn は log only / demote で chain reorder (try-provider 順序検証) / off で監視ゼロ / UNHEALTHY → HEALTHY recovery transition log。
+  - **Group 3 (chain reorder)**: 全 provider UNHEALTHY 時は demote no-op (log spam なし、best-effort 続行)。
+
+#### Files touched
+
+```
+A  coderouter/guards/backend_health.py
+A  coderouter/guards/memory_pressure.py
+A  tests/test_backend_health.py
+A  tests/test_memory_pressure.py
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/routing/fallback.py
+```
+
+#### Why now
+
+`docs/inside/future.md §6.6` v1.10 着手順序 #4 — **Vision の核心**。v1.9.0 GA で「v1.10 候補」と整理した backlog で唯一 ~900 LOC スケールの Vision-critical pillar。v1.9.1 の monthly-budget で cost 軸の運用が見えるようになった上に、L2/L5 で **「6 系統障害のうち L2/L3/L5 を体系的に対処」** が完成。`L1 Context overflow` / `L4 Quality drift` / `L6 Mid-stream interrupt 強化` は v2.0-F/G/H の領域、v1.x で cover する long-run reliability の到達点として位置付け。
+
+#### Out of scope (v2.0 以降)
+
+- **L5 active probing** (60s 間隔の能動 GET /api/version) — 受動 observation で十分カバーできる範囲、active probe を加えると httpx の lifecycle / mocking の複雑度が増えるため v2.0-I (`continuous probing` pillar 拡張) で再検討。
+- **L2 thresholding (count of OOM events before mark)** — single OOM = mark の素朴実装で十分。複数 OOM 観測でしか mark しないという調整は実機運用 feedback が来てから。
+- **HEALTHY/DEGRADED/UNHEALTHY の 4 段階以上化** — 3 段階で十分、運用 feedback が来てから検討。
+
+---
+
+### v1.10 候補 #3: provider 月次予算上限 (LiteLLM 由来 / v1.9-D の累積版)
+
+**Theme: v1.9-D で「いくら使ったか」が見えるようになった所に、「これ以上使うな」を宣言できる gate を足す。** v1.9-D の `cost_total_usd` は process-lifetime cumulative なので billing-cycle 上限としては使えない (再起動で消える + 月境界で reset しない)。本機能は **per-provider monthly USD cap** を `cost.monthly_budget_usd` で宣言できるようにし、UTC 暦月単位の running total が cap に達した provider を chain resolver が skip するようにする。
+
+ユースケース例:
+
+```yaml
+providers:
+  - name: anthropic-direct
+    kind: anthropic
+    base_url: https://api.anthropic.com
+    model: claude-sonnet-4-6
+    cost:
+      input_tokens_per_million: 3.0
+      output_tokens_per_million: 15.0
+      monthly_budget_usd: 5.0   # ← v1.10 新フィールド
+  - name: ollama-local
+    base_url: http://localhost:11434/v1
+    model: qwen3.6:35b-a3b
+    # 無料 / cost 未設定 = 無制限 (skip 対象外)
+profiles:
+  - name: default
+    providers: [anthropic-direct, ollama-local]   # paid → free fallback
+```
+
+`anthropic-direct` が今月 5 USD 消費した時点で chain resolver が skip し、`ollama-local` (無料) に fall through する。`skip-budget-exceeded` info + (全 provider が cap に達した時のみ) `chain-budget-exceeded` warn が emit される。
+
+**Persistence の意図的な制限**: in-memory only。プロセス再起動で running total が 0 にリセットされる。**5-deps 不変原則** (`plan.md §5.4`) を守るため sqlite / Redis / disk は導入しない。durable な月次 enforcement が必要なオペレータは v1.9-D の `cost_total_usd` panel を外部監視ツール (Prometheus alertmanager / Grafana threshold) で受ければ十分カバー可能。
+
+- Tests: 831 → **839** (+8: BudgetTracker pure 3 / CostConfig schema 2 / engine integration 3)
+- Runtime deps: 5 → 5 (31 sub-release 連続据え置き)
+- Backward compat: 完全互換、`monthly_budget_usd` 未設定 deployment は挙動完全一致 (opt-in feature)
+
+#### Changes
+
+- `coderouter/config/schemas.py`:
+  - `CostConfig` に `monthly_budget_usd: float | None = None` を追加 (`ge=0.0`、None = 無制限)。
+  - docstring で UTC calendar-month + in-memory only persistence を明示、5-deps 不変原則との整合 (no sqlite/Redis) を文書化。
+
+- `coderouter/routing/budget.py` 新設 (~190 LOC):
+  - `BudgetTracker` クラス — per-provider current-month USD running total を `dict[str, float]` で保持、`threading.RLock` 配下。月境界判定は `_utc_month_key` ヘルパ (UTC `datetime.now()` 経由、tests は `now=` 引数で deterministic に注入可能)。
+  - 公開 API: `record(provider, cost_usd)` / `is_over_budget(provider, budget_usd)` / `current_month()` / `total_for_provider(provider)` / `reset()`。
+  - **Lazy month rollover**: 各 public call の入口で `_roll_if_needed` を呼び、cached month と current UTC month が違えば `_totals` を clear してから query に答える。background timer 不要。
+  - `is_over_budget` は `>=` 比較 — exact-hit の "5.00 USD" は exhausted と判定 (conservative: 次の call は bill しない)。
+
+- `coderouter/logging.py`:
+  - `SkipBudgetExceededPayload` / `ChainBudgetExceededPayload` TypedDict + `log_skip_budget_exceeded` / `log_chain_budget_exceeded` ヘルパを追加。`log_chain_paid_gate_blocked` のパターンを完全 mirror、payload に `month` (YYYY-MM UTC bucket) を含める。
+
+- `coderouter/routing/fallback.py`:
+  - `FallbackEngine.__init__` に `_budget_tracker: BudgetTracker = BudgetTracker()` を追加、`_adaptive` と同じ lazy property pattern で `_budget` を露出 (legacy tests の `__new__` 経路でも空 tracker が返る)。
+  - `_resolve_chain` を 2-pass に refactor: pass 1 が paid-gate (既存ロジック)、pass 2 が **budget-gate** (新規)。budget-gate は `provider_cfg.cost.monthly_budget_usd` が set されている provider のみ check、`is_over_budget` ならば `skip-budget-exceeded` info を emit して候補から除外。chain が空になった時の aggregate warn は `blocked_by_budget` を優先 (paid-gate より後段で filter したため)、`chain-budget-exceeded` を fire。
+  - `_emit_cache_observed` / `_emit_cache_observed_streaming` に `budget: BudgetTracker | None = None` 引数を追加、`compute_cost_for_attempt` の結果が positive な時に `budget.record(provider, cost.total_usd)` を呼ぶ。engine 側 2 callsite (`generate_anthropic` / `stream_anthropic`) で `budget=self._budget` を渡す配線。
+
+- `coderouter/metrics/collector.py`:
+  - `_provider_skipped_budget: Counter[str]` + `_chain_budget_exceeded_total: int` を追加、`_provider_skipped_paid` / `_chain_paid_gate_blocked_total` の対称配置。
+  - `_dispatch` に `skip-budget-exceeded` / `chain-budget-exceeded` event の handler を追加。`reset()` / `snapshot()` も両 counter を含むように拡張。
+  - module docstring の event inventory に v1.10 行 2 件追記。
+
+- `coderouter/metrics/prometheus.py`:
+  - `coderouter_provider_skipped_total{provider, reason="budget"}` を既存の `paid` / `unknown` と同じ counter に同居 (dashboards が reason 別 stack できるように)。
+  - `coderouter_chain_budget_exceeded_total` scalar counter を新設 (`coderouter_chain_paid_gate_blocked_total` の対称配置)。
+
+- `tests/test_budget.py` 新設 (~340 LOC、+8 tests):
+  - **Group 1 (BudgetTracker pure)**: record 蓄積 / is_over_budget の `>=` boundary semantics / 月境界 rollover (`now=` 引数で April→May 跨ぎを deterministic に検証)。
+  - **Group 2 (CostConfig schema)**: `monthly_budget_usd: 5.0` 受理、負値 reject (pydantic `ge=0.0`)。
+  - **Group 3 (engine integration)**: pre-loaded budget でも primary skip + fallback 経由 (warn なし) / 全 provider cap で `NoProvidersAvailableError` + `chain-budget-exceeded` warn 1 回 / 実 attempt の cost が `BudgetTracker` に蓄積されて 3 回目で skip されることを確認 (real wiring の end-to-end test)。
+
+#### Files touched
+
+```
+A  coderouter/routing/budget.py
+A  tests/test_budget.py
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/logging.py
+M  coderouter/metrics/collector.py
+M  coderouter/metrics/prometheus.py
+M  coderouter/routing/fallback.py
+```
+
+#### Why now
+
+`docs/inside/future.md §6.6` の v1.10 着手順序 #3。v1.9-D で観測の基盤ができた直後に **enforcement** を足す自然な順序、cost-aware ユーザー (paid backend を組み込む operator) にとって最も価値の高い v1.10 候補。LiteLLM が同等機能を `litellm[proxy]` の中で重実装 (Redis 必須) しているのに対し、CodeRouter は in-memory + 5-deps 維持で「個人開発者用の budget guard」として割り切ることで構造的負債を避ける。
+
+#### Out of scope
+
+- **Persistent budget state** (sqlite / Redis / disk-backed) — 5-deps 不変原則により未対応。durable enforcement 必要なケースは v1.9-D dashboard を外部 alerting に繋ぐ運用で代替。
+- **Rolling 30-day window** — UTC calendar month で十分 (typical billing cycle と一致、月境界判定の rollover 実装が単純)。rolling window は `_utc_month_key` を date-windowed key に差し替えれば追加できるが、operator request が来てから判断。
+- **Per-profile budget** (vs per-provider) — provider 単位で十分。同じ provider を複数 profile が共有する場合 budget は共有されるべき (実コストの帰属先は provider なので) という意味的にも provider 帰属が正しい。
+
+---
+
 ## [v1.9.1] — 2026-05-01 (Patch — v1.10 候補から quick win 2 件先行刈取り)
 
 **Theme: v1.9.0 GA で「v1.10 候補」と整理した backlog のうち、構造的負債を伴わない quick win 2 件 (streaming cache 観測の完成形 + agent-driven model 識別子で profile 分岐) を patch として束ねる。** 観測ループの埋め残しと、Claude Code / Cursor 等 agent 側の設定 (Opus / Sonnet / Haiku 使い分け) が CodeRouter の declarative routing に反映できる経路を、完全互換で追加。両機能とも v1.9.0 既存 framework (`cache-observed` log / `auto_router.rules`) の延長線で、新 framework / 依存追加なし。
