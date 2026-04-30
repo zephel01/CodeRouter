@@ -3,9 +3,9 @@
 > **Local-first, free-first, fallback-built-in な LLM ルーター。**
 > Claude Code / OpenAI 互換クライアントから単一エンドポイントで叩けて、内部で「ローカル → 無料クラウド → 有料クラウド」の3層 fallback を自動で行う。
 
-最終更新: 2026-04-27
+最終更新: 2026-05-01
 作成者: zephel01
-状態: **v1.8.4 — LM Studio 0.4.12 検証 release** (2026-04-27、PyPI 未 publish の検証 release)。Qwen3.5 9B / Qwen3.6 35B-A3B / `Jackrong/Qwopus3.5-9B-v3-GGUF` の 3 model が LM Studio 経由で完全動作 (OpenAI 互換 native tool_calls + Anthropic 互換 tool_use 両ルート)、`cache_read_input_tokens: 280` 観測で Anthropic prompt caching まで成立。CodeRouter 側追加コード不要、`examples/providers.yaml` に `lmstudio-*` 4 entry + test profile 2 件追加。直前の出荷は v1.8.3 (2026-04-26、PyPI 公開済、tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip)。
+状態: **v1.9.1 — patch release** (2026-05-01、CHANGELOG `[v1.9.1]` 参照)。v1.9.0 GA で「v1.10 候補」と整理した backlog のうち構造的負債を伴わない quick win 2 件を patch として束ねて出荷: (a) **v1.9-B2** streaming 経路の usage 集約 — `_StreamUsageAccumulator` + `_emit_cache_observed_streaming` で `cache-observed` log の streaming `outcome=unknown` placeholder を観測値に置換、(b) **per-model auto-routing** — `RuleMatcher.model_pattern` 5 番目 matcher 追加、`re.fullmatch` で body の `model` field を評価して Opus/Sonnet/Haiku で profile 分岐 (free-claude-code 由来)。Tests: 830 → **838** (+8)、Runtime deps: 5 → 5 (30 sub-release 連続据え置き)、完全互換。直前の出荷は v1.9.0 GA (2026-04-29、6 sub-release 統合 — Cache observability + Adaptive routing + Cost-aware + L3 Tool-loop guard)。
 - **過去の出荷済みリリース**: [`CHANGELOG.md`](./CHANGELOG.md) を参照
 - **未来の方向性 (Vision / 中長期ロードマップ / 市場分析 / 競合分析)**: 内部メモとして別途整理 (公開リポジトリには含まれない)
 - **本ドキュメント**: 現在進行中の実装スケジュール (v1.9 系) + ローカル backend 別接続マトリクス + 検討中 / やらないこと
@@ -93,10 +93,15 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 
 ### v1.10 候補 / v1.9.x 残課題 (実機検証フィードバック反映、未着手分)
 
-- **v1.9-B2 候補**: `message_delta` event の usage 集約で、streaming 経路でも実 token 数 / cache_read / cache_creation を取得 (現状は `outcome=unknown` 固定で記録、実装は v1.9-A の延長線)
-- **v1.9-E phase 2 候補**: L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder) — phase 1 (L3 Tool-loop guard) は v1.9.0 で出荷済み
+> **v1.9.1 で完了済 (2026-05-01)**:
+> - **v1.9-B2** streaming 経路の usage 集約 (`_StreamUsageAccumulator` + `_emit_cache_observed_streaming`、+3 tests)
+> - **per-model auto-routing** (`RuleMatcher.model_pattern` + `re.fullmatch` semantics + signals payload に model 追記、+5 tests)
+> 詳細は CHANGELOG `[v1.9.1]` 参照。
+
+- **v1.9-E phase 2 候補**: L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder) — phase 1 (L3 Tool-loop guard) は v1.9.0 で出荷済み。**Vision の核心 (8 時間 agent ループでも止まらない)** を完成させる pillar、~900 LOC / 1-2 週間
+- **provider 月次予算上限** (LiteLLM 由来、v1.9-D の累積版) — `monthly_budget_usd` で provider 単位の running total + 超過時 skip + log。~400 LOC / 3-5 日
+- **longContext auto-switch** — `auto_router` rule type 5 として `content_token_count_min` matcher 追加 (claude-code-router task-based 取込)。~200 LOC / 3-5 日
 - **`docs/verification.md` の精緻化**: v1.9.0 GA 直前の実機検証で発見した知見 (MoE モデルの罠、rolling-window タイミング制約、サイズ差を作るテクニック) を verification 手順に反映
-- **v1.10 候補**: longContext auto-switch (claude-code-router の task-based を auto_router に取り込み)
 
 > v2.0 以降の機能 (Pillar 別 deepening / プラグイン / MCP server / Web UI) は内部メモで別途整理
 
@@ -127,11 +132,11 @@ LM Studio 0.4.12+ で Anthropic 互換 `/v1/messages` 公式サポート + Qwen 
 
 | Ver | 日付 | タグ | 一言 |
 | --- | --- | --- | --- |
+| **v1.9.1** | 2026-05-01 | `v1.9.1` | v1.10 候補から quick win 2 件を patch で先行刈取り — (a) v1.9-B2 streaming 経路の usage 集約 (`_StreamUsageAccumulator` で `cache-observed` log の placeholder を観測値に置換)、(b) per-model auto-routing (`RuleMatcher.model_pattern` 5 番目 matcher、Opus/Sonnet/Haiku で profile 分岐、free-claude-code 由来)。tests +8 (830→838)、Runtime deps 据え置き 30 連続、完全互換 |
+| **v1.9.0** | 2026-04-29 | `v1.9.0` | Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability (6 sub-release 統合 a1〜a6 + GA、L3 break action ingress fix 含む) |
 | **v1.8.4** | 2026-04-27 | (検証 release、PyPI 未 publish) | LM Studio 0.4.12 で Qwen3.5 9B / Qwen3.6 35B-A3B / Qwopus3.5-9B-v3 全動作確認 + Anthropic prompt caching 成立 (`cache_read_input_tokens: 280`)、`examples/providers.yaml` に lmstudio-* 4 entry + test profile 2 件 |
 | **v1.8.3** | 2026-04-26 | `v1.8.3` | tool_calls probe を thinking 対応 + adapter で `reasoning_content` strip — llama.cpp 直叩きで Qwen3.6 復権、active-harmful 誤診断 (tools=false suggestion) を解消 |
 | **v1.8.2** | 2026-04-26 | `v1.8.2` | doctor probe を thinking モデル対応 (num_ctx 32→256/1024、streaming 128→512/1024) — Gemma 4 偽陽性解消、メタ教訓「diagnostic ツール自身も diagnostic され続ける必要がある」 |
-| **v1.8.1** | 2026-04-26 | `v1.8.1` | 実機検証反映 patch — mode_aliases 解決バグ修正、Qwen3.6 系 Ollama 経由詰みを認識 (`claude_code_suitability: ok` 撤回)、troubleshooting.md §4-2 新設 |
-| **v1.8.0** | 2026-04-26 | `v1.8.0` | 用途別 4 プロファイル + GLM/Gemma 4/Qwen3.6 公式化 + apply 自動化 (= v1.7-B umbrella、6 サブリリース統合)、PyPI Trusted Publishing 自動化 |
 
 過去のリリース (v0.1.0〜v1.7.0) は [`CHANGELOG.md`](./CHANGELOG.md) の各エントリ、各マイルストーンの DoD・実装知見は該当セクション（v0.1: §7 / v0.2: §8 / v0.5: §9 / 横断ログ: §18）に格納。
 

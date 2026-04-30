@@ -6,6 +6,156 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.9.1] — 2026-05-01 (Patch — v1.10 候補から quick win 2 件先行刈取り)
+
+**Theme: v1.9.0 GA で「v1.10 候補」と整理した backlog のうち、構造的負債を伴わない quick win 2 件 (streaming cache 観測の完成形 + agent-driven model 識別子で profile 分岐) を patch として束ねる。** 観測ループの埋め残しと、Claude Code / Cursor 等 agent 側の設定 (Opus / Sonnet / Haiku 使い分け) が CodeRouter の declarative routing に反映できる経路を、完全互換で追加。両機能とも v1.9.0 既存 framework (`cache-observed` log / `auto_router.rules`) の延長線で、新 framework / 依存追加なし。
+
+含まれる出荷 2 件 (`docs/inside/future.md §6.6` の v1.10 着手順序 #1, #2):
+
+| # | sub-release | テーマ | LOC | tests |
+|---|---|---|---|---|
+| 1 | **v1.9-B2** | streaming 経路の usage 集約 — `_StreamUsageAccumulator` + `_emit_cache_observed_streaming` で `outcome=unknown` placeholder を観測値に置換 | ~150 | +3 |
+| 2 | **per-model auto-routing** | `RuleMatcher.model_pattern` 5 番目 matcher 追加、`re.fullmatch` で body model id を評価 (free-claude-code 由来) | ~120 | +5 |
+
+- Tests: 830 → **838** (+8 累積、v1.9-B2 +3 / per-model +5)
+- Runtime deps: 5 → 5 (30 sub-release 連続据え置き)
+- Backward compat: 完全互換、既存 yaml / API / log payload 全部既存と同じ schema、新フィールド (`model_pattern`) を使わない deployment は挙動完全一致
+- pyproject version: 1.9.0 → 1.9.1
+
+### Migration
+
+不要。**v1.9.0 / v1.9.0a* からの自然なアップグレード**:
+
+- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
+- streaming で `cache-observed` log を読んでいる外部 consumer (例: dashboard / Prometheus / 自前 JSONL parser) には、v1.9.0a6 までゼロ固定だった `cache_read_input_tokens` / `cache_creation_input_tokens` / `input_tokens` / `output_tokens` / `outcome` / `cost_usd` / `cost_savings_usd` が観測値に置き換わる。consumer 側は **値が増えた** だけで schema は同じ、ロジック変更不要
+- `auto_router.rules[].if.model_pattern` を使い始めるには yaml に 1 行足すだけ、既存 rule に影響なし
+
+### Out of scope (v1.10 / v1.9.x 続編)
+
+[v1.9.0] GA ノートと `docs/inside/future.md §6.6` で示した v1.10 候補から残り 3 件:
+
+- **provider 月次予算上限** (LiteLLM 由来、v1.9-D の累積版) — `monthly_budget_usd` で provider 単位の running total + 超過時 skip + log。~400 LOC、3-5 日。
+- **v1.9-E phase 2** — L2 Memory pressure (LM Studio / ollama backend OOM 検知) / L5 Backend health (continuous probe + chain reorder)。**Vision の核心 (8 時間 agent ループでも止まらない)** を完成させる pillar。~900 LOC、1-2 週間。
+- **longContext auto-switch** — `auto_router` rule type 5 として `content_token_count_min` matcher 追加 (claude-code-router task-based 取込)。~200 LOC、3-5 日。
+
+これら 3 件は構造拡張を伴うため v1.9.1 patch ではなく v1.10.0 minor で個別 sub-release にして出荷する想定。
+
+### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/auto_router.py
+M  coderouter/routing/fallback.py
+M  docs/inside/future.md
+M  plan.md
+M  pyproject.toml
+M  tests/test_auto_router.py
+M  tests/test_fallback_cache_observed.py
+```
+
+---
+
+### per-model auto-routing (v1.10 候補 #2、free-claude-code 由来)
+
+**Theme: agent が送ってきた `model` フィールドそのものを auto_router の判定軸に追加。** Claude Code / Cursor 等の agent 側設定 (Opus / Sonnet / Haiku の使い分け) を、CodeRouter 側 profile chain の選択にも反映できるようにする。`auto_router.rules[].if.model_pattern` を 5 番目の matcher として導入、既存 4 種 (`has_image` / `code_fence_ratio_min` / `content_contains` / `content_regex`) と同じ "exactly one" 規約と eager regex compile (typo は startup で fast-fail) を継承。
+
+ユースケース例:
+
+```yaml
+auto_router:
+  rules:
+    - if: { model_pattern: "claude-3-5-haiku.*" }
+      route_to: lightweight
+    - if: { model_pattern: "claude-3-5-sonnet.*" }
+      route_to: coding
+  default_rule_profile: writing
+```
+
+agent 側で「モデルの使い分けは決まってる」状況に CodeRouter が綺麗に乗れる。`free-claude-code` repo の同様機能を CodeRouter の declarative auto_router framework に取り込んだ形。
+
+- Tests: 833 → **838** (+5: Sonnet→coding / Haiku→lightweight / no-model field → fallthrough / 不正 regex は schema load で fast-fail / model_pattern と content rule の first-match-wins precedence)
+- Runtime deps: 5 → 5 (30 sub-release 連続据え置き)
+- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない、`model_pattern` を使わない deployment は挙動完全一致
+
+#### Changes
+
+- `coderouter/config/schemas.py`:
+  - `RuleMatcher` に `model_pattern: str | None = None` を追加、`_MATCHER_FIELDS` tuple に追加 (zero/multiple-fields の "exactly one" バリデータが自動適用)。
+  - `_compile_regex_eagerly` バリデータを `model_pattern` も覆うよう拡張、不正な regex は schema load で `ValueError("Invalid regex for model_pattern ...")` を発火 (`content_regex` と同じ fast-fail パターン)。
+  - docstring の Variants セクションに 5 番目として `model_pattern` を追記、`re.fullmatch` semantics と `content_regex` の `re.search` との違い (model 識別子は "structured tokens" であり全体描写型) を明示。
+
+- `coderouter/routing/auto_router.py`:
+  - `_extract_model(body)` ヘルパを新設 — 両 ingress (Anthropic `/v1/messages` / OpenAI `/v1/chat/completions`) で body の top-level `model` field を 1 ヶ所で抽出、空文字列 / 非 str は None 扱い。
+  - `_match_rule(rule, message, text, model)` シグネチャに `model: str | None` を追加、`model_pattern` matcher を 5 番目の分岐として実装。`re.fullmatch` で評価 (model id は構造的 token なので部分一致より全体記述型の方が直観に合う)。`model is None` の時は False を返して fallthrough させる (空 body などの test fixtures 対策)。
+  - `classify(...)` 内で `_extract_model(body)` を一度だけ呼び、`_match_rule` に流す。`user_msg is None` でも `model_pattern` rule は評価する (空 messages でも model 経路で route 可能)。
+  - `_emit_resolved` / `_emit_fallthrough` の `signals` payload に `model` を追記、auto-router-resolved log で何の model id で routing 判断したかが dashboard / Prometheus exporter から見える。
+
+- `tests/test_auto_router.py` Group 6 (per-model auto-routing) を新設、5 ケース:
+  - `test_classify_model_pattern_sonnet_routes_to_coding` — 基本ケース、`claude-3-5-sonnet.*` → coding profile。content は writing 寄りでも model rule が勝つ。
+  - `test_classify_model_pattern_haiku_routes_to_lightweight` — 4-profile fixture (`_model_pattern_config` で lightweight 追加)、Haiku id → lightweight profile。
+  - `test_classify_model_pattern_no_model_field_falls_through` — body に `model` field がない時、`r".+"` でも match せず default_rule_profile に落ちる (fixtures / test harness 用 robustness)。
+  - `test_model_pattern_invalid_regex_fast_fails_at_load` — `r"([unclosed"` → `RuleMatcher` 構築時に `ValueError(model_pattern)` (`content_regex` と同じ eager compile path)。
+  - `test_model_pattern_first_match_wins_over_later_content_rule` — model_pattern rule を content_contains rule より前に置くと、両方 match する body でも先勝、global "first match wins" を pin。
+
+#### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/auto_router.py
+M  tests/test_auto_router.py
+```
+
+#### Why now
+
+`docs/inside/future.md §6.6` の v1.10 着手順序で 2 番目に推奨されていた quick win。実装規模 ~120 LOC (見積 ~150-200 LOC を下回って収束)、tests +5、半日工数。既存 auto_router framework の 1 matcher 追加なので構造的負債なし、`free-claude-code` 由来要望を CodeRouter の declarative 思想を崩さずに取り込めた。次の v1.10 候補 (provider 月次予算 / longContext auto-switch / v1.9-E phase 2) の前段階として位置付け。
+
+---
+
+### v1.9-B2: streaming 経路の usage 集約 (v1.10 候補 #1)
+
+**Theme: v1.9.0 で意図的に v1.10 候補へ繰り越した quick win を回収。** v1.9.0a6 で「streaming パスでも `cache-observed` log を emit する」ところまでは揃えたが、token 数は `outcome=unknown` + ゼロ固定の placeholder だった。本 patch は `message_start.message.usage` + 終端 `message_delta.usage` を accumulator で max-merge 集約し、非 streaming (`generate_anthropic`) と同じ outcome 分類 + cost 計算 + ログ payload 形状に揃える。`/dashboard` / Prometheus / MetricsCollector 側は branch 不要で streaming 経路の数字が取れるようになる。
+
+- Tests: 830 → **833** (+3: cache_hit / cache_creation / no_cache の streaming 集約 — `tests/test_fallback_cache_observed.py`)
+- Runtime deps: 5 → 5 (29 sub-release 連続据え置き)
+- Backward compat: 完全互換、log payload は v1.9-A と同じ schema、`streaming=true` flag のみ意味的に "観測値" になる (ゼロ placeholder ではなくなる)
+
+#### Changes
+
+- `coderouter/routing/fallback.py`:
+  - `_StreamUsageAccumulator` を新設 — `message_start.message.usage` と `message_delta.usage` から `input_tokens` / `output_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens` を per-field max-merge で集約。`output_tokens` は終端 `message_delta` で最終値が決まるため max が安全、cache fields は API minor version によって `message_start` / `message_delta` どちらにも現れる可能性があるため両方を観測。`usage_present` は「upstream が空 dict も含めて usage を返したか」を保持し、何も流れてこなかった streaming は引き続き `outcome=unknown` に分類。
+  - `_emit_cache_observed_streaming(...)` を追加 — accumulator 値を `classify_cache_outcome` / `compute_cost_for_attempt` に通して `log_cache_observed` を呼ぶ。非 streaming `_emit_cache_observed` と同じ outcome 分類 + cost 計算ロジック。
+  - `stream_anthropic(...)` 内のループで `acc = _StreamUsageAccumulator()` を初期化、`first` および後続 `event_iter` の各 event に `acc.observe(...)` を呼ぶ。完了時の `log_cache_observed(..., outcome="unknown", *=0)` を `_emit_cache_observed_streaming(acc, ..., provider_config=adapter.config)` に置換。
+  - `_emit_cache_observed` の docstring を更新 — `streaming=True` arg は openai_compat 経路 (downgrade で 1 つの response に collapse される) 用に残す説明に改訂。
+
+- `tests/test_fallback_cache_observed.py`:
+  - `_CacheAnthropicAdapter.stream_anthropic` を constructor 引数駆動に変更 (`message_start.message.usage` に input_tokens + cache 系、`message_delta.usage` に input_tokens + output_tokens を流す、ゼロ時は空 dict を出して "usage 一切なし" を再現可能)。
+  - 既存 `test_cache_observed_fires_on_streaming_with_unknown_outcome` の docstring を v1.9-B2 文脈に更新 (上流から usage が 1 件も流れない時の `unknown` 床をピン留め)。
+  - 新規 3 ケース:
+    - `test_streaming_aggregates_cache_hit_usage` — `cache_read_input_tokens=2048` を含む stream → `outcome=cache_hit` + 入出力カウンタ集約。
+    - `test_streaming_aggregates_cache_creation_usage` — `cache_creation_input_tokens=1500` の stream → `outcome=cache_creation`。
+    - `test_streaming_aggregates_no_cache_outcome` — non-zero usage + cache fields なし → `outcome=no_cache` (本番最頻 case、v1.9.0a6 の placeholder では拾えていなかった)。
+
+#### Why now
+
+v1.9.0 GA ノートで明示した「v1.10 候補」のうち最も短期に取れる quick win。実装サイズ ~150 LOC、半日工数で `outcome=unknown` placeholder を観測値に置き換えられるため、cost dashboard / cache-hit rate panel の streaming 経路カバレッジが完成する。`v1.9-E phase 2` (L2/L5) や per-model auto-routing といった上位 priority 作業の前段で済ませておくと、その後の adaptive routing / Vision pillar 完成度が上がる。
+
+#### Out of scope
+
+- ChatRequest.stream() 経路 (OpenAI-shaped streaming) は対象外 — `stream_anthropic` の sibling であり、Anthropic 経由の cache observation は未対応の領域。Anthropic prompt cache を利用する client は実質 `/v1/messages` 経由なので影響範囲は限定的。
+- v1.9.0a6 で論じた "downgrade 後の synthesize_anthropic_stream_from_response" 経路 — 元になる AnthropicResponse から `message_start` event が usage 付きで再構築されるため、accumulator が自動でカバーする (追加実装不要)。
+
+#### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/routing/fallback.py
+M  tests/test_fallback_cache_observed.py
+```
+
+---
+
 ## [v1.9.0] — 2026-04-29 (Umbrella tag — Cache observability + Adaptive routing + Cost-aware + Long-run reliability)
 
 **Theme: 「観測 → 理解 → 行動 → 信頼性」を 1 minor で揃える、observability pillar の成熟。** v1.9.0 は 6 sub-release (v1.9-A〜E) を通じて、CodeRouter を「動いてはいるが何が起きているか分からない」状態から、「**何にいくら使った / どこで遅くなった / 何で詰まった**」が運用ログ 1 行で分かる状態に押し上げる。具体的には:

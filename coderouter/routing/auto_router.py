@@ -142,17 +142,45 @@ def _code_fence_ratio(text: str) -> float:
     return fenced / len(text)
 
 
-def _match_rule(rule: AutoRouteRule, message: dict[str, Any], text: str) -> bool:
+def _match_rule(
+    rule: AutoRouteRule,
+    message: dict[str, Any] | None,
+    text: str,
+    model: str | None,
+) -> bool:
     m = rule.match
     if m.has_image is True:
-        return _has_image(message)
+        return message is not None and _has_image(message)
     if m.code_fence_ratio_min is not None:
         return _code_fence_ratio(text) >= m.code_fence_ratio_min
     if m.content_contains is not None:
         return m.content_contains in text
     if m.content_regex is not None:
         return re.search(m.content_regex, text) is not None
+    if m.model_pattern is not None:
+        # [Unreleased]: per-model auto-routing (free-claude-code 由来).
+        # ``re.fullmatch`` because model identifiers are structured
+        # tokens — patterns describe the whole id with explicit
+        # wildcards (``claude-3-5-haiku.*``) rather than substrings.
+        # Pre-compiled at schema load so this path is regex-safe.
+        if model is None:
+            return False
+        return re.fullmatch(m.model_pattern, model) is not None
     return False  # pragma: no cover — _exactly_one guards against this
+
+
+def _extract_model(body: dict[str, Any]) -> str | None:
+    """Pull the top-level ``model`` field if it's a non-empty string.
+
+    Both Anthropic ``/v1/messages`` and OpenAI ``/v1/chat/completions``
+    bodies carry ``model`` at the top level; the auto-router treats
+    them uniformly. Bodies without a ``model`` field (rare — typically
+    test harnesses) cannot match any ``model_pattern`` rule.
+    """
+    candidate = body.get("model")
+    if isinstance(candidate, str) and candidate:
+        return candidate
+    return None
 
 
 def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
@@ -173,10 +201,11 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
     """
     user_msg = _latest_user_message(body)
     text = _extract_text(user_msg) if user_msg is not None else ""
+    model = _extract_model(body)
 
     auto_cfg = config.auto_router
     if auto_cfg is not None and auto_cfg.disabled:
-        _emit_fallthrough(auto_cfg.default_rule_profile, text, disabled=True)
+        _emit_fallthrough(auto_cfg.default_rule_profile, text, model, disabled=True)
         return auto_cfg.default_rule_profile
 
     rules = auto_cfg.rules if (auto_cfg is not None and auto_cfg.rules) else BUNDLED_RULES
@@ -186,21 +215,24 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
         else BUNDLED_DEFAULT_RULE_PROFILE
     )
 
-    if user_msg is None:
-        _emit_fallthrough(default_profile, text)
-        return default_profile
-
+    # ``model_pattern`` matchers can fire even without a user message
+    # (e.g. an empty messages list with only a model field). Other
+    # matchers still require ``user_msg`` to be present — they short
+    # out via ``_match_rule``'s message-None handling.
     for rule in rules:
-        if _match_rule(rule, user_msg, text):
-            _emit_resolved(rule, user_msg, text)
+        if _match_rule(rule, user_msg, text, model):
+            _emit_resolved(rule, user_msg, text, model)
             return rule.profile
 
-    _emit_fallthrough(default_profile, text)
+    _emit_fallthrough(default_profile, text, model)
     return default_profile
 
 
 def _emit_resolved(
-    rule: AutoRouteRule, message: dict[str, Any], text: str
+    rule: AutoRouteRule,
+    message: dict[str, Any] | None,
+    text: str,
+    model: str | None,
 ) -> None:
     logger.info(
         "auto-router-resolved",
@@ -208,16 +240,17 @@ def _emit_resolved(
             "rule_id": rule.id,
             "resolved_profile": rule.profile,
             "signals": {
-                "has_image": _has_image(message),
+                "has_image": message is not None and _has_image(message),
                 "code_fence_ratio": round(_code_fence_ratio(text), 3),
                 "content_len": len(text),
+                "model": model,
             },
         },
     )
 
 
 def _emit_fallthrough(
-    profile: str, text: str, disabled: bool = False
+    profile: str, text: str, model: str | None, disabled: bool = False
 ) -> None:
     logger.info(
         "auto-router-fallthrough",
@@ -226,6 +259,7 @@ def _emit_fallthrough(
             "signals": {
                 "code_fence_ratio": round(_code_fence_ratio(text), 3),
                 "content_len": len(text),
+                "model": model,
                 "disabled": disabled,
             },
         },

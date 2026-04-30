@@ -687,3 +687,160 @@ def test_prometheus_fallthrough_counter_increments(
 
     body = client.get("/metrics").text
     assert "coderouter_auto_router_fallthrough_total 2" in body
+
+
+# ---------------------------------------------------------------------------
+# Group 6: per-model auto-routing ([Unreleased] / free-claude-code 由来)
+# ---------------------------------------------------------------------------
+
+
+def _model_pattern_config(
+    base: CodeRouterConfig, *, lightweight_provider: str = "ollama-coder"
+) -> CodeRouterConfig:
+    """Augment the 3-profile fixture with a 4th ``lightweight`` profile.
+
+    Used by the per-model auto-routing tests to exercise the most
+    common deployment shape: agents that send Sonnet → coding chain,
+    agents that send Haiku → smaller / faster chain.
+    """
+    return base.model_copy(
+        update={
+            "profiles": [
+                *base.profiles,
+                FallbackChain(name="lightweight", providers=[lightweight_provider]),
+            ],
+        }
+    )
+
+
+def test_classify_model_pattern_sonnet_routes_to_coding(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: ``model_pattern`` matches Sonnet IDs → ``coding`` profile.
+
+    Mirrors the example in ``docs/inside/future.md §6.3`` — agents that
+    send the Sonnet model id route to the coding chain regardless of
+    request content shape (no image / no fences needed).
+    """
+    cfg = three_profile_config.model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:sonnet-coding",
+                        profile="coding",
+                        match=RuleMatcher(model_pattern=r"claude-3-5-sonnet.*"),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+    body = {
+        "model": "claude-3-5-sonnet-20241022",
+        "messages": [{"role": "user", "content": "tell me a story"}],
+    }
+    assert classify(body, cfg) == "coding"
+
+
+def test_classify_model_pattern_haiku_routes_to_lightweight(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: Haiku IDs → ``lightweight`` profile (smaller / faster)."""
+    cfg = _model_pattern_config(three_profile_config).model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:haiku-lightweight",
+                        profile="lightweight",
+                        match=RuleMatcher(model_pattern=r"claude-3-5-haiku.*"),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+    body = {
+        "model": "claude-3-5-haiku-20241022",
+        "messages": [{"role": "user", "content": "summarize this"}],
+    }
+    assert classify(body, cfg) == "lightweight"
+
+
+def test_classify_model_pattern_no_model_field_falls_through(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """A request body without a ``model`` field cannot match any
+    ``model_pattern`` rule and falls through to ``default_rule_profile``.
+
+    Test bodies without a model field are common in fixtures; the
+    classifier must not crash on them and must not spuriously match
+    a regex against ``None``.
+    """
+    cfg = three_profile_config.model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:any-model",
+                        profile="coding",
+                        match=RuleMatcher(model_pattern=r".+"),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+    body = {"messages": [{"role": "user", "content": "no model field"}]}
+    assert classify(body, cfg) == "writing"
+
+
+def test_model_pattern_invalid_regex_fast_fails_at_load() -> None:
+    """[Unreleased]: bad ``model_pattern`` is rejected at schema load,
+    same eager-compile path as ``content_regex``.
+    """
+    with pytest.raises(ValueError, match=r"model_pattern"):
+        AutoRouteRule(
+            id="user:bad-model-regex",
+            profile="writing",
+            match=RuleMatcher(model_pattern=r"([unclosed"),
+        )
+
+
+def test_model_pattern_first_match_wins_over_later_content_rule(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """Spec §6: rules evaluate in order, first match wins.
+
+    A model_pattern rule placed before a content_contains rule fires
+    even when the body content would also match the later rule —
+    pinning the global "first match wins" semantics across matcher
+    types.
+    """
+    cfg = three_profile_config.model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:opus-multi",
+                        profile="multi",
+                        match=RuleMatcher(model_pattern=r"claude-3-opus.*"),
+                    ),
+                    AutoRouteRule(
+                        id="user:any-text-coding",
+                        profile="coding",
+                        match=RuleMatcher(content_contains="hello"),
+                    ),
+                ],
+                default_rule_profile="writing",
+            ),
+        }
+    )
+    # Both rules would match this body (Opus model id + "hello" in
+    # content); first-match-wins selects ``multi``.
+    body = {
+        "model": "claude-3-opus-20240229",
+        "messages": [{"role": "user", "content": "hello world"}],
+    }
+    assert classify(body, cfg) == "multi"

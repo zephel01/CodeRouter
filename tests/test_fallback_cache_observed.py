@@ -98,10 +98,27 @@ class _CacheAnthropicAdapter(AnthropicAdapter):
     ) -> AsyncIterator[AnthropicStreamEvent]:
         """Minimal 3-event stream: message_start → message_delta → message_stop.
 
-        Used by the v1.9.0a6 streaming cache-observed test. The events
-        themselves don't carry usage that would change the outcome —
-        the v1.9-A engine-side emit always records ``outcome=unknown``
-        for streaming until v1.9-B aggregates ``message_delta``."""
+        Drives the v1.9.0a6 / v1.9-B2 streaming cache-observed tests.
+        The constructor-supplied ``input_tokens`` / ``output_tokens`` /
+        ``cache_read_input_tokens`` / ``cache_creation_input_tokens``
+        decide the per-event ``usage`` payloads:
+          - ``message_start.message.usage`` carries ``input_tokens`` +
+            cache fields (Anthropic's actual wire shape).
+          - ``message_delta.usage`` carries the cumulative
+            ``output_tokens`` (also restates ``input_tokens`` so the
+            accumulator's max-merge is exercised).
+
+        When all four counters are zero the stream emits an empty
+        usage block in ``message_start`` so v1.9-B2 can still
+        distinguish "stream had no usage at all" (→ ``unknown``).
+        """
+        start_usage: dict[str, int] = {}
+        if self._input_tokens:
+            start_usage["input_tokens"] = self._input_tokens
+        if self._cache_read:
+            start_usage["cache_read_input_tokens"] = self._cache_read
+        if self._cache_creation:
+            start_usage["cache_creation_input_tokens"] = self._cache_creation
         yield AnthropicStreamEvent(
             type="message_start",
             data={
@@ -114,16 +131,21 @@ class _CacheAnthropicAdapter(AnthropicAdapter):
                     "model": self.config.model,
                     "stop_reason": None,
                     "stop_sequence": None,
-                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                    "usage": start_usage,
                 },
             },
         )
+        delta_usage: dict[str, int] = {}
+        if self._input_tokens:
+            delta_usage["input_tokens"] = self._input_tokens
+        if self._output_tokens:
+            delta_usage["output_tokens"] = self._output_tokens
         yield AnthropicStreamEvent(
             type="message_delta",
             data={
                 "type": "message_delta",
                 "delta": {"stop_reason": "end_turn", "stop_sequence": None},
-                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "usage": delta_usage,
             },
         )
         yield AnthropicStreamEvent(
@@ -372,7 +394,7 @@ async def test_cache_observed_fires_only_on_winning_provider_in_chain(
 
 
 # ----------------------------------------------------------------------
-# v1.9.0a6: streaming emission
+# v1.9.0a6 / v1.9-B2: streaming emission
 # ----------------------------------------------------------------------
 
 
@@ -380,19 +402,19 @@ async def test_cache_observed_fires_only_on_winning_provider_in_chain(
 async def test_cache_observed_fires_on_streaming_with_unknown_outcome(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """v1.9.0a6: ``stream_anthropic`` must pair its successful completion
-    with a ``cache-observed`` log line carrying ``streaming=true`` and
-    ``outcome=unknown``.
+    """v1.9.0a6 + v1.9-B2: ``stream_anthropic`` must pair its successful
+    completion with a ``cache-observed`` log line carrying
+    ``streaming=true``. When the upstream provided no usage data at all
+    (empty usage dicts in every event) the outcome falls through to
+    ``unknown`` — the honest classification once
+    :class:`_StreamUsageAccumulator` lands.
 
     Pre-v1.9.0a6 the streaming path did not call ``log_cache_observed``
-    at all (the v1.9-A non-streaming emission was implemented but the
-    streaming sibling was missed). The v1.9-A CHANGELOG / CacheOutcome
-    docstring promised "streaming responses always pair with
-    outcome=unknown until v1.9-B"; this test pins that contract.
-
-    Token counts are zero by design — message_delta aggregation lands
-    in v1.9-B; v1.9.0a6 only fixes the missing emission, not the
-    streaming token pickup.
+    at all. v1.9.0a6 wired the emission with hard-coded zeros +
+    ``outcome=unknown``; v1.9-B2 replaces the placeholder with real
+    aggregation. The "no usage from upstream → unknown" path remains
+    structurally identical to the placeholder behavior, so this test
+    still pins it as the ``unknown`` floor.
     """
     cfg = _anthropic_provider("anthropic-direct")
     config = _config([cfg], chain=["anthropic-direct"])
@@ -438,3 +460,110 @@ async def test_cache_observed_streaming_does_not_fire_on_provider_failure(
             pass
 
     assert _cache_observed_records(caplog) == []
+
+
+# ----------------------------------------------------------------------
+# v1.9-B2: streaming usage aggregation (message_start + message_delta)
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_streaming_aggregates_cache_hit_usage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """v1.9-B2: native Anthropic stream that surfaces
+    ``cache_read_input_tokens`` on ``message_start.message.usage`` →
+    aggregated cache-observed log carries ``outcome=cache_hit`` and the
+    real token counters (not the v1.9.0a6 zero placeholders)."""
+    cfg = _anthropic_provider("anthropic-direct")
+    config = _config([cfg], chain=["anthropic-direct"])
+    adapter = _CacheAnthropicAdapter(
+        cfg,
+        input_tokens=120,
+        output_tokens=30,
+        cache_read_input_tokens=2048,
+    )
+    engine = _engine(config, {"anthropic-direct": adapter})
+
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        async for _event in engine.stream_anthropic(_cache_request()):
+            pass
+
+    records = _cache_observed_records(caplog)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.provider == "anthropic-direct"
+    assert rec.outcome == "cache_hit"
+    assert rec.streaming is True
+    assert rec.cache_read_input_tokens == 2048
+    assert rec.cache_creation_input_tokens == 0
+    # input_tokens comes from message_start; the message_delta restates
+    # it and the accumulator's max-merge keeps the higher value.
+    assert rec.input_tokens == 120
+    # output_tokens is finalized by the terminal message_delta.
+    assert rec.output_tokens == 30
+    assert rec.request_had_cache_control is True
+
+
+@pytest.mark.asyncio
+async def test_streaming_aggregates_cache_creation_usage(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """v1.9-B2: stream that reports ``cache_creation_input_tokens`` on
+    ``message_start`` → aggregated log carries ``outcome=cache_creation``."""
+    cfg = _anthropic_provider("anthropic-direct")
+    config = _config([cfg], chain=["anthropic-direct"])
+    adapter = _CacheAnthropicAdapter(
+        cfg,
+        input_tokens=1500,
+        output_tokens=20,
+        cache_creation_input_tokens=1500,
+    )
+    engine = _engine(config, {"anthropic-direct": adapter})
+
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        async for _event in engine.stream_anthropic(_cache_request()):
+            pass
+
+    records = _cache_observed_records(caplog)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.outcome == "cache_creation"
+    assert rec.streaming is True
+    assert rec.cache_creation_input_tokens == 1500
+    assert rec.cache_read_input_tokens == 0
+    assert rec.input_tokens == 1500
+    assert rec.output_tokens == 20
+
+
+@pytest.mark.asyncio
+async def test_streaming_aggregates_no_cache_outcome(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """v1.9-B2: stream with non-zero usage but no cache fields →
+    ``outcome=no_cache`` (no longer the v1.9.0a6 ``unknown`` placeholder).
+
+    This is the most common production case: a non-cached request that
+    still reports proper input/output counts. The pre-v1.9-B2 streaming
+    path lost this signal; v1.9-B2 lifts it to parity with
+    ``generate_anthropic``.
+    """
+    cfg = _anthropic_provider("anthropic-direct")
+    config = _config([cfg], chain=["anthropic-direct"])
+    adapter = _CacheAnthropicAdapter(cfg, input_tokens=12, output_tokens=4)
+    engine = _engine(config, {"anthropic-direct": adapter})
+
+    with caplog.at_level(logging.INFO, logger="coderouter"):
+        async for _event in engine.stream_anthropic(_plain_request()):
+            pass
+
+    records = _cache_observed_records(caplog)
+    assert len(records) == 1
+    rec = records[0]
+    assert rec.outcome == "no_cache"
+    assert rec.streaming is True
+    assert rec.input_tokens == 12
+    assert rec.output_tokens == 4
+    assert rec.cache_read_input_tokens == 0
+    assert rec.cache_creation_input_tokens == 0
+    assert rec.request_had_cache_control is False

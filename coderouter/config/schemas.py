@@ -358,6 +358,18 @@ class RuleMatcher(BaseModel):
     - ``content_contains: "foo"`` — substring match (case-sensitive).
     - ``content_regex: r"..."`` — Python ``re.search``; compiled at
       model-construction time so typos fail startup.
+
+    Variants ([Unreleased] / per-model auto-routing, free-claude-code 由来):
+
+    - ``model_pattern: r"claude-3-5-haiku.*"`` — Python ``re.fullmatch``
+      against the request body's ``model`` field. Lets clients route on
+      the model identifier the agent (Claude Code / Cursor) sent
+      (Opus / Sonnet / Haiku → different profiles) without needing an
+      explicit ``profile`` field on the wire. Compiled at load like
+      ``content_regex``. ``fullmatch`` semantics (vs ``search`` for
+      ``content_regex``) because model identifiers are structured tokens
+      — users typically describe the whole identifier with a wildcard
+      tail, not an arbitrary substring.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -366,12 +378,14 @@ class RuleMatcher(BaseModel):
     code_fence_ratio_min: float | None = Field(default=None, ge=0.0, le=1.0)
     content_contains: str | None = None
     content_regex: str | None = None
+    model_pattern: str | None = None
 
     _MATCHER_FIELDS: tuple[str, ...] = (
         "has_image",
         "code_fence_ratio_min",
         "content_contains",
         "content_regex",
+        "model_pattern",
     )
 
     @model_validator(mode="after")
@@ -388,13 +402,22 @@ class RuleMatcher(BaseModel):
 
     @model_validator(mode="after")
     def _compile_regex_eagerly(self) -> Self:
-        """Compile ``content_regex`` at load so bad patterns fail startup."""
+        """Compile ``content_regex`` / ``model_pattern`` at load so bad
+        patterns fail startup rather than at first request.
+        """
         if self.content_regex is not None:
             try:
                 re.compile(self.content_regex)
             except re.error as exc:
                 raise ValueError(
                     f"Invalid regex for content_regex {self.content_regex!r}: {exc}"
+                ) from exc
+        if self.model_pattern is not None:
+            try:
+                re.compile(self.model_pattern)
+            except re.error as exc:
+                raise ValueError(
+                    f"Invalid regex for model_pattern {self.model_pattern!r}: {exc}"
                 ) from exc
         return self
 

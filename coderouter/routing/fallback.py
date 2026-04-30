@@ -187,10 +187,12 @@ def _emit_cache_observed(
     Anthropic API additions (e.g. ephemeral_5m vs ephemeral_1h
     breakdowns) extend ``model_extra`` without a schema change.
 
-    The ``streaming=True`` arg path is reserved — v1.9-A does not yet
-    aggregate ``message_delta`` events, so streaming responses always
-    record ``outcome=unknown`` (per :data:`coderouter.logging.CacheOutcome`
-    docstring). Streaming aggregation lands in v1.9-B.
+    The ``streaming=True`` arg path is exercised by
+    :func:`_emit_cache_observed_streaming` (v1.9-B2). The non-streaming
+    helper still accepts ``streaming`` as a parameter so the
+    OpenAI-compat downgrade path (which collapses to a single
+    AnthropicResponse before re-streaming) can mark its log line as
+    streaming without needing the message_delta accumulator.
 
     v1.9-D: when ``provider_config.cost`` is set, also computes the
     USD cost of this attempt + the counterfactual cache savings and
@@ -243,6 +245,170 @@ def _emit_cache_observed(
         input_tokens=usage.input_tokens,
         output_tokens=usage.output_tokens,
         streaming=streaming,
+        cost_usd=cost.total_usd,
+        cost_savings_usd=cost.savings_usd,
+    )
+
+
+# ---------------------------------------------------------------------------
+# v1.9-B2: streaming usage aggregation
+#
+# The Anthropic streaming SSE protocol delivers usage in two pieces:
+#   - ``message_start`` event carries ``message.usage`` with
+#     ``input_tokens`` + (optionally) ``cache_read_input_tokens`` /
+#     ``cache_creation_input_tokens``. ``output_tokens`` is typically 0
+#     here because the model hasn't generated anything yet.
+#   - terminal ``message_delta`` event carries ``usage.output_tokens``
+#     (the cumulative final count). On some API minor versions the
+#     ``message_delta.usage`` block also restates ``input_tokens`` and
+#     the cache fields.
+#
+# We accumulate with a max-merge per field so a delta that restates a
+# previously-seen counter never undercounts. Only ``message_start`` and
+# ``message_delta`` events are observed — content_block_* / ping /
+# message_stop carry no usage data.
+#
+# Output shape mirrors :func:`_emit_cache_observed` so the
+# ``cache-observed`` log payload is structurally identical between
+# streaming and non-streaming, and dashboards / Prometheus aggregators
+# don't have to special-case streaming.
+# ---------------------------------------------------------------------------
+
+
+class _StreamUsageAccumulator:
+    """Aggregate Anthropic streaming usage across SSE events.
+
+    Per-field semantics:
+        - ``input_tokens``: appears in ``message_start.message.usage``;
+          may be restated in ``message_delta.usage`` on newer API
+          minor versions. We take the max so restatements don't
+          undercount.
+        - ``output_tokens``: cumulative count, finalized in the terminal
+          ``message_delta.usage``. ``message_start`` typically reports 0.
+          Max-merge handles both shapes.
+        - ``cache_read_input_tokens`` / ``cache_creation_input_tokens``:
+          land on ``message_start.message.usage`` for native Anthropic
+          and LM Studio /v1/messages. Max-merge across events tolerates
+          API additions that may restate them in ``message_delta``.
+
+    ``observed`` flips True the first time any event surfaces a
+    non-empty usage block, so the caller can distinguish "stream had
+    no usage data at all" (→ ``outcome=unknown``) from "stream had
+    usage with all-zero counts" (→ degenerate but we still treat as
+    unknown).
+    """
+
+    __slots__ = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_input_tokens",
+        "cache_creation_input_tokens",
+        "_observed",
+    )
+
+    def __init__(self) -> None:
+        self.input_tokens = 0
+        self.output_tokens = 0
+        self.cache_read_input_tokens = 0
+        self.cache_creation_input_tokens = 0
+        self._observed = False
+
+    def observe(self, event: AnthropicStreamEvent) -> None:
+        """Update counters from one stream event (no-op for non-usage events)."""
+        if event.type == "message_start":
+            message = event.data.get("message") if isinstance(event.data, dict) else None
+            usage = (message or {}).get("usage") if isinstance(message, dict) else None
+            if isinstance(usage, dict):
+                self._merge(usage)
+        elif event.type == "message_delta":
+            usage = event.data.get("usage") if isinstance(event.data, dict) else None
+            if isinstance(usage, dict):
+                self._merge(usage)
+
+    def _merge(self, usage: dict[str, object]) -> None:
+        any_nonzero = False
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        ):
+            raw = usage.get(field)
+            if not isinstance(raw, int):
+                continue
+            cur: int = getattr(self, field)
+            if raw > cur:
+                setattr(self, field, raw)
+            if raw > 0:
+                any_nonzero = True
+        # We mark "observed" even on an all-zero usage block — the
+        # upstream did emit usage, the figures just aren't interesting.
+        # Dashboards see this as "no_cache" rather than "unknown".
+        self._observed = self._observed or any_nonzero or bool(usage)
+
+    @property
+    def usage_present(self) -> bool:
+        """Whether any event surfaced usage data (zero or non-zero)."""
+        return self._observed or any(
+            (
+                self.input_tokens > 0,
+                self.output_tokens > 0,
+                self.cache_read_input_tokens > 0,
+                self.cache_creation_input_tokens > 0,
+            )
+        )
+
+
+def _emit_cache_observed_streaming(
+    accumulator: _StreamUsageAccumulator,
+    *,
+    provider: str,
+    request_had_cache_control: bool,
+    provider_config: ProviderConfig | None = None,
+) -> None:
+    """Streaming counterpart of :func:`_emit_cache_observed` (v1.9-B2).
+
+    Reads the aggregated counters from ``accumulator``, runs them
+    through the same outcome classifier and cost calculator the
+    non-streaming path uses, and emits a single ``cache-observed`` log
+    line tagged ``streaming=True``. The log payload is structurally
+    identical to the non-streaming sibling so MetricsCollector /
+    Prometheus / `/dashboard` consumers don't have to branch.
+
+    Pre-v1.9-B2 the streaming emission hard-coded ``outcome=unknown``
+    with all-zero counters (per the v1.9.0a6 doc-implementation gap
+    patch); v1.9-B2 finally fulfills the v1.9-A
+    :data:`coderouter.logging.CacheOutcome` docstring promise.
+    """
+    cache_read = accumulator.cache_read_input_tokens
+    cache_creation = accumulator.cache_creation_input_tokens
+    input_tokens = accumulator.input_tokens
+    output_tokens = accumulator.output_tokens
+
+    outcome = classify_cache_outcome(
+        usage_present=accumulator.usage_present,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+    )
+
+    cost = compute_cost_for_attempt(
+        provider_config.cost if provider_config is not None else None,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+    )
+
+    log_cache_observed(
+        logger,
+        provider=provider,
+        request_had_cache_control=request_had_cache_control,
+        outcome=outcome,
+        cache_read_input_tokens=cache_read,
+        cache_creation_input_tokens=cache_creation,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        streaming=True,
         cost_usd=cost.total_usd,
         cost_savings_usd=cost.savings_usd,
     )
@@ -831,6 +997,13 @@ class FallbackEngine:
                 },
             )
 
+            # v1.9-B2: aggregate usage across the whole stream. Each
+            # successful event flows through ``acc.observe`` so the
+            # cache-observed log at the bottom of the loop carries
+            # real input/output/cache-read/cache-creation counts
+            # instead of the v1.9.0a6 zero placeholders.
+            acc = _StreamUsageAccumulator()
+
             # Stage 1: acquire an AnthropicStreamEvent iterator. Failures
             # here are candidates for fallback (no bytes have been sent to
             # the client yet).
@@ -885,11 +1058,13 @@ class FallbackEngine:
                     "downgrade": downgrading,
                 },
             )
+            acc.observe(first)
             yield first
             # Mid-stream guard identical to stream() — any error after the
             # first event is terminal.
             try:
                 async for ev in event_iter:
+                    acc.observe(ev)
                     yield ev
             except AdapterError as exc:
                 logger.warning(
@@ -902,30 +1077,19 @@ class FallbackEngine:
                     },
                 )
                 raise MidStreamError(adapter.name, exc) from exc
-            # v1.9.0a6: pair the successful stream with a cache-observed
-            # log line so the streaming path is not invisible to the
-            # MetricsCollector (the v1.9-A non-streaming emission already
-            # fires for `generate_anthropic`; this is the streaming
-            # symmetric). Streaming aggregation of ``message_delta``
-            # usage events is deferred to v1.9-B, so we record
-            # ``outcome=unknown`` with zero token counts — that is
-            # exactly what the v1.9-A CacheOutcome docstring promises:
-            # "streaming responses always pair with outcome=unknown
-            # until v1.9-B aggregates message_delta events". Cost calc
-            # is skipped (zero tokens → zero cost) because the upstream
-            # billing happens server-side anyway.
-            log_cache_observed(
-                logger,
+            # v1.9-B2: pair the successful stream with a cache-observed
+            # log line carrying the aggregated usage counters that the
+            # ``_StreamUsageAccumulator`` collected from the
+            # ``message_start`` + terminal ``message_delta`` events.
+            # The non-streaming sibling lives in ``generate_anthropic``;
+            # both go through ``classify_cache_outcome`` /
+            # ``compute_cost_for_attempt`` for symmetric outcome and
+            # cost reporting.
+            _emit_cache_observed_streaming(
+                acc,
                 provider=adapter.name,
                 request_had_cache_control=request_had_cache_control,
-                outcome="unknown",
-                cache_read_input_tokens=0,
-                cache_creation_input_tokens=0,
-                input_tokens=0,
-                output_tokens=0,
-                streaming=True,
-                cost_usd=0.0,
-                cost_savings_usd=0.0,
+                provider_config=adapter.config,
             )
             return
 
