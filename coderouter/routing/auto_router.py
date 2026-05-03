@@ -164,9 +164,7 @@ def _has_tools_in_body(body: dict[str, Any]) -> bool:
     if isinstance(tools, list) and len(tools) > 0:
         return True
     functions = body.get("functions")
-    if isinstance(functions, list) and len(functions) > 0:
-        return True
-    return False
+    return isinstance(functions, list) and len(functions) > 0
 
 
 def _match_rule(
