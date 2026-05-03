@@ -6,6 +6,141 @@ versioning follows [SemVer](https://semver.org/).
 
 ---
 
+## [v1.10.1] — 2026-05-04 (Patch — tool-aware auto routing + Raspberry Pi starter)
+
+**Theme: 「ローカル小型モデルでは tool calling できないので tool-laden な request だけクラウドに逃がしたい」というユースケース (OpenClaw + Pi 8GB シナリオ) を declarative に解決。** v1.10.0 で feature complete を宣言した auto_router の 6 matcher を 7 matcher に拡張、`has_tools` を追加して「tools[] を宣言したリクエストか否か」で profile を分岐できるように。併せて Raspberry Pi 8GB 向けの starter YAML (`examples/providers.raspberrypi.yaml`) を同梱、SBC 上で OpenClaw / Claude Code 互換 agent を回すユーザーが yaml 1 個 copy するだけで動く状態にした。
+
+含まれる出荷 2 件:
+
+| # | sub-release | テーマ | LOC | tests |
+|---|---|---|---|---|
+| 1 | **has_tools matcher** | `RuleMatcher.has_tools` 7 番目 matcher 追加、OpenAI/Anthropic `tools[]` + OpenAI legacy `functions[]` を一括認識 (OpenClaw + Pi 由来) | ~80 | +7 |
+| 2 | **Raspberry Pi starter** | `examples/providers.raspberrypi.yaml` 新規、Ollama 小型モデル (≤4B) + OpenRouter free 系 + `has_tools` ベースの tool-aware profile 振り分け | YAML のみ | (loader 検証で +0 直接、既存 parametric test に乗る) |
+
+- Tests: 871 → **878** (+7、has_tools matcher の 6 シナリオ + `has_tools: false` の "set 扱いだがマッチしない" 安全網テスト)
+- Runtime deps: 5 → 5 (**34 sub-release 連続据え置き**)
+- Backward compat: 完全互換、既存 yaml / API / log payload schema 完全に同じ、新フィールド (`has_tools`) を使わない deployment は挙動完全一致
+- pyproject version: 1.10.0 → 1.10.1
+
+### Migration
+
+不要。**v1.10.0 からの自然なアップグレード**:
+
+- `coderouter` コマンド名 / Python import 名 / providers.yaml の format / env 変数 / ingress URL すべて完全に同じ
+- 既存 `auto_router.rules[]` は何も変わらない、`has_tools` matcher を使い始めるには yaml に 1 行足すだけ
+- v1.10.0 で v1.6 系 auto_router を「6 matcher で feature complete」と宣言した直後の追加だが、同じ宣言型 framework の延長線で構造変更なし — 「7 matcher で改めて feature complete」と読み替えて差し支えない
+
+### Out of scope (v1.11 以降)
+
+- **Provider capability gate for tools** — `capabilities.tools=false` を fallback chain の skip ゲートとして機能させる案。本 patch は profile レベルで振り分ける方針 (router で chain を切り替える) で `has_tools` matcher を採用、provider レベルの skip ゲートは別 issue。CodeRouter の chain semantics (順次フォールバック + downgrade) の互換性検討が必要なため、必要性が確認できてから着手。
+- **小型ローカルモデルの tool-call repair 強化** — 現状 `tool_repair.py` は `<tool_call>{...}</tool_call>` ラッパ形式の救済を行うが、1-4B モデルが返す自由形式の text からの推測救済は別領域 (`tool_emulation`)。プロンプトテンプレ書き換えで誘導する手段もあり、設計検討は v2.0 後送り。
+
+### Files touched
+
+```
+A  examples/providers.raspberrypi.yaml
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/auto_router.py
+M  pyproject.toml
+M  tests/test_auto_router.py
+```
+
+---
+
+### has_tools matcher (OpenClaw + Raspberry Pi 由来)
+
+**Theme: tools[] を宣言したリクエストだけクラウドに振り分け、ローカル小型モデルは tool 不要の素朴な chat に専念させる。** Raspberry Pi 8GB / Jetson Nano クラスの SBC で OpenClaw 等の tool-aware agent を動かしたい時、CPU 推論で実用域に入る Ollama モデル (≤4B) は tool calling が苦手 (`finish_reason: tool_calls` を返さない / 引数 JSON が壊れる / 自由形式 text に bury される) で、結果として agent 側からは「tool 呼び出しが起きてない」状態になる。`auto_router.rules[].if.has_tools` を 7 番目の matcher として追加することで、profile レベルで「tools あり → クラウド (Qwen3-Coder/gpt-oss/Gemini-Flash の OpenRouter free)」「tools 無し → ローカル小型」を declarative に切り替えられる。
+
+ユースケース例 (Raspberry Pi 8GB starter `examples/providers.raspberrypi.yaml` から抜粋):
+
+```yaml
+auto_router:
+  rules:
+    - id: user:has-tools-go-cloud
+      profile: with-tools         # OpenRouter free 系のみ
+      match:
+        has_tools: true
+    - id: user:image-go-cloud
+      profile: vision              # Gemini Flash 1M ctx
+      match:
+        has_image: true
+    - id: user:longcontext-go-cloud
+      profile: longcontext
+      match:
+        content_token_count_min: 32000
+  default_rule_profile: local-chat # qwen3.5:2b/4b / gemma3:1b ローカル
+```
+
+OpenClaw (毎ターン Bash/Read/Write 等の tool を declare する agent) を `OPENAI_BASE_URL=http://<pi-ip>:8088/v1` で繋ぐと、tool-laden traffic は自動でクラウドに飛び、軽い chat だけが Pi 上のローカルで処理される。OPENROUTER_API_KEY のみ設定すればよく、有料 API は不要 (`ALLOW_PAID=false` がデフォルト)。
+
+#### なぜ provider レベルの capability gate ではなく profile レベルなのか
+
+`ProviderConfig.capabilities.tools=false` フラグは既存 (v0.x からある) だが、現状は `coderouter doctor` の診断表示と `model-capabilities.yaml` registry の解決に使うだけで、fallback chain における skip ゲートには接続されていない。`thinking` / `cache_control` には `will_degrade` ゲート (capability.py の `provider_supports_*`) があるが、tools には同等の skip 機構がない。これは既存の v0.3-D 「downgrade path」(non-native + tools[] あり → 非ストリーミング + tool_repair) に依存していて、provider が tools を返せなくても adapter エラーは出ず、上流から見ると success (空 tool_calls) で chain が fallthrough せず止まってしまう (= 観測症状: 「tool call されてない」)。
+
+provider レベルの skip ゲートを後付けするのは chain semantics に踏み込む変更で互換性検討が要るため、本 patch では **profile レベルの宣言型 lever** に留める方針を採用。chain semantics を変えず、auto_router rule の追加で同じ効果を得られ、かつ既存の 6 matcher と完全に同じ規約 (exactly one + first match wins + fast-fail at load) で導入できる。
+
+- Tests: 871 → **878** (+7: OpenAI tools[] / Anthropic tools[] / OpenAI legacy functions[] / no-tools fallthrough / 空リスト fallthrough / has_tools rule が code-fence rule より優先 / `has_tools: false` の "set 扱いだがマッチしない" 安全網)
+- Runtime deps: 5 → 5 (34 sub-release 連続据え置き)
+- Backward compat: 完全互換、既存 `auto_router` rule は何も変わらない、`has_tools` を使わない deployment は挙動完全一致
+
+#### Changes
+
+- `coderouter/config/schemas.py`:
+  - `RuleMatcher` に `has_tools: bool | None = None` を追加、`_MATCHER_FIELDS` tuple に追加 (zero/multiple-fields の "exactly one" バリデータが自動適用)。
+  - docstring の Variants セクションに 7 番目として `has_tools` を追記、boolean 形状が `has_image` と同じである理由 (`True` のみ意味を持ち、`False` は "set" 扱いだが `_match_rule` の `is True` チェックでマッチしない安全網) と、provider レベルの `capabilities.tools` flag との違い (前者は profile-level routing、後者は doctor の診断補助で chain skip ゲートではない) を明示。
+
+- `coderouter/routing/auto_router.py`:
+  - `_has_tools_in_body(body)` ヘルパを新設 — body の top-level `tools[]` (OpenAI Chat Completions / Anthropic Messages API 共通) と `functions[]` (OpenAI legacy、deprecated だが pinned SDK で残存) を一括認識、空リスト / None は False (lazy init 対応)。
+  - `_match_rule(rule, message, text, model, estimated_tokens, has_tools)` シグネチャに `has_tools: bool` を追加、`has_tools is True` 分岐を 7 番目として実装。
+  - `classify(...)` 内で `_has_tools_in_body(body)` を一度だけ呼んで rule iteration に渡す。`user_msg is None` でも `has_tools` rule は評価する (system-only prompt + tools[] declaration の構成にも対応)。
+  - `_emit_resolved` / `_emit_fallthrough` の `signals` payload に `has_tools` を追記、`auto-router-resolved` log で「tools あり判定で routing したか」が dashboard / Prometheus exporter から見える。
+
+- `tests/test_auto_router.py` Group 8 (tool-aware routing) を新設、7 ケース:
+  - `test_classify_request_with_openai_tools_routes_to_with_tools` — 基本ケース、OpenAI 形式 `tools[].function` → `with-tools` profile。
+  - `test_classify_request_with_anthropic_tools_routes_to_with_tools` — Anthropic 形式 `tools[].input_schema` も同じ top-level `tools` キーなので、単一 matcher で両 ingress カバー。
+  - `test_classify_request_with_legacy_functions_routes_to_with_tools` — OpenAI legacy `functions[]` (deprecated だが pinned SDK で残存) も tool-laden 扱い。
+  - `test_classify_request_without_tools_falls_through` — 逆ケース、tools 宣言なしの plain chat は `default_rule_profile` (Pi の場合は `local-chat`) に落ちる。
+  - `test_classify_empty_tools_list_treated_as_no_tools` — `tools: []` / `functions: []` (lazy init shape) は False 扱い、no-spurious-match property を pin。
+  - `test_classify_has_tools_first_match_wins_over_later_content_rule` — has_tools rule が code_fence rule より前に置かれた時、両方マッチする body でも先勝、global "first match wins" を新 matcher にも適用。
+  - `test_has_tools_false_rejected_at_load` — `has_tools: False` が `_exactly_one` を通過するが `_match_rule` の `is True` チェックでマッチしない安全網を文書化、誤設定時もデフォルト経路に落ちることを保証。
+
+#### Files touched
+
+```
+M  CHANGELOG.md
+M  coderouter/config/schemas.py
+M  coderouter/routing/auto_router.py
+M  pyproject.toml
+M  tests/test_auto_router.py
+```
+
+---
+
+### Raspberry Pi 8GB starter (`examples/providers.raspberrypi.yaml`)
+
+**Theme: SBC で OpenClaw を動かす最小構成を yaml 1 個に集約。** v1.10.1 で追加した `has_tools` matcher を主役にした starter で、`coderouter serve` 1 発で Pi 上のローカル ollama (qwen3.5:2b/4b、qwen2.5:1.5b、gemma3:1b) と OpenRouter free 系 (qwen3-coder:free / gpt-oss-120b:free / gemini-2.5-flash:free) が tool-aware に振り分けられる。OPENROUTER_API_KEY のみ要設定、有料 API キー不要 (`ALLOW_PAID=false` がデフォルト)。
+
+#### 設計の要点
+
+- **ローカル全部 `tools: false`** — Pi 8GB に乗る ≤4B モデルは tool_calls を安定して返せないため capability で明示的に `false`。これは doctor 診断用の宣言で、実 routing は `has_tools` matcher が profile レベルで振り分けるので二重防御になる。
+- **`num_ctx: 8192` + `num_predict: 1024` 制限** — Pi の CPU 推論は context 縮めた方が prefill が現実的、デフォルト ollama の 2048 だと OpenClaw の system prompt で詰む & 2048 から 32K に上げると prefill が分単位になるので 8K が現実的中間点。
+- **画像 / 長尺 (32K+) もクラウドへ** — Pi では Gemma 4 E4B (vision capable だが 9.6GB で 8GB Pi に乗らない) の代わりに、`has_image` rule で OpenRouter Gemini Flash (1M ctx + vision native) に逃がす。
+- **OpenRouter free 3 モデルで vendor diversity** — qwen-coder / gpt-oss / gemini-flash の 3 ベンダーを並べて、daily cap (~200 req/day per model per account) 当たり時の rate-limit 逃げ場を確保。
+- **`output_filters: [strip_thinking, strip_stop_markers]` を Qwen 系で常時適用** — Pi で動かす Qwen 3.5 系は `<think>...</think>` リーク + `<|im_end|>` 漏れの両方を観測、両方 strip。
+
+#### Tests
+
+`tests/test_examples_yaml.py::test_example_yaml_loads` が `examples/providers*.yaml` を parametric にカバーしているため、`providers.raspberrypi.yaml` も自動でこの test に乗る。新たに pin したい invariant (例: ローカル全部 `tools: false`、`has_tools` rule の存在、auto_router default が `local-chat` 等) があれば後続 patch で個別 test 追加可能だが、本 patch では parametric の loader-clean property のみ確保。
+
+#### Files touched
+
+```
+A  examples/providers.raspberrypi.yaml
+```
+
+---
+
 ## [v1.10.0] — 2026-05-01 (Umbrella tag — Cost enforcement + Long-run reliability completion + Auto-router feature complete)
 
 **Theme: 「観測 → 理解 → 行動」を 3 軸で完成、Vision pillar P2/P3 が揃う。** v1.9.1 (patch) で取り切った 2 機能 (v1.9-B2 streaming usage 集約 + per-model auto-routing) は事実上 v1.10 backlog の助走、本 v1.10.0 で残り 3 機能を minor として束ねて出荷。CodeRouter は **「Local LLM で agent を長時間回すための信頼性層」** という Vision の v1.x 担当分が完成 — context overflow (L1) と quality drift (L4) を除く 4 系統障害 (L2/L3/L5/L6) を体系的に対処、auto-router の declarative 6 matcher も揃い、cost 系は観測 (v1.9-D) → enforcement (v1.10) で経路が閉じた。
