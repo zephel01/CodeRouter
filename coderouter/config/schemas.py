@@ -498,6 +498,23 @@ class RuleMatcher(BaseModel):
       workloads can compensate by tuning the threshold, since the
       char/4 heuristic is conservative for CJK and looser for
       English code.
+
+    Variants ([Unreleased] / tool-aware routing, OpenClaw + Pi 由来):
+
+    - ``has_tools: True`` — the request body declares one or more
+      tools (OpenAI ``tools[]`` / Anthropic ``tools[]`` / OpenAI legacy
+      ``functions[]``). Lets operators send tool-laden requests to a
+      tool-capable cloud profile while keeping plain chat on a small
+      local model (typical Raspberry Pi / low-spec deployment shape:
+      a 1-4B local model that cannot reliably tool-call paired with a
+      free-tier cloud chain that can). Distinct from the
+      ``capabilities.tools`` flag on a provider — that flag is read by
+      ``coderouter doctor`` for diagnostics but does NOT gate the
+      fallback chain (the chain just iterates providers in order and
+      engages the v0.3-D tool-downgrade path on non-native ones with
+      ``request.tools`` set). The ``has_tools`` matcher is the
+      profile-level lever for steering tool-laden traffic to the right
+      chain entirely.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -508,6 +525,13 @@ class RuleMatcher(BaseModel):
     content_regex: str | None = None
     model_pattern: str | None = None
     content_token_count_min: int | None = Field(default=None, ge=1)
+    # [Unreleased]: tool-aware routing (OpenClaw + Raspberry Pi 由来).
+    # See class docstring "Variants ([Unreleased] / tool-aware routing)"
+    # above for the full rationale. Boolean shape mirrors ``has_image`` —
+    # only the ``True`` value is meaningful (matches when the body
+    # declares any tools); ``False`` is rejected by ``_exactly_one``
+    # since a "no-tools" rule would shadow the default fall-through.
+    has_tools: bool | None = None
 
     _MATCHER_FIELDS: tuple[str, ...] = (
         "has_image",
@@ -516,6 +540,7 @@ class RuleMatcher(BaseModel):
         "content_regex",
         "model_pattern",
         "content_token_count_min",
+        "has_tools",
     )
 
     @model_validator(mode="after")

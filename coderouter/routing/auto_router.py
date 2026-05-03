@@ -142,12 +142,40 @@ def _code_fence_ratio(text: str) -> float:
     return fenced / len(text)
 
 
+def _has_tools_in_body(body: dict[str, Any]) -> bool:
+    """True iff the request body declares one or more callable tools.
+
+    Recognized declaration shapes:
+
+    * ``tools: [...]`` — OpenAI Chat Completions ``tools[]`` AND
+      Anthropic Messages API ``tools[]``. Both wire formats put the
+      array at the same top-level key, so a single membership check
+      covers both ingresses.
+    * ``functions: [...]`` — OpenAI legacy ``functions[]`` (deprecated
+      since 2023-11 but still emitted by some agents that pinned old
+      SDK versions). Treated as equivalent to ``tools[]`` for routing
+      purposes.
+
+    A non-list value (or a value of ``None`` / empty list) returns
+    False — agents that initialize the field but populate it lazily
+    are still on the no-tools path until a tool actually appears.
+    """
+    tools = body.get("tools")
+    if isinstance(tools, list) and len(tools) > 0:
+        return True
+    functions = body.get("functions")
+    if isinstance(functions, list) and len(functions) > 0:
+        return True
+    return False
+
+
 def _match_rule(
     rule: AutoRouteRule,
     message: dict[str, Any] | None,
     text: str,
     model: str | None,
     estimated_tokens: int,
+    has_tools: bool,
 ) -> bool:
     m = rule.match
     if m.has_image is True:
@@ -177,6 +205,14 @@ def _match_rule(
         # for English code; operators tune the threshold to match
         # their input distribution.
         return estimated_tokens >= m.content_token_count_min
+    if m.has_tools is True:
+        # [Unreleased]: tool-aware routing (OpenClaw + Pi 由来).
+        # Computed once in ``classify`` from ``body.tools`` /
+        # ``body.functions`` so per-rule evaluation is O(1). See
+        # ``_has_tools_in_body`` for the recognized declaration shapes
+        # and ``RuleMatcher`` docstring for why this is profile-level
+        # routing (not a provider capability gate).
+        return has_tools
     return False  # pragma: no cover — _exactly_one guards against this
 
 
@@ -259,6 +295,11 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
     # contribute 0. See ``_estimate_total_tokens`` for the heuristic
     # rationale and the 5-deps tradeoff.
     estimated_tokens = _estimate_total_tokens(body)
+    # [Unreleased]: tool-aware routing (OpenClaw + Pi 由来). Computed
+    # once for both the ``has_tools`` matcher and the signals payload.
+    # See ``_has_tools_in_body`` for the recognized declaration shapes
+    # (OpenAI/Anthropic ``tools[]``, OpenAI legacy ``functions[]``).
+    has_tools = _has_tools_in_body(body)
 
     auto_cfg = config.auto_router
     if auto_cfg is not None and auto_cfg.disabled:
@@ -267,6 +308,7 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
             text,
             model,
             estimated_tokens,
+            has_tools,
             disabled=True,
         )
         return auto_cfg.default_rule_profile
@@ -278,17 +320,18 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
         else BUNDLED_DEFAULT_RULE_PROFILE
     )
 
-    # ``model_pattern`` and ``content_token_count_min`` matchers can
-    # fire even without a user message (e.g. system-only prompts or a
-    # request body that carries only a model field). Other matchers
-    # still require ``user_msg`` to be present — they short out via
-    # ``_match_rule``'s message-None handling.
+    # ``model_pattern``, ``content_token_count_min`` and ``has_tools``
+    # matchers can fire even without a user message (e.g. system-only
+    # prompts or a request body that carries only a model field +
+    # tools array). Other matchers still require ``user_msg`` to be
+    # present — they short out via ``_match_rule``'s message-None
+    # handling.
     for rule in rules:
-        if _match_rule(rule, user_msg, text, model, estimated_tokens):
-            _emit_resolved(rule, user_msg, text, model, estimated_tokens)
+        if _match_rule(rule, user_msg, text, model, estimated_tokens, has_tools):
+            _emit_resolved(rule, user_msg, text, model, estimated_tokens, has_tools)
             return rule.profile
 
-    _emit_fallthrough(default_profile, text, model, estimated_tokens)
+    _emit_fallthrough(default_profile, text, model, estimated_tokens, has_tools)
     return default_profile
 
 
@@ -298,6 +341,7 @@ def _emit_resolved(
     text: str,
     model: str | None,
     estimated_tokens: int,
+    has_tools: bool,
 ) -> None:
     logger.info(
         "auto-router-resolved",
@@ -310,6 +354,7 @@ def _emit_resolved(
                 "content_len": len(text),
                 "model": model,
                 "estimated_tokens": estimated_tokens,
+                "has_tools": has_tools,
             },
         },
     )
@@ -320,6 +365,7 @@ def _emit_fallthrough(
     text: str,
     model: str | None,
     estimated_tokens: int,
+    has_tools: bool,
     disabled: bool = False,
 ) -> None:
     logger.info(
@@ -331,6 +377,7 @@ def _emit_fallthrough(
                 "content_len": len(text),
                 "model": model,
                 "estimated_tokens": estimated_tokens,
+                "has_tools": has_tools,
                 "disabled": disabled,
             },
         },

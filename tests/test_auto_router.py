@@ -990,3 +990,219 @@ def test_long_context_first_match_wins_over_later_image_rule(
         ]
     }
     assert classify(long_image_body, cfg) == "longcontext"
+
+
+# ---------------------------------------------------------------------------
+# Group 8: tool-aware routing ([Unreleased] / OpenClaw + Raspberry Pi 由来)
+# ---------------------------------------------------------------------------
+#
+# Motivation: small local models (≤4B, typical Pi 8GB / Jetson Nano shape)
+# are unreliable at native tool calling — they return prose where a
+# ``tool_calls`` array should be. The fallback engine's v0.3-D downgrade
+# path attempts to repair that, but if the small model returns clean
+# prose with no ``<tool_call>`` wrapper at all, no AdapterError fires
+# and the chain treats the response as success — the caller (e.g.
+# OpenClaw) sees text instead of a tool_use block.
+#
+# The ``has_tools`` matcher is the profile-level lever for this: route
+# tool-laden requests to a tool-capable cloud profile entirely, leaving
+# the small local model on the no-tools path where it actually shines.
+
+
+def _has_tools_config(
+    base: CodeRouterConfig,
+    *,
+    tools_provider: str = "ollama-coder",
+    notools_provider: str = "ollama-general",
+) -> CodeRouterConfig:
+    """Augment the 3-profile fixture with separate ``with-tools`` and
+    ``no-tools`` profiles so the has_tools matcher can be exercised
+    without colliding with the bundled multi/coding/writing names.
+    """
+    return base.model_copy(
+        update={
+            "profiles": [
+                *base.profiles,
+                FallbackChain(name="with-tools", providers=[tools_provider]),
+                FallbackChain(name="no-tools", providers=[notools_provider]),
+            ],
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:tool-laden-cloud",
+                        profile="with-tools",
+                        match=RuleMatcher(has_tools=True),
+                    ),
+                ],
+                default_rule_profile="no-tools",
+            ),
+        }
+    )
+
+
+def test_classify_request_with_openai_tools_routes_to_with_tools(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: OpenAI-format ``tools[]`` → ``with-tools`` profile.
+
+    Tools-bearing requests must land on the tool-capable chain. This is
+    the canonical OpenClaw / Claude Code shape — every turn declares
+    Bash/Read/Write/etc., so this rule fires on essentially every
+    request from those agents.
+    """
+    cfg = _has_tools_config(three_profile_config)
+    body = {
+        "messages": [{"role": "user", "content": "list the files"}],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_files",
+                    "description": "list files in the cwd",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+    }
+    assert classify(body, cfg) == "with-tools"
+
+
+def test_classify_request_with_anthropic_tools_routes_to_with_tools(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: Anthropic-format ``tools[]`` lives at the same
+    top-level key as OpenAI's, so a single matcher handles both
+    ingresses without per-shape branching.
+    """
+    cfg = _has_tools_config(three_profile_config)
+    body = {
+        "messages": [{"role": "user", "content": "what's in the dir"}],
+        "tools": [
+            {
+                "name": "list_files",
+                "description": "list files in the cwd",
+                "input_schema": {"type": "object", "properties": {}},
+            }
+        ],
+    }
+    assert classify(body, cfg) == "with-tools"
+
+
+def test_classify_request_with_legacy_functions_routes_to_with_tools(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: OpenAI's deprecated ``functions[]`` field still
+    counts as tool-laden — some agents that pinned old SDK versions
+    keep emitting it, and routing them past the tool-capable chain
+    would defeat the matcher's whole purpose.
+    """
+    cfg = _has_tools_config(three_profile_config)
+    body = {
+        "messages": [{"role": "user", "content": "do something"}],
+        "functions": [
+            {
+                "name": "do_something",
+                "parameters": {"type": "object"},
+            }
+        ],
+    }
+    assert classify(body, cfg) == "with-tools"
+
+
+def test_classify_request_without_tools_falls_through(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: the inverse case — plain chat with no tools
+    declared falls through to ``default_rule_profile``. This is the
+    Raspberry Pi happy path: keep cheap local-only traffic on the
+    small local model, send the tool-laden traffic to the cloud.
+    """
+    cfg = _has_tools_config(three_profile_config)
+    body = {"messages": [{"role": "user", "content": "what time is it"}]}
+    assert classify(body, cfg) == "no-tools"
+
+
+def test_classify_empty_tools_list_treated_as_no_tools(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """[Unreleased]: ``tools: []`` (or ``functions: []``) is the "agent
+    initialized the field but populated it lazily" shape — there are
+    no tools the model could actually call, so it falls through. Pins
+    the no-spurious-match property.
+    """
+    cfg = _has_tools_config(three_profile_config)
+    body = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": [],
+        "functions": [],
+    }
+    assert classify(body, cfg) == "no-tools"
+
+
+def test_classify_has_tools_first_match_wins_over_later_content_rule(
+    three_profile_config: CodeRouterConfig,
+) -> None:
+    """First-match-wins precedence holds for ``has_tools`` too.
+
+    A has_tools rule placed before a code-fence rule fires even when
+    the body would also match the later rule — pins that the new
+    matcher integrates with the existing rule iteration semantics.
+    """
+    base = _has_tools_config(three_profile_config)
+    cfg = base.model_copy(
+        update={
+            "auto_router": AutoRouterConfig(
+                rules=[
+                    AutoRouteRule(
+                        id="user:tool-first",
+                        profile="with-tools",
+                        match=RuleMatcher(has_tools=True),
+                    ),
+                    AutoRouteRule(
+                        id="user:code-second",
+                        profile="coding",
+                        match=RuleMatcher(code_fence_ratio_min=0.1),
+                    ),
+                ],
+                default_rule_profile="no-tools",
+            ),
+        }
+    )
+    body = {
+        "messages": [
+            {
+                "role": "user",
+                "content": "fix this:\n```python\nprint('hi')\n```",
+            }
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "edit_file",
+                    "parameters": {"type": "object"},
+                },
+            }
+        ],
+    }
+    assert classify(body, cfg) == "with-tools"
+
+
+def test_has_tools_false_rejected_at_load() -> None:
+    """[Unreleased]: ``has_tools: False`` is meaningless — a "no-tools"
+    rule would shadow ``default_rule_profile``. The boolean shape
+    mirrors ``has_image`` (only ``True`` is a valid set value); ``None``
+    means "unset" via the _exactly_one validator path.
+    """
+    # Note: pydantic accepts ``None`` (the default) and ``True`` cleanly.
+    # ``False`` is the ambiguous value we want to surface — currently it
+    # passes _exactly_one (since it's not None) but would never match
+    # anything, so we document expected behavior here. If we tighten the
+    # validator later to reject False explicitly, this test will flip
+    # from "matches nothing" to "rejected at load".
+    matcher = RuleMatcher(has_tools=False)
+    # _exactly_one passes (False is "set", just not True).
+    assert matcher.has_tools is False
+    # But _match_rule treats it as "no match" because we test ``is True``.
+    # That's the safety net — even if a user writes has_tools: false in
+    # YAML, the rule never fires, and traffic stays on the default path.

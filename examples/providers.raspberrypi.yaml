@@ -1,0 +1,298 @@
+# ============================================================
+# CodeRouter providers.yaml — Raspberry Pi 8GB starter
+#
+# Use case (OpenClaw + Pi 由来):
+#   小型 SBC (Raspberry Pi 4/5 8GB、Jetson Nano 等) で OpenClaw 等の
+#   tool-aware エージェントを動かしたい。CPU 推論オンリーで実用域に
+#   入る Ollama モデル (≤4B) はそもそも tool calling が苦手 — 7B 以上
+#   無いと native tool_calls を安定して返さない。
+#
+#   この starter は「**ローカルは tool 無し前提**、tool 必要なリクエスト
+#   は無料クラウドにフォワード」という割り切りで構成される:
+#
+#     - 軽い chat / 要約 / 翻訳 / 分類          → ローカル小型モデル
+#     - tools[] / functions[] が宣言された      → OpenRouter free tier
+#     - 画像入力                                  → OpenRouter (Gemini Flash 1M ctx)
+#
+#   v1.6 auto_router の ``has_tools`` matcher (本リリース新規) で
+#   profile レベルで振り分けるため、ユーザーは ``coderouter serve`` を
+#   起動するだけ — クライアント側 (OpenClaw / Claude Code) で profile
+#   を意識する必要は無い。
+#
+# Hardware budget (Raspberry Pi 4/5 8GB):
+#   - 実メモリは OS 込みで ~6GB 使える
+#   - GPU 無し、CPU 推論のみ (3-15 tok/s 程度)
+#   - tool calling が安定するのは 7B+ だがメモリ不足で動かない
+#   - 妥協ライン: 1.5B〜4B のローカル + tool は全部クラウド
+#
+# Setup (3 step / 約 5-10 分):
+#
+#   # 1. Ollama on Pi (公式 install script)
+#   curl -fsSL https://ollama.com/install.sh | sh
+#
+#   # 2. このリポジトリの想定モデルを pull (合計 ~6GB)
+#   ollama pull qwen2.5:1.5b           # 軽量 chat (~1GB)
+#   ollama pull gemma3:1b              # 多言語 chat (~0.8GB)
+#   ollama pull qwen3.5:2b             # よりまともな chat (~2.7GB)
+#   ollama pull qwen3.5:4b             # しっかり chat (~3.4GB) — 余裕があれば
+#   ollama pull sam860/lfm2.5:350m     # 超軽量・常駐用 (~0.5GB) — 任意
+#
+#   # 3. OpenRouter API key を ~/.coderouter/.env に書く
+#   #    https://openrouter.ai/ で無料アカウント作って API key 取得 (5min)
+#   echo 'OPENROUTER_API_KEY=sk-or-v1-...' >> ~/.coderouter/.env
+#
+#   # 4. このファイルを copy + 起動
+#   cp examples/providers.raspberrypi.yaml ~/.coderouter/providers.yaml
+#   coderouter serve
+#
+# Free-tier rate limits (OpenRouter, 2026-04 確認):
+#   ~20 req/min, ~200 req/day per model per account.
+#   tools-heavy エージェント (毎ターン tool 宣言する OpenClaw / Claude Code)
+#   だと daily cap に当たりやすい。3 つの free モデル (qwen / gpt-oss /
+#   gemini-flash) を rate-limit 逃げ用に並べてあるので、1 つ 429 を
+#   返したら次に fallback する設計。
+#
+# OpenClaw 連携:
+#   OpenClaw は OpenAI 互換 API で叩ける (env で base_url 上書き):
+#     export OPENAI_BASE_URL=http://<pi-ip>:8088/v1
+#     export OPENAI_API_KEY=dummy   # CodeRouter は鍵を見ない
+#   これで OpenClaw のリクエストは全部 CodeRouter を経由し、
+#   ``has_tools`` で振り分けられる。
+# ============================================================
+
+allow_paid: false
+default_profile: auto      # ← v1.6 sentinel: auto_router を有効化
+display_timezone: Asia/Tokyo
+
+# ---------------------------------------------------------------------
+# auto_router: tool-aware ルーティング (v[Unreleased] has_tools matcher)
+#
+# 4 ルールで Pi のユースケースを尽くす:
+#
+#   1. tools[] あり          → ``with-tools`` (クラウド free 専用)
+#   2. 画像あり              → ``vision``     (Gemini Flash 1M ctx)
+#   3. プロンプト超長尺      → ``longcontext``(Gemini Flash 1M ctx)
+#   4. それ以外              → ``local-chat`` (ローカル小型モデル)
+#
+# 順序は「絶対にローカルに流せないもの (tools / image / 超長尺) を上に
+# 寄せて、最後にローカル fallthrough」が原則。
+# ---------------------------------------------------------------------
+
+auto_router:
+  rules:
+    # 1) tools / functions 宣言があるリクエストは即クラウド。
+    #    Pi 上の 1-4B ローカルモデルでは tool_calls を安定して返せない
+    #    (text に bury される / format が崩れる / そもそも生成しない)
+    #    ので、router 段階で local を skip するのが一番確実。
+    - id: user:has-tools-go-cloud
+      profile: with-tools
+      match:
+        has_tools: true
+
+    # 2) 画像入力はローカル小型モデルが扱えない (Gemma 4 E4B は vision
+    #    対応だが Pi 8GB に乗らない 9.6GB)。1M ctx の Gemini Flash 無料枠で
+    #    捌くのが妥当。
+    - id: user:image-go-cloud
+      profile: vision
+      match:
+        has_image: true
+
+    # 3) 超長尺リクエスト (~32K token 超) — Pi 上の小型モデルは context
+    #    が 8K-32K 程度しか無いことが多く、prefill も遅い。1M ctx の
+    #    Gemini Flash に逃がす。
+    - id: user:longcontext-go-cloud
+      profile: longcontext
+      match:
+        content_token_count_min: 32000
+
+  # 上記いずれにも該当しない (= 軽い chat) はローカル先頭の chain で。
+  default_rule_profile: local-chat
+
+# ---------------------------------------------------------------------
+# providers
+# ---------------------------------------------------------------------
+
+providers:
+  # ============================================================
+  # Tier 1: ローカル (Raspberry Pi 8GB on-host Ollama)
+  # ============================================================
+  # 全部 ``tools: false`` 宣言。fallback 時の「tools 必要 → cloud」は
+  # 上の auto_router で振り分け済みなので、このローカル群が tool-laden
+  # なリクエストを受けることは無い (前提).
+
+  # qwen3.5:4b — このラインナップでは最大、しっかり chat 用途向け。
+  # 推論速度は Pi 4 で ~3 tok/s、Pi 5 で ~6 tok/s 程度。
+  # メモリは Q4_K_M 量子化で ~3.4GB、Pi 8GB に余裕で乗る。
+  - name: ollama-qwen3-5-4b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.5:4b
+    paid: false
+    timeout_s: 240               # CPU 推論なので generous に
+    extra_body:
+      options:
+        # Pi の CPU 推論は context 縮めた方が prefill が現実的。
+        # 8K で OpenClaw の system prompt + 軽い turn を捌く想定。
+        num_ctx: 8192
+        num_predict: 1024
+    # Qwen 系は <think> リーク、stop marker 漏れがあるので scrub 推奨。
+    output_filters: [strip_thinking, strip_stop_markers]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false               # 4B 帯では tool_calls が安定しない
+
+  # qwen3.5:2b — 4b より速い。短い応答が欲しいときの primary。
+  # Pi 5 で ~10-12 tok/s、~2.7GB メモリ。
+  - name: ollama-qwen3-5-2b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen3.5:2b
+    paid: false
+    timeout_s: 180
+    extra_body:
+      options:
+        num_ctx: 8192
+        num_predict: 1024
+    output_filters: [strip_thinking, strip_stop_markers]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false               # 2B 帯では tool_calls が安定しない
+
+  # qwen2.5:1.5b — 軽量・速い、簡単な応答用。
+  # Pi 5 で ~15 tok/s、~1GB メモリ。
+  - name: ollama-qwen2-5-1-5b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: qwen2.5:1.5b
+    paid: false
+    timeout_s: 120
+    extra_body:
+      options:
+        num_ctx: 8192
+        num_predict: 512
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false               # 1.5B では tool_calls 不能
+
+  # gemma3:1b — Google Gemma 3 系の小型モデル、多言語性能良好。
+  # qwen2.5:1.5b の代替として CJK / 欧州言語の応答質が安定する場面あり。
+  - name: ollama-gemma3-1b
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma3:1b
+    paid: false
+    timeout_s: 120
+    extra_body:
+      options:
+        num_ctx: 8192
+        num_predict: 512
+    capabilities:
+      chat: true
+      streaming: true
+      tools: false               # 1B では tool_calls 不能
+
+  # ============================================================
+  # Tier 2: 無料クラウド (OpenRouter free tier、tool-capable)
+  # ============================================================
+  # 全部 free 階層。レート制限は ~20 req/min / ~200 req/day 程度
+  # (per model, per account)。3 つの異なるベンダーを並べて rate-limit
+  # 当たった時の逃げ場を確保。
+
+  # OpenRouter の Qwen3-Coder 480B free — agentic coding 専用設計、
+  # tool calling が極めて安定 (CodeRouter で v0.3-A repair 不要)。
+  - name: openrouter-qwen-coder-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: qwen/qwen3-coder:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # OpenRouter の OpenAI gpt-oss-120b free — tool calling 対応、
+  # Qwen-Coder と異なるベンダー pool なので daily cap 当たり時の逃げ場。
+  - name: openrouter-gpt-oss-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: openai/gpt-oss-120b:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # OpenRouter の Gemini 2.5 Flash free — 1M ctx + vision、超長尺と
+  # 画像入力で primary。tool calling もサポート。
+  - name: openrouter-gemini-flash-free
+    kind: openai_compat
+    base_url: https://openrouter.ai/api/v1
+    model: google/gemini-2.5-flash:free
+    api_key_env: OPENROUTER_API_KEY
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      vision: true
+      tools: true
+
+# ---------------------------------------------------------------------
+# profiles — auto_router rules が指す 4 つの profile を定義
+# ---------------------------------------------------------------------
+
+profiles:
+  # ローカル先頭、軽量から段階的に大きく。クラウドは最終保険のみ。
+  # 「Pi で完結させたい軽い chat」用 — tools 必要なら router が cloud に
+  # 振り分けるので、ここに来る時点で tools 不要が確定している。
+  - name: local-chat
+    append_system_prompt: |
+      Be concise and direct. Aim for 1-3 sentence answers unless the
+      question genuinely needs more. You are running on a small local
+      model — do not pretend to have capabilities you don't have.
+    providers:
+      - ollama-qwen3-5-2b              # primary: 速度と質のバランス
+      - ollama-qwen2-5-1-5b            # 速度優先 fallback
+      - ollama-gemma3-1b               # 多言語 fallback
+      - ollama-qwen3-5-4b              # 質優先 fallback (遅め)
+      - openrouter-gpt-oss-free        # ローカル全滅時の最終保険
+
+  # tool-laden リクエスト専用 — クラウド先頭、tool_calls 安定優先。
+  # local モデルは一切含めない (tools 不能なので意味が無い)。
+  - name: with-tools
+    append_system_prompt: |
+      Use tools precisely. Batch independent operations in parallel
+      when possible. Match Claude Sonnet's tool-call style: terse,
+      structured, no preamble before invoking a tool.
+    providers:
+      - openrouter-qwen-coder-free     # primary: agentic coding 特化
+      - openrouter-gpt-oss-free        # vendor diversity (rate-limit 逃げ)
+      - openrouter-gemini-flash-free   # 1M ctx fallback
+
+  # 画像入力 (vision) 専用。Gemini Flash の 1M ctx で画像 + 長文も同時に。
+  - name: vision
+    append_system_prompt: |
+      Describe images factually with no speculation beyond what is visible.
+      Match Claude Sonnet's vision style: terse, accurate, no fluff.
+    providers:
+      - openrouter-gemini-flash-free   # 1M ctx + vision native
+      - openrouter-qwen-coder-free     # 視覚タスクは弱いが text fallback として
+      - openrouter-gpt-oss-free        # text-only fallback
+
+  # 長尺コンテキスト (32K token 超) — Pi 上の 8K-32K ローカルでは詰むので
+  # クラウドの大きい ctx に逃がす。Gemini Flash 1M が現状ベスト。
+  - name: longcontext
+    append_system_prompt: |
+      The user is sending a long-context request. Read the entire input
+      carefully, structure your reasoning, and answer concisely.
+    providers:
+      - openrouter-gemini-flash-free   # 1M ctx
+      - openrouter-qwen-coder-free     # 262K ctx fallback
+      - openrouter-gpt-oss-free        # 131K ctx fallback
