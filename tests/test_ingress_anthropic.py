@@ -294,6 +294,55 @@ class _LoopBreakingEngine:
         yield  # pragma: no cover  # generator protocol
 
 
+class _HangingStreamEngine:
+    """Engine whose stream never yields a first event (sleeps forever).
+
+    Exercises the v2.x pre-stream peek timeout: the ingress must give up
+    after the resolved first-event budget and return HTTP 504 rather than
+    committing a streaming response that would hang the client.
+    """
+
+    def __init__(self) -> None:
+        self.last_drift_severity: str | None = None
+        self.closed = False
+
+    def apply_context_budget(
+        self, request: AnthropicRequest
+    ) -> tuple[AnthropicRequest, str | None]:
+        return request, None
+
+    async def stream_anthropic(
+        self, request: AnthropicRequest
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        try:
+            import asyncio
+
+            await asyncio.sleep(3600)
+        finally:
+            self.closed = True
+        yield  # pragma: no cover  # generator protocol
+
+
+@pytest.fixture
+def client_and_hanging_engine(
+    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _HangingStreamEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: two_profile_config,
+    )
+    # Force a tiny peek budget so the test doesn't actually wait 60s.
+    monkeypatch.setattr(
+        "coderouter.ingress.anthropic_routes._resolve_first_event_timeout_s",
+        lambda engine, profile: 0.05,
+    )
+    app = create_app()
+    engine = _HangingStreamEngine()
+    app.state.engine = engine
+    app.state.config = two_profile_config
+    return TestClient(app), engine
+
+
 @pytest.fixture
 def client_and_engine(
     two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
@@ -724,28 +773,35 @@ def test_streaming_emits_anthropic_event_sequence(
     assert engine.seen_profiles == [None]
 
 
-def test_streaming_error_emits_error_event(
+def test_streaming_total_failure_returns_502(
     client_and_failing_engine: tuple[TestClient, _FailingEngine],
 ) -> None:
-    """When the engine raises NoProvidersAvailableError before any event
-    ships, the SSE channel should emit a single `error` event (not a 5xx
-    HTTP status, since headers have already flushed).
+    """v2.x fail-fast: when the engine raises NoProvidersAvailableError
+    before any event ships, the ingress peeks the first event *before*
+    committing the streaming response, so a total pre-stream failure now
+    surfaces as a real HTTP 502 (same as the non-streaming path) instead
+    of a 200 carrying an in-band ``event: error`` frame.
     """
     client, _ = client_and_failing_engine
     body = {**_MINIMAL_BODY, "stream": True}
-    with client.stream("POST", "/v1/messages", json=body) as resp:
-        assert resp.status_code == 200
-        raw = b"".join(resp.iter_bytes()).decode("utf-8")
+    resp = client.post("/v1/messages", json=body)
+    assert resp.status_code == 502, resp.text
+    # NoProvidersAvailableError message embeds the profile name.
+    assert "all providers failed" in resp.text
 
-    events = _parse_sse(raw)
-    assert any(t == "error" for t, _ in events), raw
 
-    import json as _json
-
-    err = next(d for t, d in events if t == "error")
-    err_payload = _json.loads(err)
-    assert err_payload["type"] == "error"
-    assert err_payload["error"]["type"] == "overloaded_error"
+def test_streaming_peek_timeout_returns_504(
+    client_and_hanging_engine: tuple[TestClient, _HangingStreamEngine],
+) -> None:
+    """v2.x fail-fast: if no provider emits a first event within the peek
+    budget, the ingress returns HTTP 504 (and closes the engine generator)
+    rather than committing a streaming response that hangs the client.
+    """
+    client, _engine = client_and_hanging_engine
+    body = {**_MINIMAL_BODY, "stream": True}
+    resp = client.post("/v1/messages", json=body)
+    assert resp.status_code == 504, resp.text
+    assert "before the first token" in resp.text
 
 
 # ----------------------------------------------------------------------
@@ -832,47 +888,34 @@ def test_break_action_non_streaming_returns_400_with_structured_detail(
     assert "args_canonical" not in detail
 
 
-def test_break_action_streaming_emits_invalid_request_error_event(
+def test_break_action_streaming_returns_400_with_structured_detail(
     client_and_loop_breaking_engine: tuple[TestClient, _LoopBreakingEngine],
 ) -> None:
-    """Streaming counterpart: ``break`` must emit a single SSE error event.
+    """v2.x fail-fast: streaming ``break`` now returns a real HTTP 400.
 
-    The HTTP status stays 200 because StreamingResponse has already
-    committed headers by the time the iterator runs (same constraint
-    as MidStreamError). The Anthropic-shaped envelope uses
-    ``error.type == "invalid_request_error"`` so existing SDKs render
-    a sensible message; the structured detection fields live under a
-    ``tool_loop`` extension key for CodeRouter-aware clients.
+    The tool-loop ``break`` guard fires before the first stream event, so
+    the ingress peek catches ``ToolLoopBreakError`` *before* the
+    StreamingResponse commits HTTP 200. The response is therefore an
+    ordinary 400 with the same structured ``detail`` dict as the
+    non-streaming path — no in-band SSE error frame, no committed 200.
     """
     client, _ = client_and_loop_breaking_engine
     body = {**_MINIMAL_BODY, "stream": True}
-    with client.stream("POST", "/v1/messages", json=body) as resp:
-        assert resp.status_code == 200
-        raw = b"".join(resp.iter_bytes()).decode("utf-8")
+    resp = client.post("/v1/messages", json=body)
+    assert resp.status_code == 400, resp.text
 
-    events = _parse_sse(raw)
-    event_types = [t for t, _ in events]
-    # The guard fires before any provider event ships, so the only
-    # event in the stream is the error event itself.
-    assert event_types == ["error"], raw
-
-    import json as _json
-
-    err_data = _json.loads(events[0][1])
-    assert err_data["type"] == "error"
-    err = err_data["error"]
-    # Anthropic-standard envelope for SDK compatibility.
-    assert err["type"] == "invalid_request_error"
-    assert "tool loop detected" in err["message"]
-    # Structured detection fields under the extension key.
-    tl = err["tool_loop"]
-    assert tl["profile"] == "default"
-    assert tl["tool_name"] == "Read"
-    assert tl["repeat_count"] == 3
-    assert tl["threshold"] == 3
-    assert tl["window"] == 5
-    # Same hygiene as the non-streaming path: no args_canonical leakage.
-    assert "args_canonical" not in tl
+    detail = resp.json()["detail"]
+    assert isinstance(detail, dict), detail
+    # Discriminator clients branch on — identical to the non-streaming 400.
+    assert detail["error"] == "tool_loop_detected"
+    assert detail["profile"] == "default"
+    assert detail["tool_name"] == "Read"
+    assert detail["repeat_count"] == 3
+    assert detail["threshold"] == 3
+    assert detail["window"] == 5
+    assert "tool loop detected" in detail["message"]
+    # ``args_canonical`` must NOT leak into the response.
+    assert "args_canonical" not in detail
 
 
 # ----------------------------------------------------------------------

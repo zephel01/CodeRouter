@@ -65,6 +65,88 @@ _STREAM_TIMEOUT_MULTIPLIER = 20.0
 _STREAM_TIMEOUT_DEFAULT_S = 900.0
 _STREAM_TIMEOUT_MIN_S = 60.0
 
+# v2.x: peek-timeout for the first streamed event. See
+# ``_resolve_first_event_timeout_s`` — this is the per-call provider timeout
+# flavor (no stream multiplier), used only to bound the pre-stream peek that
+# maps a total failover failure to a real HTTP status.
+_FIRST_EVENT_TIMEOUT_DEFAULT_S = 60.0
+_FIRST_EVENT_TIMEOUT_MIN_S = 10.0
+
+# v2.x: sentinels for the peek/continuation handshake in
+# ``_anthropic_sse_iterator``. ``_UNSET`` means "no peeked event was supplied,
+# create + iterate the source yourself" (the legacy call convention still used
+# by unit tests). ``_EMPTY_STREAM`` means "the peek observed an immediately
+# exhausted stream" — legal, emit nothing extra and let the (empty) source run
+# to completion.
+_UNSET: Any = object()
+_EMPTY_STREAM: Any = object()
+
+
+async def _aclose_quiet(source: Any) -> None:
+    """v2.x: best-effort close an async generator, swallowing any error.
+
+    Used to finalize the engine ``stream_anthropic`` generator when the
+    pre-stream peek fails and we raise an :class:`HTTPException` instead of
+    committing a streaming response. Closing runs the generator's ``finally``
+    blocks so the adapter's ``httpx`` streaming context releases the upstream
+    connection rather than leaking it until GC.
+    """
+    aclose = getattr(source, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await aclose()
+
+
+async def _anext_or_empty(source: AsyncIterator[Any]) -> Any:
+    """v2.x: pull the first event, mapping an empty stream to ``_EMPTY_STREAM``.
+
+    Wrapping ``__anext__`` so ``StopAsyncIteration`` never has to cross the
+    :func:`asyncio.wait_for` task boundary (where it would be awkward to
+    catch) — an immediately exhausted stream returns the ``_EMPTY_STREAM``
+    sentinel. Any other exception (``NoProvidersAvailableError``,
+    ``ToolLoopBreakError``, ...) propagates unchanged for the caller to map.
+    """
+    try:
+        return await source.__anext__()
+    except StopAsyncIteration:
+        return _EMPTY_STREAM
+
+
+def _resolve_first_event_timeout_s(
+    engine: FallbackEngine, profile: str | None
+) -> float:
+    """v2.x: derive the pre-stream peek timeout (seconds) for a profile.
+
+    Mirrors :func:`_resolve_stream_timeout_s`'s config access but WITHOUT the
+    stream multiplier — this bounds only the wait for the *first* streamed
+    event (which the engine emits after any failover completes), not the whole
+    generation. Uses the profile's per-call ``timeout_s`` (or the first
+    provider's, or the default), floored at ``_FIRST_EVENT_TIMEOUT_MIN_S`` so a
+    tiny configured timeout can't spuriously 504 a chain that briefly fails
+    over before the first token. Any resolution failure falls back to
+    ``_FIRST_EVENT_TIMEOUT_DEFAULT_S``. Does NOT change the config schema.
+    """
+    per_call: float | None = None
+    try:
+        config = engine.config
+        chosen = profile or config.default_profile
+        chain_cfg = config.profile_by_name(chosen)
+        per_call = getattr(chain_cfg, "timeout_s", None)
+        if per_call is None:
+            for pname in getattr(chain_cfg, "providers", []) or []:
+                pconf = next(
+                    (p for p in config.providers if p.name == pname), None
+                )
+                if pconf is not None:
+                    per_call = getattr(pconf, "timeout_s", None)
+                    break
+    except (AttributeError, KeyError, ValueError):
+        per_call = None
+
+    if per_call is None:
+        return _FIRST_EVENT_TIMEOUT_DEFAULT_S
+    return max(_FIRST_EVENT_TIMEOUT_MIN_S, float(per_call))
+
 
 def _resolve_stream_timeout_s(engine: FallbackEngine, profile: str | None) -> float:
     """M14: derive the overall stream ceiling (seconds) for a profile.
@@ -258,12 +340,66 @@ async def messages(
         drift_severity = engine.last_drift_severity
         if drift_severity:
             stream_headers[_DRIFT_HEADER] = drift_severity
+        # v2.x: fail-fast peek. The engine performs its whole failover BEFORE
+        # emitting the first stream event (total failure / tool-loop-break /
+        # tool-count guards all raise pre-yield). By pulling that first event
+        # here — before the StreamingResponse commits HTTP 200 + SSE headers —
+        # a total pre-stream failure surfaces as a real HTTP status (502 / 400
+        # / 504) instead of a 200 carrying an in-band ``event: error`` frame.
+        # Once the first event is in hand, headers can ship safely: anything
+        # that goes wrong afterwards is a genuine mid-stream error handled by
+        # ``_anthropic_sse_iterator`` (MidStreamError / partial stitch).
+        source = engine.stream_anthropic(anth_req)
+        peek_timeout_s = _resolve_first_event_timeout_s(engine, anth_req.profile)
+        try:
+            first_ev = await asyncio.wait_for(
+                _anext_or_empty(source), timeout=peek_timeout_s
+            )
+        except NoProvidersAvailableError as exc:
+            await _aclose_quiet(source)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except ToolLoopBreakError as exc:
+            await _aclose_quiet(source)
+            # Same structured 400 as the non-streaming path — the guard fires
+            # before any byte ships, so we can still use a real status code.
+            raise HTTPException(
+                status_code=400,
+                detail=_tool_loop_break_detail(exc),
+            ) from exc
+        except ToolCountExceededError as exc:
+            await _aclose_quiet(source)
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "tool_count_exceeded",
+                    "message": str(exc),
+                    "total_count": exc.exceeded.total_count,
+                    "max_allowed": exc.exceeded.max_allowed,
+                    "profile": exc.profile,
+                },
+            ) from exc
+        except TimeoutError as exc:
+            # No provider produced a first event within the peek budget.
+            # (asyncio.wait_for raises asyncio.TimeoutError, which is an alias
+            # of the builtin TimeoutError on 3.11+.)
+            await _aclose_quiet(source)
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"no stream event within {peek_timeout_s:.0f}s "
+                    "(all providers timed out before the first token)"
+                ),
+            ) from exc
+
         # M14: wrap the SSE iterator with an overall timeout + client
         # disconnect cleanup so a wedged upstream cannot pin the client
-        # (or the upstream socket) open forever.
+        # (or the upstream socket) open forever. The peeked first event is
+        # replayed by the iterator before it delegates to the live source.
         timeout_s = _resolve_stream_timeout_s(engine, anth_req.profile)
         guarded = _guard_stream(
-            _anthropic_sse_iterator(engine, anth_req),
+            _anthropic_sse_iterator(
+                engine, anth_req, source=source, first_ev=first_ev
+            ),
             timeout_s=timeout_s,
             label="anthropic",
         )
@@ -425,7 +561,11 @@ async def count_tokens_route(
 
 
 async def _anthropic_sse_iterator(
-    engine: FallbackEngine, anth_req: AnthropicRequest
+    engine: FallbackEngine,
+    anth_req: AnthropicRequest,
+    *,
+    source: AsyncIterator[AnthropicStreamEvent] | None = None,
+    first_ev: Any = _UNSET,
 ) -> AsyncIterator[str]:
     """Serialize engine.stream_anthropic() onto the Anthropic SSE wire.
 
@@ -433,9 +573,25 @@ async def _anthropic_sse_iterator(
     Anthropic spec (distinct from OpenAI's `data:`-only format).
     Errors map to in-stream `event: error` events — we never switch an
     in-flight HTTP response to a 5xx once headers have shipped.
+
+    v2.x: when ``source`` / ``first_ev`` are supplied by the fail-fast peek
+    in :func:`messages`, this iterator replays the already-pulled first event
+    then continues the *same* live generator. In that mode the pre-yield
+    exception branches below (``NoProvidersAvailableError`` /
+    ``ToolLoopBreakError`` / ``ToolCountExceededError``) are effectively dead
+    code — those all raise before the first event, which the peek already
+    consumed and mapped to a real HTTP status. They are retained as defensive
+    fallbacks (and for the legacy no-peek call convention used by unit tests,
+    where ``source is None`` and this iterator drives the generator itself).
+    ``MidStreamError`` handling below is the live path for a stream that fails
+    *after* the first event.
     """
+    if source is None:
+        source = engine.stream_anthropic(anth_req)
     try:
-        async for ev in engine.stream_anthropic(anth_req):
+        if first_ev is not _UNSET and first_ev is not _EMPTY_STREAM:
+            yield _format_anthropic_sse(first_ev)
+        async for ev in source:
             yield _format_anthropic_sse(ev)
     except NoProvidersAvailableError as exc:
         # No provider produced even the first event — surface as overloaded.

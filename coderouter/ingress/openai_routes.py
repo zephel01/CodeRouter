@@ -47,6 +47,78 @@ _STREAM_TIMEOUT_MULTIPLIER = 20.0
 _STREAM_TIMEOUT_DEFAULT_S = 900.0
 _STREAM_TIMEOUT_MIN_S = 60.0
 
+# v2.x: peek-timeout for the first streamed chunk — see anthropic_routes for
+# rationale. Per-call provider timeout flavor (no stream multiplier).
+_FIRST_EVENT_TIMEOUT_DEFAULT_S = 60.0
+_FIRST_EVENT_TIMEOUT_MIN_S = 10.0
+
+# v2.x: peek/continuation handshake sentinels for ``_sse_iterator``. ``_UNSET``
+# means "no peeked chunk supplied, create + drive the source yourself" (legacy
+# call convention used by unit tests); ``_EMPTY_STREAM`` means "the peek saw an
+# immediately exhausted stream" (legal — just emit the terminal ``[DONE]``).
+_UNSET: Any = object()
+_EMPTY_STREAM: Any = object()
+
+
+async def _aclose_quiet(source: Any) -> None:
+    """v2.x: best-effort close an async generator, swallowing any error.
+
+    Finalizes the engine ``stream`` generator when the pre-stream peek fails
+    and we raise an :class:`HTTPException` instead of committing a streaming
+    response, so the adapter's ``httpx`` streaming context releases the
+    upstream connection.
+    """
+    aclose = getattr(source, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await aclose()
+
+
+async def _anext_or_empty(source: AsyncIterator[Any]) -> Any:
+    """v2.x: pull the first chunk, mapping an empty stream to ``_EMPTY_STREAM``.
+
+    Keeps ``StopAsyncIteration`` from crossing the :func:`asyncio.wait_for`
+    task boundary. Any other exception (``NoProvidersAvailableError``, ...)
+    propagates unchanged for the caller to map to an HTTP status.
+    """
+    try:
+        return await source.__anext__()
+    except StopAsyncIteration:
+        return _EMPTY_STREAM
+
+
+def _resolve_first_event_timeout_s(
+    engine: FallbackEngine, profile: str | None
+) -> float:
+    """v2.x: derive the pre-stream peek timeout (seconds) for a profile.
+
+    Mirrors :func:`_resolve_stream_timeout_s`'s config access but WITHOUT the
+    stream multiplier — bounds only the wait for the first streamed chunk (the
+    engine emits it after any failover completes). Floored at
+    ``_FIRST_EVENT_TIMEOUT_MIN_S``; any resolution failure falls back to
+    ``_FIRST_EVENT_TIMEOUT_DEFAULT_S``. Does not change the config schema.
+    """
+    per_call: float | None = None
+    try:
+        config = engine.config
+        chosen = profile or config.default_profile
+        chain_cfg = config.profile_by_name(chosen)
+        per_call = getattr(chain_cfg, "timeout_s", None)
+        if per_call is None:
+            for pname in getattr(chain_cfg, "providers", []) or []:
+                pconf = next(
+                    (p for p in config.providers if p.name == pname), None
+                )
+                if pconf is not None:
+                    per_call = getattr(pconf, "timeout_s", None)
+                    break
+    except (AttributeError, KeyError, ValueError):
+        per_call = None
+
+    if per_call is None:
+        return _FIRST_EVENT_TIMEOUT_DEFAULT_S
+    return max(_FIRST_EVENT_TIMEOUT_MIN_S, float(per_call))
+
 
 def _resolve_stream_timeout_s(engine: FallbackEngine, profile: str | None) -> float:
     """M14: derive the overall stream ceiling (seconds) for a profile.
@@ -239,10 +311,44 @@ async def chat_completions(
             ) from exc
 
     if chat_req.stream:
-        # M14: overall stream timeout + client-disconnect cleanup.
+        # v2.x: fail-fast peek. The engine finishes its failover before the
+        # first stream chunk, so a total pre-stream failure raises
+        # NoProvidersAvailableError here — before the StreamingResponse commits
+        # HTTP 200 — and can surface as a real 502 instead of a 200 carrying an
+        # in-band error frame. (No tool-loop / tool-count guards on this path.)
+        source = engine.stream(chat_req)
+        peek_timeout_s = _resolve_first_event_timeout_s(engine, chat_req.profile)
+        try:
+            first_chunk = await asyncio.wait_for(
+                _anext_or_empty(source), timeout=peek_timeout_s
+            )
+        except NoProvidersAvailableError as exc:
+            await _aclose_quiet(source)
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            # asyncio.wait_for raises asyncio.TimeoutError (== builtin
+            # TimeoutError on 3.11+) when the peek budget elapses.
+            await _aclose_quiet(source)
+            raise HTTPException(
+                status_code=504,
+                detail=(
+                    f"no stream chunk within {peek_timeout_s:.0f}s "
+                    "(all providers timed out before the first token)"
+                ),
+            ) from exc
+
+        # M14: overall stream timeout + client-disconnect cleanup. The peeked
+        # first chunk is replayed by the iterator before it delegates to the
+        # live source.
         timeout_s = _resolve_stream_timeout_s(engine, chat_req.profile)
         return StreamingResponse(
-            _sse_iterator(engine, chat_req, timeout_s=timeout_s),
+            _sse_iterator(
+                engine,
+                chat_req,
+                source=source,
+                first_chunk=first_chunk,
+                timeout_s=timeout_s,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -259,6 +365,8 @@ async def _sse_iterator(
     engine: FallbackEngine,
     chat_req: ChatRequest,
     *,
+    source: AsyncIterator[Any] | None = None,
+    first_chunk: Any = _UNSET,
     timeout_s: float = _STREAM_TIMEOUT_DEFAULT_S,
 ) -> AsyncIterator[str]:
     """Wrap the engine's stream into SSE wire format.
@@ -267,10 +375,22 @@ async def _sse_iterator(
     upstream engine generator is finalized on client disconnect
     (``CancelledError``) or timeout, so the upstream connection is
     released instead of leaking.
+
+    v2.x: when ``source`` / ``first_chunk`` are supplied by the fail-fast peek
+    in :func:`chat_completions`, this iterator replays the already-pulled first
+    chunk then continues the *same* live generator. In that mode the
+    ``NoProvidersAvailableError`` branch below is defensive dead code (a total
+    failure raises during the peek, which maps it to a real 502). It is
+    retained for the legacy no-peek call convention (``source is None``) used
+    by unit tests, where this iterator drives the generator itself.
     """
-    source = engine.stream(chat_req)
+    if source is None:
+        source = engine.stream(chat_req)
     try:
         async with asyncio.timeout(timeout_s):
+            if first_chunk is not _UNSET and first_chunk is not _EMPTY_STREAM:
+                data = first_chunk.model_dump(exclude_none=True)
+                yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"
             async for chunk in source:
                 data = chunk.model_dump(exclude_none=True)
                 yield f"data: {json.dumps(data, ensure_ascii=False)}\n\n"

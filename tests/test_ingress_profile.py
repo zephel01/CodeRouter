@@ -327,3 +327,59 @@ def test_mode_header_alone_reaches_engine_as_aliased_profile(
     )
     assert resp.status_code == 200, resp.text
     assert engine.seen_profiles == ["default"]
+
+
+# ----------------------------------------------------------------------
+# v2.x: streaming fail-fast peek — total failure / peek timeout map to a
+# real HTTP status instead of a 200 carrying an in-band error frame.
+# ----------------------------------------------------------------------
+
+
+class _FailingStreamEngine:
+    """Engine whose stream raises NoProvidersAvailableError before any chunk."""
+
+    def __init__(self, profile: str = "default") -> None:
+        self.profile = profile
+
+    async def generate(self, request: ChatRequest) -> ChatResponse:
+        from coderouter.routing import NoProvidersAvailableError
+
+        raise NoProvidersAvailableError(self.profile, [])
+
+    async def stream(self, request: ChatRequest) -> AsyncIterator[StreamChunk]:
+        from coderouter.routing import NoProvidersAvailableError
+
+        raise NoProvidersAvailableError(self.profile, [])
+        yield  # pragma: no cover  # generator protocol
+
+
+@pytest.fixture
+def client_and_failing_stream_engine(
+    two_profile_config: CodeRouterConfig, monkeypatch: pytest.MonkeyPatch
+) -> tuple[TestClient, _FailingStreamEngine]:
+    monkeypatch.setattr(
+        "coderouter.ingress.app.load_config",
+        lambda path=None: two_profile_config,
+    )
+    app = create_app()
+    engine = _FailingStreamEngine()
+    app.state.engine = engine
+    app.state.config = two_profile_config
+    return TestClient(app), engine
+
+
+def test_streaming_total_failure_returns_502(
+    client_and_failing_stream_engine: tuple[TestClient, _FailingStreamEngine],
+) -> None:
+    """v2.x fail-fast: a total pre-stream failure on the OpenAI route peeks
+    the first chunk before committing the streaming response, so it now
+    surfaces as HTTP 502 (same as the non-streaming path) rather than a 200
+    with an in-band ``no_providers_available`` error frame.
+    """
+    client, _ = client_and_failing_stream_engine
+    resp = client.post(
+        "/v1/chat/completions",
+        json={**_MINIMAL_BODY, "stream": True},
+    )
+    assert resp.status_code == 502, resp.text
+    assert "all providers failed" in resp.text
