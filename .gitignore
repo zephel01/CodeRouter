@@ -6,7 +6,7 @@
 .env.*
 !.env.example
 secrets.env
-~/.coderouter/
+~/.coderouter-t/
 CLAUDE.md
 
 # *.bak — pre-overwrite backups of the files above (e.g. `vscode-init --force`

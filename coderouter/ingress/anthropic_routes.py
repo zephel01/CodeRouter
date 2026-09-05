@@ -202,6 +202,41 @@ async def messages(
     except Exception as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # Translation layer: Request JA→EN (design §7.1, before profile resolution)
+    # Must not translate system/tool_use/tool_result; only user text with is_japanese
+    # A-1 fix: outer fail-open now logs at debug so programming errors (AttributeError etc.)
+    # are not silently swallowed; inner warning remains for translation-specific failures.
+    try:
+        tcfg = getattr(config, "translation", None)
+        if tcfg is not None and getattr(tcfg, "enabled", False):
+            manager = getattr(request.app.state, "translator_manager", None)
+            if manager is not None and getattr(manager, "is_available", lambda: False)():
+                try:
+                    from coderouter.jp_translation.translator import (
+                        translate_anthropic_request_ja_to_en,
+                    )
+
+                    # Sync API → to_thread + 5s timeout (design §3.2.3)
+                    anth_req = await asyncio.wait_for(
+                        asyncio.to_thread(
+                            translate_anthropic_request_ja_to_en, anth_req, manager
+                        ),
+                        timeout=5.0,
+                    )
+                    if getattr(tcfg, "log_translations", False):
+                        logger.info(
+                            "translation-ja-en-applied",
+                            extra={"messages": len(anth_req.messages)},
+                        )
+                except Exception as exc:
+                    logger.warning(
+                        "translation-ja-en-failed",
+                        extra={"error": str(exc)},
+                    )
+    except Exception as exc:
+        # Translation must never break request path (design §3.5) — debug so silent swallowing is observable.
+        logger.debug("translation-ja-en-skip", extra={"error": str(exc)})
+
     # v0.4-D: forward the `anthropic-beta` header through to the native
     # adapter. Without this, any body field gated behind a beta header
     # (`context_management`, newer cache_control/thinking variants, etc.)
@@ -231,7 +266,18 @@ async def messages(
             extra={"mode": x_coderouter_mode, "profile": anth_req.profile},
         )
 
+    # Resolve profile from request model field if profile is not explicitly specified
+    if anth_req.profile is None and anth_req.model:
+        resolved = config.resolve_model_to_profile(anth_req.model)
+        if resolved:
+            anth_req.profile = resolved
+            logger.info(
+                "model-resolved-to-profile",
+                extra={"model": anth_req.model, "profile": anth_req.profile},
+            )
+
     # v1.6-A: auto router slot. Symmetric with the OpenAI route — fires only
+
     # when ``default_profile: auto`` is set and no explicit profile signal won
     # above. When inactive the engine falls through to ``default_profile`` on
     # its own. ``classify`` inspects the raw ``payload`` dict (not the
@@ -428,6 +474,9 @@ async def count_tokens_route(
             profile = config.resolve_mode(x_coderouter_mode)
         except (KeyError, AttributeError):
             profile = None
+    if profile is None and payload.get("model"):
+        profile = config.resolve_model_to_profile(payload.get("model"))
+
 
     # Combine system + messages (+ tool JSON length) into one text blob and
     # count. tools contribute their JSON length as a coarse proxy for the

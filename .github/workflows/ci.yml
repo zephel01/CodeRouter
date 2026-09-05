@@ -93,6 +93,11 @@ jobs:
       - name: Install dependencies (lockfile-frozen)
         run: uv sync --frozen --extra dev
 
+      - name: Verify UTF-8 encoding (C-3)
+        run: |
+          python -c "from pathlib import Path; Path('README.md').read_text(encoding='utf-8'); print('README.md utf-8 ok')"
+          python -c "from pathlib import Path; Path('coderouter/messages.py').read_text(encoding='utf-8'); print('messages.py utf-8 ok')"
+
       - name: Lint (ruff)
         run: uv run ruff check .
 
@@ -157,7 +162,7 @@ jobs:
         # uv.lock — no editable install, no unpublished names.
         #
         # `--all-extras` (was `--extra dev` only): `pip install
-        # coderouter-cli[accuracy]` (tokenizers) and `[repair]`
+        # coderouter-t[accuracy]` (tokenizers) and `[repair]`
         # (json-repair) are real, user-facing install combinations, so
         # their dependencies must be in the audited set too — not just
         # the dev/test toolchain.

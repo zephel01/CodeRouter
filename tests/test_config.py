@@ -270,7 +270,7 @@ def test_missing_config_path_is_helpful(tmp_path: Path, monkeypatch: pytest.Monk
     # fallback candidates) does not accidentally resolve to the project's
     # real providers.yaml when tests are invoked from the repo root.
     monkeypatch.chdir(tmp_path)
-    # Also force HOME so ~/.coderouter/providers.yaml cannot satisfy either.
+    # Also force HOME so ~/.coderouter-t/providers.yaml cannot satisfy either.
     monkeypatch.setenv("HOME", str(tmp_path))
 
     with pytest.raises(FileNotFoundError) as info:
@@ -379,6 +379,12 @@ def test_display_timezone_none_by_default() -> None:
 
 def test_display_timezone_accepts_valid_iana_name() -> None:
     """Well-known IANA zones round-trip without modification."""
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo("Asia/Tokyo")
+    except Exception:
+        pytest.skip("IANA timezone database not available on this platform")
     cfg = CodeRouterConfig(
         **_minimal_config_kwargs(display_timezone="Asia/Tokyo"),  # type: ignore[arg-type]
     )
@@ -392,6 +398,12 @@ def test_display_timezone_accepts_utc() -> None:
     declaration (rather than relying on the ``None`` default) should
     not be blocked.
     """
+    try:
+        import zoneinfo
+
+        zoneinfo.ZoneInfo("UTC")
+    except Exception:
+        pytest.skip("IANA timezone database not available on this platform")
     cfg = CodeRouterConfig(
         **_minimal_config_kwargs(display_timezone="UTC"),  # type: ignore[arg-type]
     )

@@ -15,7 +15,7 @@
 #   - Launcher UI (/launcher) で起動・管理
 #
 # 使い方:
-#   1. cp examples/providers.llamacpp-vllm.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.llamacpp-vllm.yaml ~/.coderouter-t/providers.yaml
 #   2. 必要に応じてパス・ポートを編集
 #   3. coderouter serve
 #   4. http://localhost:8088/launcher でモデルを起動

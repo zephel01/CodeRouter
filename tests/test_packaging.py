@@ -185,7 +185,7 @@ def test_ci_workflow_test_matrix_is_documented() -> None:
 
 
 def test_ci_workflow_cve_audit_covers_all_extras() -> None:
-    """`pip install coderouter-cli[accuracy]` / `[repair]` are real
+    """`pip install coderouter-t[accuracy]` / `[repair]` are real
     install combinations users can pick — pip-audit's export step must
     not silently skip their dependencies (tokenizers, json-repair).
     """

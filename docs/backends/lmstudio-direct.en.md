@@ -176,7 +176,7 @@ Expected:
 
 ### Step 5. Register the providers in CodeRouter
 
-Add both routes side by side to `~/.coderouter/providers.yaml`'s `providers:` list (the same pattern is bundled in `examples/providers.yaml`):
+Add both routes side by side to `~/.coderouter-t/providers.yaml`'s `providers:` list (the same pattern is bundled in `examples/providers.yaml`):
 
 ```yaml
 # OpenAI-compatible route (translation through CodeRouter's adapter)
@@ -280,7 +280,7 @@ Exit: 0
 ### Step 7. End-to-end through CodeRouter (Anthropic-compatible)
 
 ```bash
-coderouter serve --port 8088 --mode test-lmstudio-anthropic &
+coderouter-t serve --port 8088 --mode test-lmstudio-anthropic &
 sleep 2
 
 curl -s -X POST http://localhost:8088/v1/messages \
@@ -353,7 +353,7 @@ No `capability-degraded` log lines (Anthropic-native shape has nothing to strip)
 ### `tool_calls [NEEDS TUNING]` (CodeRouter ≤ v1.8.2)
 
 - Pre-v1.8.3, the `tool_calls` probe used `max_tokens=64` which got consumed by `reasoning_content` on thinking models, producing false positives.
-- **Upgrade to v1.8.3+**: `uv tool upgrade coderouter-cli`.
+- **Upgrade to v1.8.3+**: `uv tool upgrade coderouter-t`.
 
 ### `reasoning_content` field leaking to the client (CodeRouter ≤ v1.8.2)
 

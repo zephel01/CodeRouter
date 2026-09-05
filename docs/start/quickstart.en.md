@@ -68,7 +68,7 @@ ollama serve &   # skip if it's already running
 >
 > Want it auto-detected based on RAM? Run [`./setup.sh`](../../setup.sh) — it
 > picks a safe model for your RAM tier, pulls it, and writes
-> `~/.coderouter/providers.yaml`. To upgrade to a larger model later,
+> `~/.coderouter-t/providers.yaml`. To upgrade to a larger model later,
 > either edit the YAML manually or rerun with
 > `./setup.sh --ram-gb <larger> --force`. See v1.8.0's
 > [examples/providers.yaml](../../examples/providers.yaml) and
@@ -76,7 +76,7 @@ ollama serve &   # skip if it's already running
 
 ### 2. Install CodeRouter
 
-**v1.7.0 ships on PyPI as `coderouter-cli`** (Python 3.12+ required). Three install paths depending on how you'll use it:
+**v1.7.0 ships on PyPI as `coderouter-t`** (Python 3.12+ required). Three install paths depending on how you'll use it:
 
 - **(a) `uvx` for one-off runs — lightest**
 - **(b) `uv tool install` to put `coderouter` on PATH — daily use**
@@ -91,10 +91,10 @@ ollama serve &   # skip if it's already running
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Install + run in one shot.
-# Note: PyPI distribution name (coderouter-cli) differs from the console
+# Note: PyPI distribution name (coderouter-t) differs from the console
 # script name (coderouter), so uv 0.11+ requires the --from form. It also
 # works on older uv, so this is the canonical incantation.
-uvx --from coderouter-cli coderouter serve --port 8088
+uvx --from coderouter-t coderouter-t serve --port 8088
 ```
 
 Best for "I want the latest, I touch this once every couple weeks" usage.
@@ -102,12 +102,12 @@ Best for "I want the latest, I touch this once every couple weeks" usage.
 **(b) Daily use — `uv tool install` to put it on PATH**
 
 ```bash
-uv tool install coderouter-cli
+uv tool install coderouter-t
 coderouter --version           # coderouter 1.7.0
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
-`pipx install coderouter-cli` works equivalently. After this, `coderouter` is callable from any directory.
+`pipx install coderouter-t` works equivalently. After this, `coderouter` is callable from any directory.
 
 **(c) Source contributors — clone + venv**
 
@@ -115,28 +115,28 @@ coderouter serve --port 8088
 git clone https://github.com/zephel01/CodeRouter.git
 cd CodeRouter
 uv sync                         # creates .venv + installs deps
-uv run coderouter serve --port 8088
+uv run coderouter-t serve --port 8088
 ```
 
 Prefix with `uv run` and you don't need `source .venv/bin/activate` (or use direnv for auto-activation).
 
-> **Naming note**: the PyPI distribution is `coderouter-cli` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く).
+> **Naming note**: the PyPI distribution is `coderouter-t` because the bare `coderouter` PyPI slot was already taken by an unrelated HTTP routing library. **The command and Python import name are both `coderouter`** (`from coderouter import ...` / `coderouter-t serve ...`); only the `pip install` name differs. See [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-t-一発で動く).
 >
-> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) and [`examples/providers.yaml`](../../examples/providers.yaml) comments for the rationale.
+> **v1.8.0 introduced use-case-aware 4 profiles**: pick at startup with `coderouter-t serve --mode coding|general|multi|reasoning` (default is `multi`). See [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) and [`examples/providers.yaml`](../../examples/providers.yaml) comments for the rationale.
 
 ### 3. Drop in a `providers.yaml`
 
 Copying the sample is enough — its contents match the topology diagram above.
 
 ```bash
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 
 # Paths (a) / (b) — uvx / uv tool install: fetch the sample directly
-curl -fsSL -o ~/.coderouter/providers.yaml \
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 
 # Path (c) — you cloned the repo
-# cp examples/providers.yaml ~/.coderouter/providers.yaml
+# cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 4. (Optional) Set an OpenRouter API key
@@ -152,7 +152,7 @@ Add the same line to `~/.zshrc` / `~/.bashrc` if you want it to persist.
 ### 5. Start CodeRouter
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 From a second terminal, confirm it's up:
@@ -246,13 +246,13 @@ Same backend chain, just spoken to in OpenAI shape. The `default` profile (local
 
 ## Troubleshooting (the three you'll hit)
 
-### (1) `coderouter serve` fails with `address already in use`
+### (1) `coderouter-t serve` fails with `address already in use`
 
 Something else is holding port 8088. Either free it or pick a different port:
 
 ```bash
 lsof -i :8088        # see who's holding it
-coderouter serve --port 8089   # sidestep it
+coderouter-t serve --port 8089   # sidestep it
 ```
 
 If you change ports, update `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` to match.
@@ -274,7 +274,7 @@ Check that `providers.yaml` has `output_filters: [strip_thinking]` set on the mo
 
 ### (4) `pip install` errors with `externally-managed-environment`
 
-This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to step 2 path (a) (`uvx --from coderouter-cli coderouter`) or (b) (`uv tool install coderouter-cli`). Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
+This is PEP 668 blocking bare `pip install` into the system Python on macOS (Homebrew), Ubuntu 23+, and Debian bookworm+. Switch to step 2 path (a) (`uvx --from coderouter-t coderouter-t`) or (b) (`uv tool install coderouter-t`). Forcing it with `--break-system-packages` is discouraged — it will eventually break your OS-managed Python environment.
 
 ---
 
@@ -297,7 +297,7 @@ Skipping `qwen2.5vl:7b` is fine if you never send images. Image requests will th
 ### C-2. Swap `providers.yaml` for `providers.auto.yaml`
 
 ```bash
-cp examples/providers.auto.yaml ~/.coderouter/providers.yaml
+cp examples/providers.auto.yaml ~/.coderouter-t/providers.yaml
 ```
 
 The load-bearing bits are just two lines:
@@ -307,7 +307,7 @@ default_profile: auto   # ← this sentinel turns auto_router on
 # profiles: must declare multi / coding / writing
 ```
 
-Restart `coderouter serve` and every subsequent request is classified by the bundled ruleset (image attached → `multi` / code-fence ratio ≥ 0.3 → `coding` / else → `writing`). Per-request overrides (`X-CodeRouter-Profile` header or `body.profile`) still win, so you can mix "let it decide normally, but pin this one request" freely.
+Restart `coderouter-t serve` and every subsequent request is classified by the bundled ruleset (image attached → `multi` / code-fence ratio ≥ 0.3 → `coding` / else → `writing`). Per-request overrides (`X-CodeRouter-Profile` header or `body.profile`) still win, so you can mix "let it decide normally, but pin this one request" freely.
 
 ### C-3. Customizing the rules
 

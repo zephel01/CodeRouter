@@ -43,7 +43,7 @@ from coderouter.doctor_apply import (
 # v1.8.0: end-to-end apply tests require the optional ``ruamel.yaml``
 # dependency (declared in ``[project.optional-dependencies].doctor`` /
 # ``[dev]``). When it's missing — typical on a fresh ``uv tool install
-# coderouter-cli`` without the ``[doctor]`` extra — the apply-stage
+# coderouter-t`` without the ``[doctor]`` extra — the apply-stage
 # tests cleanly skip rather than fail. Parse / merge unit tests above
 # don't need ruamel and stay active in all environments.
 #
@@ -126,7 +126,7 @@ PATCH_OUTPUT_FILTERS = textwrap.dedent(
 
 PATCH_CAPABILITIES_RULE = textwrap.dedent(
     """\
-    # ~/.coderouter/model-capabilities.yaml — append under `rules:`:
+    # ~/.coderouter-t/model-capabilities.yaml — append under `rules:`:
     rules:
       - match: 'claude-opus-4-8'
         kind: anthropic
@@ -338,7 +338,7 @@ def test_merge_capabilities_rule_idempotent_for_existing_match() -> None:
 
 
 def test_merge_capabilities_rule_creates_rules_key_when_missing() -> None:
-    """A user-side ~/.coderouter/model-capabilities.yaml may legitimately
+    """A user-side ~/.coderouter-t/model-capabilities.yaml may legitimately
     start empty; the merger should seed ``rules:`` rather than crash."""
     doc: dict[str, object] = {}
     patch = {
@@ -901,7 +901,7 @@ def test_failed_second_write_rolls_back_the_first_file(
     _write_providers_yaml(config_path, PROVIDERS_YAML_INITIAL)
     capabilities_path = tmp_path / "model-capabilities.yaml"
 
-    # Point the capabilities target at tmp_path instead of ~/.coderouter.
+    # Point the capabilities target at tmp_path instead of ~/.coderouter-t.
     monkeypatch.setattr(
         doctor_apply,
         "_resolve_target_path",

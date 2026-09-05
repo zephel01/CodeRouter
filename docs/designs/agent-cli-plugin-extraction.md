@@ -213,13 +213,13 @@ name = "coderouter-plugin-agents"
 version = "0.1.0"
 requires-python = ">=3.11"
 # Core への依存は Protocol/基底クラスの契約バージョン範囲で pin（§5.4）
-dependencies = ["coderouter-cli>=2.8,<3.0"]
+dependencies = ["coderouter-t>=2.8,<3.0"]
 
 [project.entry-points."coderouter.adapter"]
 agents = "coderouter_plugin_agents:AgentCliProvider"
 ```
 
-plugin 本体（adapter.py）は Core と同様 stdlib のみで完結し、新規サードパーティ依存を持たない（現 agent_cli.py L103-114 の import は全 stdlib）。`coderouter-cli` への依存は `BaseAdapter` / `ProviderConfig` / `AgentCliConfig` / `AdapterError` などの型契約を得るためであり、実行時 import である。
+plugin 本体（adapter.py）は Core と同様 stdlib のみで完結し、新規サードパーティ依存を持たない（現 agent_cli.py L103-114 の import は全 stdlib）。`coderouter-t` への依存は `BaseAdapter` / `ProviderConfig` / `AgentCliConfig` / `AdapterError` などの型契約を得るためであり、実行時 import である。
 
 ### 4.3 AgentCliProvider（Adapter Protocol 実装）
 
@@ -305,7 +305,7 @@ Phase 2b では in-core `AgentCliAdapter` を**即時削除しない**。`build_
 
 plugin と Core を独立配布するため、契約は **Adapter Protocol + BaseAdapter + ProviderConfig/AgentCliConfig** の 3 面である。方針:
 
-- plugin は `dependencies = ["coderouter-cli>=2.8,<3.0"]` のように **Core の互換範囲を pin**する。
+- plugin は `dependencies = ["coderouter-t>=2.8,<3.0"]` のように **Core の互換範囲を pin**する。
 - Core は Protocol / BaseAdapter / AgentCliConfig の破壊的変更を **minor 以上**で行い、その際に plugin 側の下限を上げる。Protocol は `runtime_checkable`（base.py L40 の既存方針）なので、loader が `isinstance` で不適合を早期検出でき（plugins/base.py L13-15 の意図）、契約破れは `plugin-load-failed`（loader.py L143-155）として degraded-continue で顕在化する。
 - 互換マトリクスは plugin repo の README に「plugin x.y ↔ Core a.b」の表として維持する（`coderouter-plugin-memory` の前例に倣う）。
 

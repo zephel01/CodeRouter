@@ -96,21 +96,21 @@ A high-performance inference server for **Linux + NVIDIA GPU (CUDA)**.
 
 ### Install
 
-Create the venv under `~/.coderouter/backends/` — the same place as the CodeRouter config — **with a separate venv per backend**. vLLM goes in `~/.coderouter/backends/vllm/` (vLLM and MLX have completely different dependency trees, so always keep their venvs separate). A fixed path lets you write the `binary:` directly in `providers.yaml`.
+Create the venv under `~/.coderouter-t/backends/` — the same place as the CodeRouter config — **with a separate venv per backend**. vLLM goes in `~/.coderouter-t/backends/vllm/` (vLLM and MLX have completely different dependency trees, so always keep their venvs separate). A fixed path lets you write the `binary:` directly in `providers.yaml`.
 
 Installation via `uv` (a fast Python environment manager) is recommended:
 
 ```bash
-uv venv ~/.coderouter/backends/vllm --python 3.12 --seed
-source ~/.coderouter/backends/vllm/bin/activate
+uv venv ~/.coderouter-t/backends/vllm --python 3.12 --seed
+source ~/.coderouter-t/backends/vllm/bin/activate
 uv pip install vllm --torch-backend=auto
 ```
 
 `pip` also works:
 
 ```bash
-python3.12 -m venv ~/.coderouter/backends/vllm
-source ~/.coderouter/backends/vllm/bin/activate
+python3.12 -m venv ~/.coderouter-t/backends/vllm
+source ~/.coderouter-t/backends/vllm/bin/activate
 pip install vllm
 ```
 
@@ -131,7 +131,7 @@ The Launcher starts vLLM as `<python> -m vllm.entrypoints.openai.api_server`. Se
 ```yaml
 backends:
   vllm:
-    binary: ~/.coderouter/backends/vllm/bin/python
+    binary: ~/.coderouter-t/backends/vllm/bin/python
 ```
 
 ### Common pitfalls
@@ -152,11 +152,11 @@ Provides `mlx_lm.server`, an inference server built on Apple's MLX machine-learn
 
 ### Install
 
-Create the venv at `~/.coderouter/backends/mlx/` (a separate venv from vLLM — one per backend):
+Create the venv at `~/.coderouter-t/backends/mlx/` (a separate venv from vLLM — one per backend):
 
 ```bash
-python3 -m venv ~/.coderouter/backends/mlx
-source ~/.coderouter/backends/mlx/bin/activate
+python3 -m venv ~/.coderouter-t/backends/mlx
+source ~/.coderouter-t/backends/mlx/bin/activate
 pip install mlx-lm
 ```
 
@@ -183,7 +183,7 @@ The Launcher starts MLX as `<python> -m mlx_lm.server`. Set `backends.mlx.binary
 ```yaml
 backends:
   mlx:
-    binary: ~/.coderouter/backends/mlx/bin/python
+    binary: ~/.coderouter-t/backends/mlx/bin/python
 ```
 
 ### Common pitfalls

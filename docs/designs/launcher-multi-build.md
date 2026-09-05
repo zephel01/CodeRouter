@@ -181,7 +181,7 @@ launcher:
       binary: ~/llm/apps/llama.cpp/build-rocm/bin/llama-server
 
     vllm:
-      binary: ~/.coderouter/backends/vllm/bin/python
+      binary: ~/.coderouter-t/backends/vllm/bin/python
 
   option_profiles:
     llama.cpp:                    # 基底名 = 全バリアントに継承される

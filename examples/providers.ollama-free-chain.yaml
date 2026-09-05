@@ -7,11 +7,11 @@
 # 有料 API は ALLOW_PAID=true を明示しない限り絶対に呼ばれません。
 #
 # 使い方:
-#   1. このファイルを ~/.coderouter/providers.yaml に置く
-#        mkdir -p ~/.coderouter
-#        cp examples/providers.ollama-free-chain.yaml ~/.coderouter/providers.yaml
+#   1. このファイルを ~/.coderouter-t/providers.yaml に置く
+#        mkdir -p ~/.coderouter-t
+#        cp examples/providers.ollama-free-chain.yaml ~/.coderouter-t/providers.yaml
 #      または GitHub から直接:
-#        curl -fsSL -o ~/.coderouter/providers.yaml \
+#        curl -fsSL -o ~/.coderouter-t/providers.yaml \
 #          https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.ollama-free-chain.yaml
 #   2. ステップ 1 で `ollama pull` したモデル名と一致しているか確認
 #   3. （任意）OpenRouter の無料クラウドを使う場合のみ

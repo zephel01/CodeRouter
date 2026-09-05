@@ -23,7 +23,30 @@ class CodeRouterError(Exception):
     any failure the router itself produces, without having to enumerate
     the leaves (which are free to grow over time). Does not add any
     behavior beyond :class:`Exception`.
+
+    v2.15.0: optional ``message_id`` / ``hint`` carry the bilingual
+    catalog id so callers can render ``str(exc)`` in the user's
+    language without re-translating at the catch site.
     """
 
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        message_id: str | None = None,
+        hint: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.message_id = message_id
+        self.hint = hint
 
-__all__ = ["CodeRouterError"]
+
+class ConfigNotFoundError(CodeRouterError, FileNotFoundError):
+    """Config file not found — carries bilingual message_id for rendering."""
+
+
+class ConfigValidationError(CodeRouterError, ValueError):
+    """Config validation failed — carries bilingual message_id for rendering."""
+
+
+__all__ = ["CodeRouterError", "ConfigNotFoundError", "ConfigValidationError"]

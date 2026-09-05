@@ -1,0 +1,74 @@
+# ============================================================
+# CodeRouter-t providers.yaml (Ollama 3-model Custom Setup)
+# ============================================================
+
+allow_paid: false
+default_profile: coding
+
+mode_aliases:
+  opus: reasoning
+  sonnet: coding
+  haiku: general
+
+providers:
+  # ① Opus 相当モデル (思考・難問用)
+  - name: ollama-opus-model
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:latest             # ※実際に所持しているOpus用モデル名に変更してください
+    paid: false
+    timeout_s: 240
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ② Sonnet 相当モデル (メイン・標準コーディング用)
+  - name: ollama-sonnet-model
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: gemma4:e4b-it-qat       # ※実際に所持しているSonnet用モデル名に変更してください
+    paid: false
+    timeout_s: 180
+    output_filters: [strip_thinking]
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+  # ③ Haiku 相当モデル (軽量・高速用)
+  - name: ollama-haiku-model
+    kind: openai_compat
+    base_url: http://localhost:11434/v1
+    model: hf.co/bartowski/Ling-3.0-tiny-GGUF:Q4_K_M        # ※実際に所持しているHaiku用モデル名に変更してください
+    paid: false
+    timeout_s: 60
+    capabilities:
+      chat: true
+      streaming: true
+      tools: true
+
+profiles:
+  # Opus 用プロファイル
+  - name: reasoning
+    providers:
+      - ollama-opus-model
+#      - ollama-sonnet-model
+
+  # Sonnet 用プロファイル (デフォルト)
+  - name: coding
+    providers:
+      - ollama-sonnet-model
+#      - ollama-haiku-model
+
+  # Haiku 用プロファイル
+  - name: general
+    providers:
+      - ollama-haiku-model
+#      - ollama-sonnet-model
+
+translation:
+  enabled: true
+  device: cpu
+  log_translations: true

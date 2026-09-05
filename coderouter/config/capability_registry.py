@@ -15,7 +15,7 @@ Motivation
     explicit flag on ``providers.yaml`` has been checked. Precedence:
 
         providers.yaml capabilities.*      ─── highest (explicit opt-in)
-        user file ~/.coderouter/mcy        ─── per-deployment overrides
+        user file ~/.coderouter-t/mcy        ─── per-deployment overrides
         bundled  coderouter/data/mcy       ─── shipped defaults
         unset                               ─── flag defaults to False
 
@@ -225,7 +225,7 @@ class ResolvedCapabilities:
 
 _BUNDLED_PACKAGE = "coderouter.data"
 _BUNDLED_NAME = "model-capabilities.yaml"
-_USER_PATH = Path.home() / ".coderouter" / "model-capabilities.yaml"
+_USER_PATH = Path.home() / ".coderouter-t" / "model-capabilities.yaml"
 
 
 class CapabilityRegistry:
@@ -349,7 +349,7 @@ class CapabilityRegistry:
     def load_default(cls) -> CapabilityRegistry:
         """Load the bundled YAML + optional user override.
 
-        User file is resolved at ``~/.coderouter/model-capabilities.yaml``;
+        User file is resolved at ``~/.coderouter-t/model-capabilities.yaml``;
         missing = empty user layer. Bundled file is required — if it
         cannot be read, this raises ``RuntimeError`` (the package is
         broken). Both files are validated against

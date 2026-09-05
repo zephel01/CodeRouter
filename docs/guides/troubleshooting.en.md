@@ -53,23 +53,23 @@ The class of "the server isn't even talking upstream correctly". If you see an u
 Some old sample-YAML comments said `coderouter start --profile claude-code-nim`. The actual command is:
 
 ```bash
-coderouter serve --mode claude-code-nim --port 8088
+coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 | Wrong | Right |
 |---|---|
-| `coderouter start ...` | `coderouter serve ...` (subcommand) |
+| `coderouter start ...` | `coderouter-t serve ...` (subcommand) |
 | `--profile <name>` | `--mode <name>` (flag) |
 | `--port` omitted | Default 4000. Match `--port 8088` (or whatever your `ANTHROPIC_BASE_URL` expects) |
 
-`coderouter --help` / `coderouter serve --help` is authoritative.
+`coderouter --help` / `coderouter-t serve --help` is authoritative.
 
 ### 1-2. `.env` requires `export`
 
 As of v1.6.2 the project's `examples/.env.example` writes each key with `export`:
 
 ```bash
-# OK — `source .env` propagates to child processes (coderouter serve / doctor)
+# OK — `source .env` propagates to child processes (coderouter-t serve / doctor)
 export NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxx
 export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 ```
@@ -79,7 +79,7 @@ export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxx
 ```
 
-CodeRouter does **not auto-source `.env`**. Either `source .env` manually, or `set -a && source .env && set +a` to bulk-export plain `KEY=value` lines, before running `coderouter serve`.
+CodeRouter does **not auto-source `.env`**. Either `source .env` manually, or `set -a && source .env && set +a` to bulk-export plain `KEY=value` lines, before running `coderouter-t serve`.
 
 ### 1-3. Verifying that the env var actually reached the child
 
@@ -125,7 +125,7 @@ Common causes: missing `export` keyword, line in `~/.zprofile` instead of `~/.zs
 
 ### 1-6. Other machines get `Host '...' is not allowed.` (403) — v2.7.0+
 
-You started `coderouter serve --host 0.0.0.0` to expose it on the LAN, but
+You started `coderouter-t serve --host 0.0.0.0` to expose it on the LAN, but
 another PC gets `{"detail":"Host '192.168.x.x:8088' is not allowed."}` while
 `curl http://localhost:8088/healthz` on the host itself works. If a setup that
 worked on 2.6 broke on 2.7, this is almost certainly it.
@@ -137,7 +137,7 @@ Fix — allow-list **this server's own IP / hostname (the value in the client's
 URL bar — NOT the client's IP)** (comma-separated, no port):
 
 ```bash
-CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 8088
+CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter-t serve --host 0.0.0.0 --port 8088
 ```
 
 When in doubt, copy the value from the error message (minus the port). Note that
@@ -154,14 +154,14 @@ bind and no `CODEROUTER_ALLOWED_HOSTS` prints a startup warning.
 
 ### 1-7. `providers.yaml` isn't being read / config changes have no effect — v2.13.0+
 
-**Symptom**: you edited `./providers.yaml` but `coderouter serve` / `doctor` doesn't behave any differently. The same workflow worked on v2.12 and earlier.
+**Symptom**: you edited `./providers.yaml` but `coderouter-t serve` / `doctor` doesn't behave any differently. The same workflow worked on v2.12 and earlier.
 
 **Cause**: as of v2.13.0, implicit discovery of `./providers.yaml` in the current working directory defaults to off (a security hardening: starting CodeRouter from a directory that happens to contain a hostile `providers.yaml` could otherwise steer executable fields like `restart_command`). Config search order:
 
 1. Explicit `--config` path
 2. `$CODEROUTER_CONFIG` env var
 3. `./providers.yaml` in the current directory — **only when `CODEROUTER_ALLOW_CWD_CONFIG` is truthy (`1`/`true`/`yes`/`on`)**
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 If the opt-in is unset and a `./providers.yaml` exists, a one-time `cwd-config-skipped` warning fires at startup — seeing that in the log all but confirms this is the cause.
 
@@ -169,13 +169,13 @@ If the opt-in is unset and a `./providers.yaml` exists, a one-time `cwd-config-s
 
 ```bash
 # 1) Opt in explicitly (only in directories you trust)
-CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 
 # 2) Name the file explicitly
-coderouter serve --config ./providers.yaml
+coderouter-t serve --config ./providers.yaml
 
 # 3) Move it to the user-layer default
-mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+mkdir -p ~/.coderouter-t && cp ./providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 1-8. `/dashboard` or `/metrics.json` returns 401 — v2.14.0+
@@ -469,7 +469,7 @@ export ANTHROPIC_API_KEY=op://Personal/Anthropic/credential
 **Run** — `op run` resolves `op://` references and exports the values:
 
 ```bash
-op run --env-file=.env.tpl -- coderouter serve --mode claude-code-nim --port 8088
+op run --env-file=.env.tpl -- coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 Why this works well:
@@ -479,7 +479,7 @@ Why this works well:
 - Per-team-member Vaults make offboarding a Vault swap, not a key rotation
 - CodeRouter sees a normal exported env — `--env-file` is not involved
 
-> **Use `coderouter serve --env-file <path>` when you do want a file in the loop** — for example, when piping 1Password output into a temporary file, or when integrating with direnv / sops which deliver the env via files. Direct `op run` injection doesn't need it.
+> **Use `coderouter-t serve --env-file <path>` when you do want a file in the loop** — for example, when piping 1Password output into a temporary file, or when integrating with direnv / sops which deliver the env via files. Direct `op run` injection doesn't need it.
 
 ### 5-4. direnv + sops for git-tracked encrypted secrets
 
@@ -505,7 +505,7 @@ direnv allow .
 
 # 5. cd is now enough
 cd ~/works/CodeRouter   # direnv decrypts in the background
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 CodeRouter just reads from `os.environ` as usual; `--env-file` is again not needed.
@@ -522,7 +522,7 @@ security add-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w
 
 # Pull it into env at startup
 export NVIDIA_NIM_API_KEY=$(security find-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w)
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 Drop the two lines into `~/.zshrc` and every new shell auto-resolves. Touch ID / password prompts may appear — that's an extra security layer, not an annoyance.
@@ -533,17 +533,17 @@ Drop the two lines into `~/.zshrc` and every new shell auto-resolves. Touch ID /
 secret-tool store --label='NVIDIA NIM' service NVIDIA_NIM_API_KEY
 
 export NVIDIA_NIM_API_KEY=$(secret-tool lookup service NVIDIA_NIM_API_KEY)
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 ### 5-6. Layering `--env-file` (intermediate)
 
-`coderouter serve --env-file <path>` accepts the flag multiple times, applied left-to-right with **first occurrence wins**. **File values do NOT override variables already in the environment** by default (flip with `--env-file-override`). This makes layering ergonomic.
+`coderouter-t serve --env-file <path>` accepts the flag multiple times, applied left-to-right with **first occurrence wins**. **File values do NOT override variables already in the environment** by default (flip with `--env-file-override`). This makes layering ergonomic.
 
 ```bash
 # Global defaults overridden by project-local values
-coderouter serve \
-  --env-file ~/.coderouter/global.env \
+coderouter-t serve \
+  --env-file ~/.coderouter-t/global.env \
   --env-file ./project.env \
   --port 8088
 ```
@@ -551,7 +551,7 @@ coderouter serve \
 ```bash
 # 1Password + project-local overrides
 op run --env-file=.env.tpl -- \
-  coderouter serve \
+  coderouter-t serve \
     --env-file ./project-local-overrides.env \
     --port 8088
 ```

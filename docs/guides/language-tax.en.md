@@ -68,7 +68,7 @@ providers:
     kind: anthropic
     base_url: https://api.anthropic.com
     model: claude-sonnet-4-6
-    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json
+    tokenizer_path: ~/.coderouter-t/tokenizers/sonnet.json
 ```
 
 ### Getting a tokenizer.json (once)
@@ -76,12 +76,12 @@ providers:
 CodeRouter itself never hits the network (local file only). Download the tokenizer once as the operator:
 
 ```bash
-pip install "coderouter-cli[accuracy]"   # accurate-count backend (tokenizers)
+pip install "coderouter-t[accuracy]"   # accurate-count backend (tokenizers)
 
 python - <<'PY'
 from huggingface_hub import hf_hub_download
 p = hf_hub_download(repo_id="Qwen/Qwen2.5-0.5B", filename="tokenizer.json")
-print(p)   # copy into ~/.coderouter/tokenizers/ and set tokenizer_path
+print(p)   # copy into ~/.coderouter-t/tokenizers/ and set tokenizer_path
 PY
 ```
 

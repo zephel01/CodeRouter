@@ -45,7 +45,7 @@
 #   3. ローカル (local-coder / local-reviewer) 用に Ollama で以下を pull:
 #        ollama pull qwen3-coder:30b
 #        ollama pull qwen2.5-coder:7b
-#   4. cp examples/providers.opusplan.yaml ~/.coderouter/providers.yaml
+#   4. cp examples/providers.opusplan.yaml ~/.coderouter-t/providers.yaml
 #   5. coderouter serve --port 8088
 #   6. 動作確認(役割明示):
 #        curl http://localhost:8088/v1/chat/completions \

@@ -9,6 +9,64 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.16.0] — 2026-09-04 (JA<->EN translation layer, bilingual i18n, profile resolution + installer hardening)
+
+### Added
+
+- **JA<->EN translation layer (CPU Argos, masking, buffered streaming).**
+  `TranslationConfig` (cpu-only, fail-open, disabled by default) in `config/schemas.py`.
+  JA->EN request translation in `ingress/anthropic_routes.py` via `asyncio.to_thread`
+  with 5s timeout (system/tool_use/tool_result are excluded; only user text with
+  Japanese detection is translated). EN->JA response translation after repair in
+  `routing/fallback.py` with buffered-streaming guard and 64KB limit.
+  `TranslatorManager` (thread-safe, resident, direct `translate-ja_en` /
+  `translate-en_ja` models only) plus `jp_translation/masking.py` that preserves
+  code/paths/identifiers. Optional dependency `argostranslate>=1.11,<2`
+  (Python 3.12-3.13) and `scripts/setup_argos_models.py` with hash gate.
+  Includes B-M1/M-1..M-4/F-1/F-2/J-1/J-4 fixes, BOM removal and slow-startup warnings.
+- **Bilingual messages (ja/en) for CLI/doctor/config.**
+  New `coderouter/messages.py` catalog with `CODEROUTER_T_LANG` priority (`ja`/`en`,
+  `LANG` fallback) and `tr()`. Migrated `cli.py`, `doctor.py`, `config/loader.py`,
+  `config/schemas.py`, `config/env_file.py`, `ingress/app.py` to `tr()`
+  (`E1xxx`/`W1xxx`/`I1xxx`). Added `ConfigNotFoundError`/`ConfigValidationError`
+  with `message_id`/`hint`. Refined `resolve_model_to_profile`: vendor prefix
+  stripping, threshold 3->5 chars, case-insensitive alias. Windows parity in
+  `conftest.py` and Language section in `README`/`README.en.md`.
+- **Automated Argos Translate model setup with official SHA256 verification.**
+  `scripts/setup_argos_models.py` now carries canonical SHA256 checksums for both
+  `translate-ja_en-1_1.argosmodel` and `translate-en_ja-1_1.argosmodel`
+  (`623e3477...`), verifies downloads before installing into the Argos package
+  index, and satisfies the CI `--require-hash` gate (resolves TODO(K-1)).
+- **Fast-path detection for installed translation models.**
+  `scripts/setup_argos_models.py` checks whether direct JA<->EN models are
+  already installed and usable before attempting remote package index updates or
+  downloads, eliminating redundant 230MB re-downloads on subsequent installer runs.
+- **Windows installer scripts.**
+  Added `installCodeRouter.bat` / `installCodeR.bat` automated installers and
+  integrated the Argos model downloader into the installation flow. Enforced CRLF
+  in `.gitattributes` (`*.bat text eol=crlf`) and updated CI to cover the new
+  `--require-hash` path.
+
+### Fixed
+
+- **Resolve profile from request `model` field in ingress routes.**
+  When `profile` is not explicitly specified (`X-Coderouter-Profile` / body
+  `profile` / mode header), `POST /v1/messages`, `POST /v1/chat/completions`
+  and `POST /v1/messages/count_tokens` now resolve `config.resolve_model_to_profile(payload.model)`
+  and route accordingly. Logged as `model-resolved-to-profile`. Covers both
+  `kind: anthropic` passthrough and OpenAI-compat paths (`coderouter/ingress/anthropic_routes.py`,
+  `openai_routes.py`, `config/schemas.py`, `tests/unit/test_resolve_model.py`).
+- **Windows batch installer parsing and multibyte CRLF stability.**
+  Fixed cmd.exe syntax errors caused by LF line endings and unescaped redirect /
+  parenthesis characters in `installCodeRouter.bat` and `installCodeR.bat`. Ensured
+  enforced CRLF in `.gitattributes`.
+- **Argos model download fallback endpoints.**
+  Updated `FALLBACK_URLS` in `scripts/setup_argos_models.py` to active official
+  `https://argos-net.com/v1/` endpoints for direct download when the Argos
+  package index is unavailable.
+
+---
+
 ## [v2.15.0] — 2026-08-21 (fallback explainability + stream truncation detection)
 
 ### Added
@@ -169,7 +227,7 @@ opt-in except the `.envrc` behaviour change called out under **Changed
   resolves to `None` (unauthenticated request → upstream 401 → the chain
   moves on) instead of raising. See `examples/providers.cli-session.yaml`.
 - **`coderouter rollback`** — restores `providers.yaml`,
-  `~/.coderouter/model-capabilities.yaml` and (with `--workspace`)
+  `~/.coderouter-t/model-capabilities.yaml` and (with `--workspace`)
   `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
   `doctor --apply` and `vscode-init` have always written a backup and
   never offered a way back. Restore is a **swap**: the current contents
@@ -2528,7 +2586,7 @@ Patch release: a Launcher bug fix and documentation improvements.
   shared reference documented once); `launcher-quickstart.md` is slimmed
   to delegate installation to the new guide.
 - **Backend venv convention documented**: vLLM / MLX virtual
-  environments live under `~/.coderouter/backends/<backend>/`, one venv
+  environments live under `~/.coderouter-t/backends/<backend>/`, one venv
   per backend.
 
 ---
@@ -2897,7 +2955,7 @@ A  tests/test_plugins_integration.py
 | Feature | Description |
 |---|---|
 | `StateStore` | sqlite3 KV store (namespace-scoped, WAL mode, thread-safe, graceful degradation) |
-| `state_dir` config | Enables persistence by pointing to a directory such as `~/.coderouter/state/` |
+| `state_dir` config | Enables persistence by pointing to a directory such as `~/.coderouter-t/state/` |
 | 4-subsystem persistence | save_state/load_state for BudgetTracker / BackendHealthMonitor / SelfHealingOrchestrator / MetricsCollector |
 | `AuditLogHandler` | Records 22 events (guard triggers / chain fallback / self-healing, etc.) to JSONL (single-backup rotation) |
 | `coderouter audit` CLI | Browse the audit log with `--tail`, `--filter`, `--since`, `--summary` |
@@ -2910,7 +2968,7 @@ A  tests/test_plugins_integration.py
 
 ```yaml
 # providers.yaml
-state_dir: "~/.coderouter/state/"    # persistence directory
+state_dir: "~/.coderouter-t/state/"    # persistence directory
 audit_log: active                     # structured audit log
 request_log: active                   # request metadata journal
 
@@ -3928,7 +3986,7 @@ As a side effect, this patch also made real-machine verification of A-3 (`hit_ra
 
 ### Migration
 
-`pyproject.toml version 1.9.0a5 → 1.9.0a6`, `coderouter --version` returns 1.9.0a6. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** No change to streaming-path response content either — just one additional log line.
+`pyproject.toml version 1.9.0a5 → 1.9.0a6`, `coderouter --version` returns 1.9.0a6. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.** No change to streaming-path response content either — just one additional log line.
 
 ### Files touched
 
@@ -4020,7 +4078,7 @@ The concrete implementation of the plan established in `docs/inside/future.md` �
 
 ### Migration
 
-`pyproject.toml version 1.9.0a4 → 1.9.0a5`, `coderouter --version` returns 1.9.0a5. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.9.0a4 → 1.9.0a5`, `coderouter --version` returns 1.9.0a5. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 Operators who want to opt in explicitly add a `cost:` block to a paid provider:
 
@@ -4126,7 +4184,7 @@ Implements the health-based half of the "task-based (auto_router, v1.6-A) + heal
 
 ### Migration
 
-`pyproject.toml version 1.9.0a3 → 1.9.0a4`, `coderouter --version` returns 1.9.0a4. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** Since the new `adaptive: false` field defaults to false, existing profiles keep prior behavior with zero changes.
+`pyproject.toml version 1.9.0a3 → 1.9.0a4`, `coderouter --version` returns 1.9.0a4. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.** Since the new `adaptive: false` field defaults to false, existing profiles keep prior behavior with zero changes.
 
 Operators who want to opt in explicitly add this to a profile:
 
@@ -4219,7 +4277,7 @@ The first concrete implementation of P3 (Long-run Reliability) from the Vision e
 
 ### Migration
 
-`pyproject.toml version 1.9.0a2 → 1.9.0a3`, `coderouter --version` returns 1.9.0a3. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** All new schema fields have defaults, so existing yaml loads as-is, and since the default action is warn level (logging only), there's no side effect on existing processing.
+`pyproject.toml version 1.9.0a2 → 1.9.0a3`, `coderouter --version` returns 1.9.0a3. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.** All new schema fields have defaults, so existing yaml loads as-is, and since the default action is warn level (logging only), there's no side effect on existing processing.
 
 Operators who want to opt in explicitly add this to a profile:
 
@@ -4310,7 +4368,7 @@ Including LM Studio 0.4.12 in the bundled YAML formalizes, as a CodeRouter guara
 
 ### Migration
 
-`pyproject.toml version 1.9.0a1 → 1.9.0a2`, `coderouter --version` returns 1.9.0a2. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.9.0a1 → 1.9.0a2`, `coderouter --version` returns 1.9.0a2. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 `provider_supports_cache_control` adds the `registry=None` kwarg, so the signature stays backward-compatible (no changes needed for existing callers). The new capability is being able to hard-disable via a `False` from the registry, but since the bundled YAML only ships positive declarations, default behavior is unchanged.
 
@@ -4344,7 +4402,7 @@ Implements the v1.9-A scope from `docs/inside/future.md` §5.1. A safe addition 
 
 - Tests: 737 → **759** (+22: classify_cache_outcome / collector dispatch / snapshot cache panel / Prometheus exposition / engine emission)
 - Runtime deps: 5 → 5 (23 consecutive sub-releases unchanged)
-- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter/model-capabilities.yaml` / API
+- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter-t/model-capabilities.yaml` / API
 - Pre-release: the `a1` in `1.9.0a1` is a PEP 440 alpha pre-release, available via `pip install --pre coderouter-cli`. The formal `v1.9.0` release will follow once v1.9-B/E/C/D are also complete
 
 ### Changes
@@ -4399,7 +4457,7 @@ The LiteLLM cluster has a known bug (referenced in future.md §3) that rounds `c
 
 ### Migration
 
-`pyproject.toml version 1.8.5 → 1.9.0a1`, `coderouter --version` returns 1.9.0a1. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.8.5 → 1.9.0a1`, `coderouter --version` returns 1.9.0a1. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 The `/metrics.json` counters / providers schema changes are **additive only** (new keys `cache_read_tokens` / `cache_creation_tokens` / `cache_outcomes`, plus a `cache` panel on provider rows), so existing dashboards won't break. Prometheus scrapers auto-discover the new metrics.
 
@@ -4431,7 +4489,7 @@ A  tests/test_metrics_prometheus_cache.py
 
 - Tests: 737 → 737 (existing assertions don't check the phrase substring, so no update needed there; added 1 new assertion for the missing case)
 - Runtime deps: 5 → 5 (22 consecutive sub-releases unchanged)
-- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter/model-capabilities.yaml` / code-side API
+- Backward compat: fully compatible; no changes to `providers.yaml` / `~/.coderouter-t/model-capabilities.yaml` / code-side API
 
 ### Changes
 
@@ -4460,7 +4518,7 @@ v1.8.3 fixed the `tool_calls` probe's active-harmful misdiagnosis (suggesting `t
 
 ### Migration
 
-`pyproject.toml version 1.8.3 → 1.8.5`, `coderouter --version` returns 1.8.5. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.** The doctor output wording changes, but the verdict and suggested_patch semantics remain fully compatible.
+`pyproject.toml version 1.8.3 → 1.8.5`, `coderouter --version` returns 1.8.5. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.** The doctor output wording changes, but the verdict and suggested_patch semantics remain fully compatible.
 
 ### Files touched
 
@@ -4484,7 +4542,7 @@ Right after the v1.8.2 release, while verifying on real hardware — as a follow
 
 - Tests: 733 → **737** (+4: thinking-variant tool_calls probe budget / 3 reasoning_content strip cases)
 - Runtime deps: 5 → 5 (21 consecutive sub-releases unchanged)
-- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter/model-capabilities.yaml`
+- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter-t/model-capabilities.yaml`
 
 ### Changes
 
@@ -4521,7 +4579,7 @@ Adding the `reasoning_content` strip is an ergonomic improvement letting the lla
 
 ### Migration
 
-`pyproject.toml version 1.8.2 → 1.8.3`, `coderouter --version` returns 1.8.3. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.8.2 → 1.8.3`, `coderouter --version` returns 1.8.3. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 Users who saw `tool_calls [NEEDS TUNING]` for Qwen3.6 / Gemma 4-family thinking providers in v1.8.2 will get an **OK** verdict on re-running in v1.8.3 (a provider that was actually working gets a fair evaluation from doctor too). Users on an llama.cpp-direct provider will have `reasoning_content` cleanly stripped without it reaching the client.
 
@@ -4560,7 +4618,7 @@ In v1.8.1, Gemma 4 26B, placed as the primary of the `coding` profile, got a doc
 
 - Tests: 730 → **733** (+3: thinking provider declaration / registry-based / streaming)
 - Runtime deps: 5 → 5 (20 consecutive sub-releases unchanged)
-- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter/model-capabilities.yaml`
+- Backward compat: fully compatible; no edits needed to `providers.yaml` / `~/.coderouter-t/model-capabilities.yaml`
 
 ### Changes
 
@@ -4593,7 +4651,7 @@ This is a meta-lesson one level below the "real-hardware evidence first" princip
 
 ### Migration
 
-`pyproject.toml version 1.8.1 → 1.8.2`, `coderouter --version` returns 1.8.2. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.8.1 → 1.8.2`, `coderouter --version` returns 1.8.2. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 Users who had been running Gemma 4 26B conservatively (with reduced `claude_code_suitability`) in v1.8.1 should now see `num_ctx [OK]` + `streaming [OK]` pass on re-running doctor in v1.8.2. Qwen3.6's `tool_calls [NEEDS TUNING]` is genuine (not caused by thinking), so it's still not recommended as the coding chain primary.
 
@@ -4632,7 +4690,7 @@ For users running on the NIM example yaml base, v1.8.0's 4 use-case-based profil
 #### Adjusted `coding` profile primary to reflect real-hardware verification
 
 - **`examples/providers.yaml`**: changed the order at the head of the `coding` profile's providers list from Qwen3.6:35b/27b to **`ollama-qwen-coder-14b` / `ollama-gemma4-26b` / `ollama-qwen-coder-7b` / `ollama-qwen3-coder-30b`**. The Qwen3.6 family is demoted, commented out at the tail (left in place as a candidate to promote back to primary once LM Studio/llama.cpp support improves). This reflects the ordering principle "well-established and reliably working things go first; newer note-recommended things get promoted only after stability is confirmed"
-- **`coderouter/data/model-capabilities.yaml`**: **withdrew** `claude_code_suitability: ok` for `qwen3.6:*` / `qwen/qwen3.6-*`. When added in v1.7-B it was a preemptive declaration based on secondhand reports from note articles, but v1.8.1 real-hardware verification confirmed NEEDS_TUNING across num_ctx / tool_calls / streaming, so without confirmation the policy is now to keep the `tools` declaration but not assert suitability. Users who do get it working on real hardware can still override `claude_code_suitability: ok` on their side via `~/.coderouter/model-capabilities.yaml` (since the registry's first-match-per-flag walk goes user → bundled)
+- **`coderouter/data/model-capabilities.yaml`**: **withdrew** `claude_code_suitability: ok` for `qwen3.6:*` / `qwen/qwen3.6-*`. When added in v1.7-B it was a preemptive declaration based on secondhand reports from note articles, but v1.8.1 real-hardware verification confirmed NEEDS_TUNING across num_ctx / tool_calls / streaming, so without confirmation the policy is now to keep the `tools` declaration but not assert suitability. Users who do get it working on real hardware can still override `claude_code_suitability: ok` on their side via `~/.coderouter-t/model-capabilities.yaml` (since the registry's first-match-per-flag walk goes user → bundled)
 
 #### Documentation: added known issues for real-world Ollama operation
 
@@ -4648,13 +4706,13 @@ v1.8.0 shipped touting "use-case-based 4 profiles with a working `--mode coding`
 
 ### Migration
 
-`pyproject.toml version 1.8.0 → 1.8.1`, `coderouter --version` returns 1.8.1. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`.**
+`pyproject.toml version 1.8.0 → 1.8.1`, `coderouter --version` returns 1.8.1. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`.**
 
 Users on the NIM-example base who couldn't get `cr serve --mode coding` working can:
 
 ```bash
 # copy the latest example (mode_aliases already added in v1.8.1)
-cp examples/providers.nvidia-nim.yaml ~/.coderouter/providers.yaml
+cp examples/providers.nvidia-nim.yaml ~/.coderouter-t/providers.yaml
 # or manually add the mode_aliases section to your existing file
 ```
 
@@ -4692,13 +4750,13 @@ $ cr doctor --check-model ollama-gemma4-26b --apply   # confirmed tool_calls OK
 1. **Automated PyPI Trusted Publishing** — a simple `git tag v* && git push` now has release.yml auto-publish to PyPI and draft a GitHub Release. No API token needed (OIDC)
 2. **`claude_code_suitability` hint** — a new `Literal["ok", "degraded"] | None` field in the capability registry; placing a Llama-3.3-70B-family model in a `claude-code-*` profile now emits a structured `chain-claude-code-suitability-degraded` warn at startup. An automated-detection version of the "`こんにちは` → runaway `Skill(hello)`" trap documented in v1.6.2
 3. **`coderouter doctor --check-model --apply` / `--dry-run`** — writes doctor's suggested YAML patches back into `providers.yaml` / `model-capabilities.yaml` **non-destructively** (100% preserving comments and key order). `--dry-run` produces a `git apply`-compatible unified diff; `--apply` creates a `.bak` backup and is idempotent (a second run is a no-op). `ruamel.yaml` is an optional dependency (the `[doctor]` extra) lazily imported, preserving the base 5-deps streak
-4. **`setup.sh` onboarding wizard** — auto-detects RAM → suggests a recommended local model → runs `ollama pull` → generates `~/.coderouter/providers.yaml`. Adds `--ram-gb N` / `--non-interactive` / `--no-pull` / `--dry-run` / `--force` flags, bash 3.2 compatible, zero new dependencies
+4. **`setup.sh` onboarding wizard** — auto-detects RAM → suggests a recommended local model → runs `ollama pull` → generates `~/.coderouter-t/providers.yaml`. Adds `--ram-gb N` / `--non-interactive` / `--no-pull` / `--dry-run` / `--force` flags, bash 3.2 compatible, zero new dependencies
 5. **Extended `examples/providers.yaml` to a 4-profile layout** — `multi` (default) / `coding` / `general` / `reasoning`, each nudged toward Claude-like responses via `append_system_prompt`, with `mode_aliases` shortcuts for `default/fast/vision/think/cheap`
 6. **Registered Gemma 4 / Qwen3.6 / Z.AI (GLM-4.7/5.1) in providers.yaml** — registers `gemma4:e4b/26b/31b` (now official Ollama tags, including the note-recommended 26B-A4B) and `qwen3.6:27b/35b` (the note's "local champ" 35b-a3b) as active stanzas, promoting note-recommended models to each profile's primary slot. Z.AI is offered via OpenAI-compat with 2 base_urls (Coding Plan / General API), documented along with the unauthorized-tool caveat. Newly declares the `qwen3.6:*` (claude_code_suitability=ok) / `gemma4:*` / `GLM-5*` / `GLM-4.[5-9]*` families in the bundled `model-capabilities.yaml`
 
 - Tests: 651 → **710** (+59, +9.1%): `tests/test_claude_code_suitability.py` (6, walker + payload + opt-out), `tests/test_capability_registry.py` (+11 schema/lookup/bundled-yaml), `tests/test_doctor_apply.py` (25, parse/merge/apply/idempotent), `tests/test_setup_sh.py` (17 + 1 shellcheck-skip, RAM recommendation / existing-file collision / dry-run / parent dir creation), `tests/test_examples_yaml.py` (+5, 4-profile presence / append_system_prompt required / mode_aliases / coding head verification)
 - Runtime deps: 5 → 5 (18 consecutive sub-releases unchanged; `ruamel.yaml` is optional via `[project.optional-dependencies].doctor`)
-- Backward compat: since this includes a change from `default_profile: default` to `default_profile: multi`, **re-copying `examples/providers.yaml` over `~/.coderouter/providers.yaml` changes behavior.** Your local `providers.yaml` is unaffected unless you touch it. `mode_aliases.default → multi` provides backward compatibility, resolving old default calls to multi
+- Backward compat: since this includes a change from `default_profile: default` to `default_profile: multi`, **re-copying `examples/providers.yaml` over `~/.coderouter-t/providers.yaml` changes behavior.** Your local `providers.yaml` is unaffected unless you touch it. `mode_aliases.default → multi` provides backward compatibility, resolving old default calls to multi
 
 ### Theme: achieving "substitute models that don't drift in feel" through 3 layers of measures
 
@@ -4771,14 +4829,14 @@ The official docs (docs.z.ai/devpack/overview) explicitly state that **"access v
 
 ### Migration
 
-`pyproject.toml version 1.7.0 → 1.8.0`, `coderouter --version` now returns 1.8.0. **Completely unchanged unless you touch your local `~/.coderouter/providers.yaml`** (the new example only lives in `examples/providers.yaml`; copying it over is a manual step).
+`pyproject.toml version 1.7.0 → 1.8.0`, `coderouter --version` now returns 1.8.0. **Completely unchanged unless you touch your local `~/.coderouter-t/providers.yaml`** (the new example only lives in `examples/providers.yaml`; copying it over is a manual step).
 
 To try the new example:
 
 ```bash
 # back up your existing config while copying the new example
-cp ~/.coderouter/providers.yaml ~/.coderouter/providers.yaml.bak
-cp examples/providers.yaml ~/.coderouter/providers.yaml
+cp ~/.coderouter-t/providers.yaml ~/.coderouter-t/providers.yaml.bak
+cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 
 # pull the recommended models into Ollama (if you have 24GB+ VRAM)
 ollama pull qwen3.6:35b
@@ -4817,7 +4875,7 @@ $ coderouter doctor --check-model local --apply
 Apply: 1 target file(s).
   1 patch(es) applied.
 [diff shown]
-  Backup: ~/.coderouter/providers.yaml → ~/.coderouter/providers.yaml.bak
+  Backup: ~/.coderouter-t/providers.yaml → ~/.coderouter-t/providers.yaml.bak
 
 $ coderouter doctor --check-model local --apply  # a no-op the second time
 Apply: 1 target file(s).
@@ -4960,7 +5018,7 @@ Right after the v1.6.1 release, when the user (= myself) stood up a NIM configur
 
 ### Migration
 
-None needed. The existing `~/.coderouter/providers.yaml` / existing env vars / existing Python imports / existing ingress contract are all unchanged. Users who copy `examples/providers.nvidia-nim.yaml` over `~/.coderouter/providers.yaml` will switch to the Qwen-first order if they overwrite-copy this release's YAML. Users running `.env` in the old form (without export) but without issues were mostly exporting it separately via a parent shell in most cases; simply `cp`-ing v1.6.2's `.env.example` as-is won't change behavior (declaring export twice is harmless).
+None needed. The existing `~/.coderouter-t/providers.yaml` / existing env vars / existing Python imports / existing ingress contract are all unchanged. Users who copy `examples/providers.nvidia-nim.yaml` over `~/.coderouter-t/providers.yaml` will switch to the Qwen-first order if they overwrite-copy this release's YAML. Users running `.env` in the old form (without export) but without issues were mostly exporting it separately via a parent shell in most cases; simply `cp`-ing v1.6.2's `.env.example` as-is won't change behavior (declaring export twice is harmless).
 
 ---
 
@@ -5531,7 +5589,7 @@ See the relevant section for each v0.7 sub-release's follow-ons. What cuts acros
 - **`coderouter/data/model-capabilities.yaml`** (the bundled default, shipped with the package)
   - Schema v1: `rules: [{match: glob, kind: "anthropic"|"openai_compat"|"any", capabilities: {thinking, reasoning_passthrough, tools, max_context_tokens}}]`
   - Current entries: 4 globs — `claude-opus-4-*` / `claude-sonnet-4-6*` / `claude-sonnet-4-7*` (forward-compat) / `claude-haiku-4-*` — all `kind: anthropic` + `thinking: true`
-  - Comments state that "adding a new family only requires editing this one file" and that "the user override lives at `~/.coderouter/model-capabilities.yaml`"
+  - Comments state that "adding a new family only requires editing this one file" and that "the user override lives at `~/.coderouter-t/model-capabilities.yaml`"
 - **`coderouter/data/__init__.py`** — turns this into a real package so package data can be reliably accessed via `importlib.resources.files()`
 - **`coderouter/config/capability_registry.py`** (a new module)
   - The `RegistryCapabilities` / `CapabilityRule` / `CapabilityRegistryFile` Pydantic models (all `extra="forbid"`, so a typo immediately raises ValidationError)
@@ -5555,7 +5613,7 @@ See the relevant section for each v0.7 sub-release's follow-ons. What cuts acros
 
 ### Design notes
 
-- **Why move it out to YAML.** v0.5-A's retro had already flagged "passive drift against Anthropic's release cadence" as a follow-on (docs/retrospectives/v0.5.md §What was sharp). If a code change is required, a delayed release cycle means drift becomes invisible. With YAML, a user can update it themselves without waiting for the bundled default (`~/.coderouter/model-capabilities.yaml`), and updating the bundled default is just a 1-line PR
+- **Why move it out to YAML.** v0.5-A's retro had already flagged "passive drift against Anthropic's release cadence" as a follow-on (docs/retrospectives/v0.5.md §What was sharp). If a code change is required, a delayed release cycle means drift becomes invisible. With YAML, a user can update it themselves without waiting for the bundled default (`~/.coderouter-t/model-capabilities.yaml`), and updating the bundled default is just a 1-line PR
 - **The rationale for first-match-per-flag.** A simple first-match approach leaves it ambiguous whether rule B overwrites or is ignored by rule A, in a case like "rule A declares only thinking, rule B declares only tools for the same glob." Per-flag lets "A sets thinking=true, B sets tools=true, both apply" be expressed naturally. A YAML author can design an independent override order per flag
 - **Not adopting layered lookup (per plan.md §9.4 policy).** lunacode has 4 layers (`<cwd>/.kairos → <repo>/.kairos → ~/.kairos → bundled`), but since CodeRouter's providers.yaml is static deployment-time config, a per-cwd layer carries little meaning. Narrowed to 2 layers: bundled + user. If `providers.d/*.yaml` merging is requested in the future, split it out for consideration in v0.7-D or v0.8 (currently YAGNI)
 - **Keeping per-provider granularity (not per-model).** The same `qwen3-coder:7b` can have different tool-calling stability between Ollama and LMStudio, so the registry lookup's granularity stays at `(kind, model)`. lunacode is an editor harness so per-model was fine there, but CodeRouter assumes the provider abstraction

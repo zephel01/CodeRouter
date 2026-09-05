@@ -58,10 +58,10 @@ python3 launcher_gui.py
 uv run python launcher_gui.py
 
 # 設定ファイルを明示指定
-python3 launcher_gui.py --config ~/.coderouter/providers.yaml
+python3 launcher_gui.py --config ~/.coderouter-t/providers.yaml
 ```
 
-設定ファイルの探索順: ① `--config` 指定 → ② カレントの `providers.yaml` → ③ `~/.coderouter/providers.yaml`。どれも無ければ空の設定で起動します(UI から手動入力すれば起動自体は可能)。
+設定ファイルの探索順: ① `--config` 指定 → ② カレントの `providers.yaml` → ③ `~/.coderouter-t/providers.yaml`。どれも無ければ空の設定で起動します(UI から手動入力すれば起動自体は可能)。
 
 > **v2.13.0 以降、② のカレントディレクトリ `providers.yaml` の暗黙読込は既定で無効です。** 悪意のある `providers.yaml` を作業ディレクトリに置かれるだけで `launcher.backends[*].binary` 等の実行ファイル指定を乗っ取られ得るためのセキュリティ対策で、`CODEROUTER_ALLOW_CWD_CONFIG=1`(`true`/`yes`/`on` も可)を設定したときだけオプトインで有効になります。未設定のままカレントに `providers.yaml` があると読み込まずスキップします。
 
@@ -74,7 +74,7 @@ python3 launcher_gui.py --config ~/.coderouter/providers.yaml
 - ▶ CodeRouter 起動 / ■ 停止
 - Claude Code 接続文字列 — `ANTHROPIC_BASE_URL=http://localhost:<ポート> ANTHROPIC_AUTH_TOKEN=dummy claude`。クリックまたは「コピー」でクリップボードへ
 
-CodeRouter 起動時、`~/.coderouter/providers.yaml` が無ければ最小構成を自動生成します(この自動生成ファイルには `launcher:` ブロックは含まれません — 後述)。ウィンドウを閉じると、起動した CodeRouter と全 backend プロセスは自動的に停止します。
+CodeRouter 起動時、`~/.coderouter-t/providers.yaml` が無ければ最小構成を自動生成します(この自動生成ファイルには `launcher:` ブロックは含まれません — 後述)。ウィンドウを閉じると、起動した CodeRouter と全 backend プロセスは自動的に停止します。
 
 ---
 
@@ -83,7 +83,7 @@ CodeRouter 起動時、`~/.coderouter/providers.yaml` が無ければ最小構�
 CodeRouter が稼働しているとき、ブラウザで使う運用 UI です。
 
 1. `providers.yaml` に `launcher:` セクションを追加([設定リファレンス](#設定リファレンス)参照)
-2. CodeRouter を起動 — `coderouter serve --port 8088`
+2. CodeRouter を起動 — `coderouter-t serve --port 8088`
 3. ブラウザで `http://localhost:8088/launcher` を開く
 
 ---
@@ -568,7 +568,7 @@ launcher:
 ### 最小構成
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 default_profile: auto
 
 auto_router:
@@ -643,12 +643,12 @@ Ollama など常用の backend と併用する、より実運用寄りの設定�
 
 ## 設定リファレンス
 
-MODELS 一覧・オプションプロファイル・バイナリパスは `~/.coderouter/providers.yaml` の `launcher:` ブロックから読み込まれます。**デスクトップ版・Web版で共通**です。
+MODELS 一覧・オプションプロファイル・バイナリパスは `~/.coderouter-t/providers.yaml` の `launcher:` ブロックから読み込まれます。**デスクトップ版・Web版で共通**です。
 
 ### `launcher:` ブロック全体
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 launcher:
   model_dirs:           # list[str]  必須
     - ~/llm/models
@@ -676,12 +676,12 @@ launcher:
     llama.cpp:
       binary: ~/llama.cpp/build/bin/llama-server         # ソースビルド例
     vllm:
-      binary: ~/.coderouter/backends/vllm/bin/python     # venv 例
+      binary: ~/.coderouter-t/backends/vllm/bin/python     # venv 例
     mlx:
-      binary: ~/.coderouter/backends/mlx/bin/python      # venv 例
+      binary: ~/.coderouter-t/backends/mlx/bin/python      # venv 例
 ```
 
-`binary` を省略または `null` にすると、PATH からデフォルト名(`llama-server` / `python`)を探します。チルダ (`~`) 展開に対応。vLLM / MLX 用の venv は `~/.coderouter/backends/<バックエンド名>/` 配下にバックエンドごとに分けて作るのが推奨です(詳細は [インストール手順書](./install-backends.md))。UI の「バックエンド」セレクト下に解決されたパスが表示されます。
+`binary` を省略または `null` にすると、PATH からデフォルト名(`llama-server` / `python`)を探します。チルダ (`~`) 展開に対応。vLLM / MLX 用の venv は `~/.coderouter-t/backends/<バックエンド名>/` 配下にバックエンドごとに分けて作るのが推奨です(詳細は [インストール手順書](./install-backends.md))。UI の「バックエンド」セレクト下に解決されたパスが表示されます。
 
 キーには `llama.cpp-cuda` のような**バリアント名**も書けます(v2.11.0+)。同じ llama.cpp を GPU ランタイム別にビルドしてある環境で、起動ごとにどのビルドを使うか選べるようになります。詳細は [特化ビルドの切り替え](#特化ビルドの切り替え-llamacpp) を参照。
 

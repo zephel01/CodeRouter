@@ -176,7 +176,7 @@ curl -s http://localhost:1234/v1/messages \
 
 ### Step 5. CodeRouter に provider として登録
 
-`~/.coderouter/providers.yaml` の `providers:` リストに 2 ルートを並べて登録します (`examples/providers.yaml` にも同じ pattern が同梱されているので参考に):
+`~/.coderouter-t/providers.yaml` の `providers:` リストに 2 ルートを並べて登録します (`examples/providers.yaml` にも同じ pattern が同梱されているので参考に):
 
 ```yaml
 # OpenAI 互換ルート (従来通り、CodeRouter の adapter 翻訳経由)
@@ -280,7 +280,7 @@ Exit: 0
 ### Step 7. CodeRouter 経由 end-to-end (Anthropic 互換)
 
 ```bash
-coderouter serve --port 8088 --mode test-lmstudio-anthropic &
+coderouter-t serve --port 8088 --mode test-lmstudio-anthropic &
 sleep 2
 
 curl -s -X POST http://localhost:8088/v1/messages \
@@ -354,7 +354,7 @@ provider-ok provider=lmstudio-qwen3-5-9b-anthropic stream=false native_anthropic
 ### `tool_calls [NEEDS TUNING]` が出る (CodeRouter v1.8.2 以前)
 
 - v1.8.2 以前は `tool_calls` probe の `max_tokens=64` が thinking モデルの `reasoning_content` で食い切られて偽陽性
-- **v1.8.3 以降に必ずアップグレード** (`uv tool upgrade coderouter-cli`)
+- **v1.8.3 以降に必ずアップグレード** (`uv tool upgrade coderouter-t`)
 
 ### `reasoning_content` フィールドが client に漏れる (v1.8.2 以前)
 

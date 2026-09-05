@@ -6,14 +6,14 @@
 #
 # Loaded by ``coderouter.config.capability_registry.CapabilityRegistry``
 # at startup. Users can extend / override via
-# ``~/.coderouter/model-capabilities.yaml`` (optional; merged on top of
+# ``~/.coderouter-t/model-capabilities.yaml`` (optional; merged on top of
 # this file — user rules are evaluated first, so a user rule overrides
 # a bundled rule for the same flag).
 #
 # Precedence for the capability gate (see coderouter/routing/capability.py):
 #   1. providers.yaml ``capabilities.*`` per-provider explicit flag
 #      (highest priority — verbatim opt-in).
-#   2. ``~/.coderouter/model-capabilities.yaml`` (user rules).
+#   2. ``~/.coderouter-t/model-capabilities.yaml`` (user rules).
 #   3. This file (bundled rules).
 #   4. Unset ⇒ flag defaults to False (not-supported).
 #
@@ -46,7 +46,7 @@
 # When to edit this file vs. the user file:
 #   - Bundled (this file): shared defaults that ship with CodeRouter.
 #     Update when a new model family verifiably accepts a capability.
-#   - User file (~/.coderouter/model-capabilities.yaml): per-deployment
+#   - User file (~/.coderouter-t/model-capabilities.yaml): per-deployment
 #     overrides, e.g. "my local Ollama qwen3-coder:7b is reliable with
 #     tool calling, declare tools: true for it".
 # ============================================================
@@ -163,7 +163,7 @@ rules:
   #
   # An operator who has tuned their Llama-3.3 deployment (custom system
   # prompt, tool whitelist, etc.) can opt out via
-  # ``~/.coderouter/model-capabilities.yaml`` with the matching glob and
+  # ``~/.coderouter-t/model-capabilities.yaml`` with the matching glob and
   # ``claude_code_suitability: ok``.
   # ------------------------------------------------------------------
 
@@ -238,7 +238,7 @@ rules:
   #   - tool_calls probe が native tool_calls / 修復可能 JSON のいずれも
   #     返さない真の課題が残る (Qwen3.6 系の Ollama 経由 tool 仕様未成熟)
   # tool_calls 不全が解消されるまで `claude_code_suitability` は撤回。
-  # 実機で動いたユーザーは `~/.coderouter/model-capabilities.yaml` で
+  # 実機で動いたユーザーは `~/.coderouter-t/model-capabilities.yaml` で
   # `claude_code_suitability: ok` を上書きできる。
   # ------------------------------------------------------------------
 
@@ -359,7 +359,7 @@ rules:
   # 実機検証は未実施。tools=true の事前宣言だけ入れて、providers.yaml で
   # これらを使う際の `capabilities.tools: true` 明示宣言を不要にする。
   # claude_code_suitability は実機検証後に追加判断 — それまでは "意見なし"。
-  # 不具合があれば user-side の `~/.coderouter/model-capabilities.yaml` で
+  # 不具合があれば user-side の `~/.coderouter-t/model-capabilities.yaml` で
   # `tools: false` を declare して上書き可能 (first-match-per-flag)。
   # ------------------------------------------------------------------
 

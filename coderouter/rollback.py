@@ -6,7 +6,7 @@ Two commands in this codebase mutate files the operator owns:
 ``.bak`` sibling before touching anything — and then left the operator to
 find it and copy it back by hand. The stated reasoning was that anyone
 using git already has versioned history. That is true right up until the
-file being rewritten is ``~/.coderouter/providers.yaml``, which is not in
+file being rewritten is ``~/.coderouter-t/providers.yaml``, which is not in
 anybody's repo, or until ``--force`` removes a line the operator wanted
 (v2.11's ``.envrc`` incident, H-11).
 
@@ -96,7 +96,7 @@ def discover_managed_files(
     paths: list[Path] = []
     if config_path:
         paths.append(Path(config_path).expanduser())
-    paths.append(Path.home() / ".coderouter" / "model-capabilities.yaml")
+    paths.append(Path.home() / ".coderouter-t" / "model-capabilities.yaml")
     if workspace:
         root = Path(workspace).expanduser()
         paths.append(root / ".vscode" / "settings.json")

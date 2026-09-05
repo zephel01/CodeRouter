@@ -10,14 +10,14 @@ VSCode（および Cursor / Windsurf / VSCodium）上で動く AI 拡張から C
 
 ## 前提 — CodeRouter の 2 つの入口
 
-`coderouter serve --port 8088` を起動すると、以下の 2 つの入口が同じプロセスで待ち受けます。
+`coderouter-t serve --port 8088` を起動すると、以下の 2 つの入口が同じプロセスで待ち受けます。
 
 | 入口 | パス | 使う拡張 |
 |---|---|---|
 | **Anthropic 互換** | `http://localhost:8088`（`/v1/messages`） | Claude Code |
 | **OpenAI 互換** | `http://localhost:8088/v1`（`/v1/chat/completions`） | Cline / Roo Code / Kilo Code / Continue.dev |
 
-`coderouter serve` の `--port` を指定していない場合、既定は **4000** です。README・本ガイド・`docs/backends/*.md` はすべて 8088 を前提に書いているので、迷ったら `--port 8088` で揃えるのが楽です。
+`coderouter-t serve` の `--port` を指定していない場合、既定は **4000** です。README・本ガイド・`docs/backends/*.md` はすべて 8088 を前提に書いているので、迷ったら `--port 8088` で揃えるのが楽です。
 
 > 別 PC から繋ぐ場合は [remote-access.md](./remote-access.md) を先に。
 
@@ -59,7 +59,7 @@ coderouter vscode-init [--target PATH]
                        [--force]            # 既存値の上書き / 未管理の .envrc の取り込み
 ```
 
-- `--port 4000`: `coderouter serve` を素で起動して 4000 で動かしている場合
+- `--port 4000`: `coderouter-t serve` を素で起動して 4000 で動かしている場合
 - `--profile local-first`: 常に `local-first` プロファイルへルーティング（`CODEROUTER_MODE=local-first` が terminal env に載る）
 - `--dry-run`: 書き込む予定の内容を unified diff で表示するだけ（`.envrc` を生成する場合はそれも含む）。ファイルは `.bak` も含めて一切作りません
 - `--force`: 既定はコンフリクト報告のみで書かない、を解除するフラグ。効き方はファイルごとに違うので次節を参照
@@ -117,7 +117,7 @@ coderouter rollback --workspace .             # .vscode/settings.json と .envrc
 ```
 
 - 復元は**スワップ**です。現在の内容が新しい `.bak` になるので、2 回実行すると元に戻ります
-- `--workspace` は復元対象の**追加**です。既定では `providers.yaml` と `~/.coderouter/model-capabilities.yaml`（`doctor --apply` の書き込み先）も対象に入ります。1 ファイルだけ戻したいときは `coderouter rollback --path .envrc` のように `--path` で指定してください（指定するとその他の探索は行いません）
+- `--workspace` は復元対象の**追加**です。既定では `providers.yaml` と `~/.coderouter-t/model-capabilities.yaml`（`doctor --apply` の書き込み先）も対象に入ります。1 ファイルだけ戻したいときは `coderouter rollback --path .envrc` のように `--path` で指定してください（指定するとその他の探索は行いません）
 - 終了コードは **0**=復元した / **2**=戻すものが無かった / **1**=復元に失敗
 
 ### 再実行しても壊れない

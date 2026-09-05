@@ -29,7 +29,7 @@ CodeRouter 自体は純 Python 3.12+ と 5 つの pip 依存 — CPython が動�
 | macOS — Intel | ✅ | ✅ だが遅い (CPU のみ。Metal GPU なし) | ✅ | CodeRouter のワイア層は動作; ローカル推論は非現実的 — クラウドフォールバック限定で使う。 |
 | Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ ネイティブ (NVIDIA GPU なら CUDA、他は CPU) | ✅ | フル対応。`uv` + `pip install` 経路は macOS と同一。 |
 | Linux — ARM64 (Raspberry Pi 5 / AWS Graviton) | ✅ | ⚠️ Pi では CPU のみ; クラウド Graviton なら問題なし | ✅ | CodeRouter は動く; Pi クラスでは「クラウド中継」プロキシとして有用。 |
-| Windows — native (PowerShell / cmd) | ⚠️ 一部 | ✅ ネイティブ (CUDA) | ⚠️ `claude` CLI は Windows native で既知の癖あり | `coderouter serve` は動く。`scripts/verify_*.sh` は bash 専用 — WSL か Git Bash で。 |
+| Windows — native (PowerShell / cmd) | ⚠️ 一部 | ✅ ネイティブ (CUDA) | ⚠️ `claude` CLI は Windows native で既知の癖あり | `coderouter-t serve` は動く。`scripts/verify_*.sh` は bash 専用 — WSL か Git Bash で。 |
 | Windows — WSL2 (Ubuntu) | ✅ | ✅ (WSL 内にインストール、または `host.docker.internal:11434` でホスト側 Ollama にブリッジ) | ✅ | **Windows 推奨経路。** WSL2 内からは Linux と同じ UX。 |
 
 判断の目安:
@@ -223,7 +223,7 @@ curl http://localhost:11434/v1/models
 
 ```bash
 cd /path/to/CodeRouter
-uv run coderouter serve --port 8088 --mode claude-code
+uv run coderouter-t serve --port 8088 --mode claude-code
 ```
 
 ターミナル 2 — Claude Code を CodeRouter に向けて起動:
@@ -249,7 +249,7 @@ npm install -g @anthropic-ai/claude-code
 ```powershell
 # ターミナル 1
 cd C:\path\to\CodeRouter
-uv run coderouter serve --port 8088 --mode claude-code
+uv run coderouter-t serve --port 8088 --mode claude-code
 
 # ターミナル 2
 $env:ANTHROPIC_BASE_URL = "http://localhost:8088"
@@ -295,7 +295,7 @@ OpenRouter は無料ティアのモデルをいくつかホストしており、
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-...    # https://openrouter.ai/keys で取得
-uv run coderouter serve --port 8088
+uv run coderouter-t serve --port 8088
 ```
 
 現場で効くペア戦略:
@@ -338,7 +338,7 @@ uv run coderouter doctor --check-model ollama-qwen-coder-7b
 
 ### `coderouter rollback` — `--apply` を元に戻す (v2.14.0)
 
-`doctor --apply` と `vscode-init` はどちらも書き換え前に `.bak` を書いていましたが、それを元に戻す手段がありませんでした。`coderouter rollback` は `providers.yaml`、`~/.coderouter/model-capabilities.yaml`、(`--workspace` 指定時) `.vscode/settings.json` / `.envrc` を `.bak` から復元します。
+`doctor --apply` と `vscode-init` はどちらも書き換え前に `.bak` を書いていましたが、それを元に戻す手段がありませんでした。`coderouter rollback` は `providers.yaml`、`~/.coderouter-t/model-capabilities.yaml`、(`--workspace` 指定時) `.vscode/settings.json` / `.envrc` を `.bak` から復元します。
 
 復元は「スワップ」— 現在の内容がそのまま新しい `.bak` になるので、**もう一度 `rollback` を実行すると元に戻ります**(片道の上書きではなく往復可能)。
 

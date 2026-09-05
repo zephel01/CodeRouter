@@ -237,14 +237,17 @@ def format_env_security_report(report: EnvSecurityReport) -> str:
 
     has_warn = any(c.verdict == EnvSecurityVerdict.WARN for c in report.checks)
     has_err = any(c.verdict == EnvSecurityVerdict.ERROR for c in report.checks)
+    from coderouter.messages import tr
+
+    code = exit_code_for_env_security(report)
     if has_err:
-        summary = "Summary: at least one check escalated to ERROR (real leak risk)."
+        summary = tr("I1505_ENV_SECURITY_SUMMARY_ERROR")
     elif has_warn:
-        summary = "Summary: WARN(s) present — apply the suggested fix(es)."
+        summary = tr("I1505_ENV_SECURITY_SUMMARY_WARN")
     else:
-        summary = "Summary: all checks pass."
+        summary = tr("I1505_ENV_SECURITY_SUMMARY_OK")
     lines.append(summary)
-    lines.append(f"Exit: {exit_code_for_env_security(report)}")
+    lines.append(tr("I1505_ENV_SECURITY_EXIT", code=code))
     return "\n".join(lines)
 
 

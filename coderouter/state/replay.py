@@ -14,7 +14,7 @@ Usage::
     from coderouter.state.request_log import read_request_log
     from coderouter.state.replay import compare_providers, summarize_window
 
-    entries = read_request_log("~/.coderouter/state/requests.jsonl")
+    entries = read_request_log("~/.coderouter-t/state/requests.jsonl")
     summary = summarize_window(entries)
     comparison = compare_providers(entries, "anthropic-api", "openrouter-free")
 """

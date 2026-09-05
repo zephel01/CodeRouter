@@ -52,7 +52,7 @@ python benchmarks/tool-repair/run_live.py \
   --model qwen2.5-coder:7b --reps 20 --tag direct
 
 # Through CodeRouter (start it with the bundled bench config first):
-#   coderouter serve --port 8088 --config benchmarks/tool-repair/providers.bench.yaml
+#   coderouter-t serve --port 8088 --config benchmarks/tool-repair/providers.bench.yaml
 python benchmarks/tool-repair/run_live.py \
   --base-url http://localhost:8088 --wire anthropic \
   --model qwen2.5-coder:7b --profile bench-qwen7b --reps 20 --tag coderouter

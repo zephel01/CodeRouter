@@ -26,7 +26,9 @@ from pydantic import (
     model_validator,
 )
 
+from coderouter.errors import ConfigValidationError
 from coderouter.logging import get_logger
+from coderouter.messages import tr
 from coderouter.token_estimation import set_include_tool_content
 
 logger = get_logger(__name__)
@@ -263,7 +265,7 @@ class AgentCliConfig(BaseModel):
         description=(
             "Working directory for the one-shot exec. ``~`` / env-var "
             "expansion is applied. When unset, a dedicated isolated "
-            "directory (``~/.coderouter/agents/<name>``) is used."
+            "directory (``~/.coderouter-t/agents/<name>``) is used."
         ),
     )
     exec_timeout_s: float = Field(
@@ -347,11 +349,7 @@ class AgentCliConfig(BaseModel):
         if self.command is None:
             self.command = "agy" if self.agent == "antigravity" else self.agent
         if self.allow_file_writes and self.sandbox_mode == "read_only":
-            raise ValueError(
-                "agent_cli: allow_file_writes=True conflicts with "
-                "sandbox_mode='read_only'. Set sandbox_mode to 'edit' or "
-                "'full_auto' to permit writes, or keep allow_file_writes=False."
-            )
+            raise ConfigValidationError(tr("E1409_SANDBOX_CONFLICT"), message_id="E1409_SANDBOX_CONFLICT")
         return self
 
 
@@ -466,22 +464,18 @@ class ProviderCredential(BaseModel):
         """Each source needs its own field, and only its own field."""
         if self.source == "env":
             if not self.env:
-                raise ValueError("credential.source='env' requires credential.env")
+                raise ConfigValidationError(tr("E1402_CREDENTIAL_ENV_REQUIRED"), message_id="E1402_CREDENTIAL_ENV_REQUIRED")
             if self.path:
-                raise ValueError("credential.path is meaningless for source='env'")
+                raise ConfigValidationError(tr("E1403_CREDENTIAL_PATH_MEANINGLESS"), message_id="E1403_CREDENTIAL_PATH_MEANINGLESS")
         if self.source == "cli_session":
             if not self.path:
-                raise ValueError(
-                    "credential.source='cli_session' requires credential.path"
-                )
+                raise ConfigValidationError(tr("E1404_CREDENTIAL_PATH_REQUIRED"), message_id="E1404_CREDENTIAL_PATH_REQUIRED")
             if self.env:
-                raise ValueError("credential.env is meaningless for source='cli_session'")
+                raise ConfigValidationError(tr("E1405_CREDENTIAL_ENV_MEANINGLESS"), message_id="E1405_CREDENTIAL_ENV_MEANINGLESS")
             from coderouter.credentials import session_path_is_sane
 
             if not session_path_is_sane(self.path):
-                raise ValueError(
-                    f"credential.path must live under your home directory: {self.path}"
-                )
+                raise ConfigValidationError(tr("E1401_CREDENTIAL_PATH_HOME", path=self.path), message_id="E1401_CREDENTIAL_PATH_HOME")
         return self
 
 
@@ -748,11 +742,7 @@ class ProviderConfig(BaseModel):
         engineer at 2am.
         """
         if self.credential is not None and self.api_key_env:
-            raise ValueError(
-                f"provider {self.name!r}: set either api_key_env or credential, "
-                "not both (credential.source='env' with credential.env=... is "
-                "the spelled-out form of api_key_env)"
-            )
+            raise ConfigValidationError(tr("E1406_API_KEY_EXCLUSIVE", name=self.name), message_id="E1406_API_KEY_EXCLUSIVE")
         return self
 
     @model_validator(mode="after")
@@ -770,15 +760,9 @@ class ProviderConfig(BaseModel):
         misconfigured provider surfaces at config-load, not at first request.
         """
         if self.kind in ("openai_compat", "anthropic") and self.base_url is None:
-            raise ValueError(
-                f"provider {self.name!r}: base_url is required for "
-                f"kind={self.kind!r}."
-            )
+            raise ConfigValidationError(tr("E1407_BASE_URL_REQUIRED", name=self.name, kind=self.kind), message_id="E1407_BASE_URL_REQUIRED")
         if self.kind == "agent_cli" and self.agent_cli is None:
-            raise ValueError(
-                f"provider {self.name!r}: agent_cli sub-config is required "
-                f"for kind='agent_cli'."
-            )
+            raise ConfigValidationError(tr("E1408_AGENT_CLI_REQUIRED", name=self.name), message_id="E1408_AGENT_CLI_REQUIRED")
         return self
 
 
@@ -2498,6 +2482,37 @@ class PluginsConfig(BaseModel):
     )
 
 
+class TranslationConfig(BaseModel):
+    """Translation layer config (doc/翻訳層設計書.md §4, providers.yaml)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable JA↔EN translation layer. True = CodeRouter-t default (translate), False = pass-through.",
+    )
+    # Literal["cpu"] is for type-checker; validator provides runtime message (S-1)
+    device: Literal["cpu"] = Field(
+        default="cpu",
+        description='Execution device. Only "cpu" allowed (VRAM zero guarantee). providers.yaml setting.',
+    )
+    log_translations: bool = Field(
+        default=True,
+        description="Enable detailed translation logging (debug, redacted). CodeRouter-t default True.",
+    )
+    model_dir: str | None = Field(
+        default=None,
+        description="Argos model directory. None = Argos standard cache.",
+    )
+
+    @field_validator("device")
+    @classmethod
+    def _check_device(cls, v: str) -> str:
+        if v != "cpu":
+            raise ValueError("translation.device must be 'cpu' (VRAM zero guarantee)")
+        return v
+
+
 class CodeRouterConfig(BaseModel):
     """Top-level config loaded from providers.yaml."""
 
@@ -2634,7 +2649,7 @@ class CodeRouterConfig(BaseModel):
         description=(
             "v2.0-K: directory for persistent state (sqlite3 KV store + "
             "audit log). None = in-memory only (no persistence, backward-"
-            "compatible). Set to a path like '~/.coderouter/state/' to "
+            "compatible). Set to a path like '~/.coderouter-t/state/' to "
             "enable cross-restart durability for budget totals, health "
             "state, and self-healing exclusions. The directory is created "
             "automatically if it doesn't exist."
@@ -2709,6 +2724,10 @@ class CodeRouterConfig(BaseModel):
             "The Launcher UI itself is always available at /launcher "
             "regardless of this setting."
         ),
+    )
+    translation: TranslationConfig = Field(
+        default_factory=TranslationConfig,
+        description="JA↔EN translation layer (CPU Argos Translate, providers.yaml). Disabled by default.",
     )
 
     @model_validator(mode="after")
@@ -3149,3 +3168,98 @@ class CodeRouterConfig(BaseModel):
         if mode in self.mode_aliases:
             return self.mode_aliases[mode]
         raise KeyError(f"Unknown mode alias: {mode!r}")
+
+    def resolve_model_to_profile(self, model_name: str | None) -> str | None:
+        """Resolve a model name string to a profile name.
+
+        Priority order:
+        1. Exact match with a profile's primary (first) provider `model` or `name`.
+        2. Exact match with any provider's `model` or `name`.
+        3. Exact match with declared profile name.
+        4. Exact match in `mode_aliases`.
+        5. Substring match in `mode_aliases` (longest key first).
+        6. Substring match with provider's `model` or `name`.
+
+        v2.15.1 refinements (review A-M1/A-M2):
+        - Step 6 substring threshold raised to 5 chars to avoid short-token
+          false positives (e.g. "haiku" 5 chars is now the minimum for the
+          reverse direction; 3-char fragments like "gpt" no longer hijack).
+        - Vendor prefix stripping (`openrouter/anthropic/claude-...`,
+          `model:tag` forms) via split on "/" and ":" so alias / provider
+          matching works on the bare model id.
+        """
+        if not model_name:
+            return None
+
+        model_lower = model_name.lower().strip()
+        # Bare model id for substring steps: strip vendor prefixes and tags.
+        # e.g. "openrouter/anthropic/claude-3-opus" -> "claude-3-opus"
+        #      "gemma4:e4b-it-qat" -> "e4b-it-qat" is NOT stripped for exact
+        #      steps (they already matched above), but the bare form helps
+        #      substring fallback without losing the full-string check.
+        model_bare = model_lower.split("/")[-1].split(":")[-1] if "/" in model_lower or ":" in model_lower else model_lower
+        provider_map = {p.name: p for p in self.providers}
+
+        # 1. Exact match with primary (first) provider of each profile
+        for prof in self.profiles:
+            if not prof.providers:
+                continue
+            primary_name = prof.providers[0]
+            prov_cfg = provider_map.get(primary_name)
+            if prov_cfg:
+                if prov_cfg.model and prov_cfg.model.lower().strip() == model_lower:
+                    return prof.name
+                if prov_cfg.name.lower().strip() == model_lower:
+                    return prof.name
+
+        # 2. Exact match with any configured provider in any profile
+        for prof in self.profiles:
+            for prov_name in prof.providers:
+                prov_cfg = provider_map.get(prov_name)
+                if prov_cfg:
+                    if prov_cfg.model and prov_cfg.model.lower().strip() == model_lower:
+                        return prof.name
+                    if prov_cfg.name.lower().strip() == model_lower:
+                        return prof.name
+
+        # 3. Exact match with declared profile name
+        for prof in self.profiles:
+            if prof.name.lower().strip() == model_lower:
+                return prof.name
+
+        # 4. Exact match in mode_aliases (case-sensitive as before, plus lower fallback)
+        if model_name in self.mode_aliases:
+            return self.mode_aliases[model_name]
+        if model_lower in (k.lower() for k in self.mode_aliases):
+            # case-insensitive exact alias match
+            for k, v in self.mode_aliases.items():
+                if k.lower() == model_lower:
+                    return v
+
+        # 5. Substring match in mode_aliases (case-insensitive, longest alias first)
+        sorted_aliases = sorted(self.mode_aliases.keys(), key=len, reverse=True)
+        for alias_key in sorted_aliases:
+            alias_lower = alias_key.lower()
+            if alias_lower in model_lower or alias_lower in model_bare:
+                return self.mode_aliases[alias_key]
+
+        # 6. Substring match with provider's model or name (bidirectional, 5-char floor)
+        # A-M1: raised from 3 to 5 to prevent short fragments from hijacking.
+        for prof in self.profiles:
+            for prov_name in prof.providers:
+                prov_cfg = provider_map.get(prov_name)
+                if prov_cfg:
+                    target_model = (prov_cfg.model or "").lower().strip()
+                    target_name = prov_cfg.name.lower().strip()
+                    # Check against both full and bare forms; prefer bare to avoid
+                    # vendor prefix noise, but keep full as fallback.
+                    for candidate in (model_lower, model_bare):
+                        if target_model and (target_model in candidate or (len(candidate) >= 5 and candidate in target_model)):
+                            return prof.name
+                        if target_name and (target_name in candidate or (len(candidate) >= 5 and candidate in target_name)):
+                            return prof.name
+
+        return None
+
+
+

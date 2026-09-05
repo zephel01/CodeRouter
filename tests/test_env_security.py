@@ -186,6 +186,7 @@ def test_format_report_renders_each_check(tmp_path: Path) -> None:
     assert "Exit:" in rendered
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file mode")
 def test_format_report_summary_picks_worst_verdict(tmp_path: Path) -> None:
     """When checks span OK / WARN / ERROR, summary reflects ERROR."""
     p = tmp_path / ".env"

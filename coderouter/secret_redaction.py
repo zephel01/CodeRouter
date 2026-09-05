@@ -594,13 +594,21 @@ _VERDICT_GLYPH = {"ok": "OK  ", "skip": "SKIP", "warn": "WARN", "error": "FAIL"}
 
 def format_secret_report(report: SecretReport) -> str:
     """Render a report for the terminal, in ``--check-env``'s layout."""
+    from coderouter.messages import tr
+
     lines = ["", "coderouter doctor --check-secrets", "=" * 52]
     for check in report.checks:
         lines.append(f"[{_VERDICT_GLYPH.get(check.verdict, '????')}] {check.name}")
         lines.append(f"        {check.detail}")
         if check.fix:
-            lines.append(f"        fix: {check.fix}")
+            label = tr("L_FIX_LABEL")
+            lines.append(f"        {label}: {check.fix}")
     code = exit_code_for_secret_report(report)
-    verdict = {0: "clean", 2: "needs attention", 1: "blocker"}[code]
-    lines.extend(["-" * 52, f"verdict: {verdict} (exit {code})", ""])
+    verdict_map = {
+        0: tr("I1506_SECRET_VERDICT_CLEAN"),
+        2: tr("I1506_SECRET_VERDICT_ATTENTION"),
+        1: tr("I1506_SECRET_VERDICT_BLOCKER"),
+    }
+    verdict_word = verdict_map.get(code, str(code))
+    lines.extend(["-" * 52, tr("I1506_SECRET_VERDICT", verdict=verdict_word, code=code), ""])
     return "\n".join(lines)

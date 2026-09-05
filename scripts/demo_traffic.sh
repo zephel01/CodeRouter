@@ -72,7 +72,7 @@
 #
 #   --serve only:
 #   DEMO_SERVE_BIN          how to invoke coderouter  (default "uv run coderouter")
-#   DEMO_SERVE_CONFIG       --config path    (default ~/.coderouter/providers.yaml)
+#   DEMO_SERVE_CONFIG       --config path    (default ~/.coderouter-t/providers.yaml)
 #   DEMO_SERVE_MODE         --mode value     (default coding; pass "" to omit)
 #   DEMO_SERVE_PORT         --port value     (default 4000)
 #   DEMO_SERVE_LOG          server log file  (default /tmp/coderouter-demo.log)
@@ -157,7 +157,7 @@ done
 
 # --- Serve knobs -------------------------------------------------------------
 SERVE_BIN="${DEMO_SERVE_BIN:-uv run coderouter}"
-SERVE_CONFIG="${DEMO_SERVE_CONFIG:-$HOME/.coderouter/providers.yaml}"
+SERVE_CONFIG="${DEMO_SERVE_CONFIG:-$HOME/.coderouter-t/providers.yaml}"
 SERVE_MODE="${DEMO_SERVE_MODE-coding}"     # note: '-' so empty string means "omit"
 SERVE_PORT="${DEMO_SERVE_PORT:-4000}"
 SERVE_LOG="${DEMO_SERVE_LOG:-/tmp/coderouter-demo.log}"
@@ -351,7 +351,7 @@ ERROR: CodeRouter not reachable at $BASE_URL/healthz
 Either start the server in another terminal:
 
     uv run coderouter serve \\
-      --config ~/.coderouter/providers.yaml \\
+      --config ~/.coderouter-t/providers.yaml \\
       --mode coding \\
       --port 4000
 
@@ -857,5 +857,5 @@ done
 # cascade the chain down to the paid tier, which gets blocked. The
 # cascade path is slower and less reliable, so if paid-gate-block is
 # what you want to demo live, add the profile above and re-run:
-#   coderouter serve --config ~/.coderouter/providers.yaml --port 4000
+#   coderouter serve --config ~/.coderouter-t/providers.yaml --port 4000
 # ---------------------------------------------------------------------------

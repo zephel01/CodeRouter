@@ -340,7 +340,7 @@ capabilities:
 ### 4.3 設定ファイル構成案
 
 ```
-~/.coderouter/
+~/.coderouter-t/
 ├── config.yaml          # 基本設定 (ALLOW_PAID等)
 ├── providers.yaml       # プロバイダ定義 + capability flags
 ├── profiles.yaml        # coding/fast/long/cheap のfallback順
@@ -643,7 +643,7 @@ v1.7 以降は実装ペースが上がり、各リリースの詳細を plan.md 
 | **v2.4.0** | 2026-05-15 | Goal-session awareness — `goal_progress_stall` (L4 6 番目シグナル) + `goal_mode` flag (FallbackChain) + `THRESHOLDS_GOAL` preset + `coderouter replay --suggest-rules` (5 ルール統計エンジン、LLM 不要) |
 | **v2.5.0** | 2026-05-22 | Launcher — llama.cpp / vllm backend の起動・管理 GUI。デスクトップGUI版 (`launcher_gui.py`、tkinter) + Web版 (`/launcher` ルート)。YAML-driven option profile、新規依存ゼロ |
 | **v2.5.1** | 2026-05-22 | MLX backend (Launcher 3 番目、`mlx_lm.server`、Apple Silicon 向け) + docs/ をロール別フォルダ (start/guides/backends/concepts) に再編 + bilingual master index (`docs/README.md`) + plan.md 再構成 (1747→721 行) + starlette 1.0.0→1.0.1 (PYSEC-2026-161) |
-| **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 (llama.cpp はフラグ / vLLM・MLX は空) + `docs/backends/install-backends.md` (llama.cpp / vLLM / MLX インストールガイド) + Launcher docs 3→2 ファイル統合 + backend venv 規約文書化 (`~/.coderouter/backends/<backend>/`) |
+| **v2.5.2** | 2026-05-22 | Backend-aware Launcher 推奨値 (llama.cpp はフラグ / vLLM・MLX は空) + `docs/backends/install-backends.md` (llama.cpp / vLLM / MLX インストールガイド) + Launcher docs 3→2 ファイル統合 + backend venv 規約文書化 (`~/.coderouter-t/backends/<backend>/`) |
 | **v2.5.4** | 2026-06-05 | `repair_byte_fallback` output filter — Ollama 0.30 / llama.cpp detokenizer が漏らす `<0xNN>` byte-fallback を UTF-8 に再構成 (Gemma 日本語・tool-call JSON 対策)。opt-in / streaming-safe / lossless、新規依存ゼロ |
 | **v2.5.5** | 2026-06-06 | Claude Code CLI ≥ 2.1.154 が `messages` 配列に混入させる非仕様 `role: "system"` (他 `ctx`/`msg`) を ingress の `model_validator(mode="before")` で正規化し 422 を回避。wire model の role enum は不変 |
 | **v2.6.0** | 2026-06-20 | Language Tax — CJK トークン税 (`coderouter/language_tax.py`) の計測 + cost 統合 + `ProviderConfig.tokenizer_path` + `cjk_ratio_min` auto-route matcher + `/dashboard` "Cost & Language Tax" パネル。starlette 1.0.1→1.3.1 (CVE 4 件解消)。新規依存ゼロ |

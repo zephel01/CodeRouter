@@ -9,7 +9,7 @@
 #   - カタログ(launcher.swap.models)に列挙したモデルしか起動できない
 #
 # 使い方:
-#   1. cp examples/providers.swap.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.swap.yaml ~/.coderouter-t/providers.yaml
 #   2. model_dirs / model_path / binary を手元の環境に合わせて編集
 #   3. coderouter serve --port 8088
 #   4. 動作確認(初回はモデルロードの数秒〜数十秒待ちが入る):

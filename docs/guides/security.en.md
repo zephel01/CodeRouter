@@ -270,7 +270,7 @@ opt-in**:
 2. The `CODEROUTER_CONFIG` env var
 3. `./providers.yaml` in the current directory — only when
    `CODEROUTER_ALLOW_CWD_CONFIG` is set
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 The opt-in is enabled only when `CODEROUTER_ALLOW_CWD_CONFIG` is
 `1` / `true` / `yes` / `on` (surrounding whitespace ignored,
@@ -279,7 +279,7 @@ spelling like `enabled` — counts as disabled.
 
 ```bash
 # Enable only in directories you trust
-CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 ```
 
 **"It used to work and now my config is ignored."** When a
@@ -288,13 +288,13 @@ CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
 no config is found at all, the `FileNotFoundError` message repeats the
 same note. Three fixes, safest first:
 
-1. `coderouter serve --config ./providers.yaml` — name the file
+1. `coderouter-t serve --config ./providers.yaml` — name the file
    explicitly
 2. `export CODEROUTER_CONFIG=$PWD/providers.yaml` — the same, via env
 3. `export CODEROUTER_ALLOW_CWD_CONFIG=1` — restore implicit discovery,
    **only in directories you trust**
 
-The durable home for the file is `~/.coderouter/providers.yaml`. When
+The durable home for the file is `~/.coderouter-t/providers.yaml`. When
 the opt-in is on and the CWD step actually served the config, a one-time
 `cwd-config-loaded` warning fires. Neither warning fires when the file
 was named explicitly via `--config` / `CODEROUTER_CONFIG` — even if that
@@ -305,7 +305,7 @@ the implicit behaviour being gated.
 
 ## 3. Network posture
 
-CodeRouter binds to `127.0.0.1` by default (`coderouter serve --host`).
+CodeRouter binds to `127.0.0.1` by default (`coderouter-t serve --host`).
 It does not expose itself on `0.0.0.0` unless the operator explicitly
 opts in. The trust boundary is "loopback only", and every route
 validates the Host header (DNS-rebinding protection): requests whose
@@ -338,7 +338,7 @@ accepted as a query parameter — a token in a URL lands in access logs,
 
 ```bash
 export CODEROUTER_METRICS_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-coderouter serve
+coderouter-t serve
 curl -H "X-CodeRouter-Token: $CODEROUTER_METRICS_TOKEN" http://127.0.0.1:4000/metrics.json
 ```
 

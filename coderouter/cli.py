@@ -1,4 +1,4 @@
-"""CLI entry: `coderouter serve` (and friends)."""
+"""CLI entry: `coderouter-t serve` (and `coderouter` alias)."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from pathlib import Path
 import uvicorn
 
 from coderouter import __version__
+from coderouter.messages import tr
 
 # Bind addresses that keep the server loopback-only. Anything else means the
 # operator is deliberately exposing CodeRouter beyond this machine, at which
@@ -16,7 +17,6 @@ from coderouter import __version__
 # request whose Host is not allow-listed — a combination that has confused
 # real users ("worked on 2.6, LAN access broken on 2.7").
 _LOOPBACK_BIND_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "[::1]"})
-
 
 def _external_bind_warning(host: str, allowed_hosts_env: str | None) -> str | None:
     """Return a startup warning when binding beyond loopback needs config.
@@ -30,23 +30,14 @@ def _external_bind_warning(host: str, allowed_hosts_env: str | None) -> str | No
         return None
     if allowed_hosts_env and allowed_hosts_env.strip():
         return None
-    return (
-        f"serve: binding on {host!r} but CODEROUTER_ALLOWED_HOSTS is not set. "
-        "Requests whose Host header is not loopback will be rejected with 403 "
-        "(v2.7.0 DNS-rebinding guard). To allow LAN access, set "
-        "CODEROUTER_ALLOWED_HOSTS=<THIS machine's address as it appears in the "
-        "client's URL bar, e.g. 192.168.x.x — NOT the client's own IP> "
-        "(comma-separated, no port). Note the chat endpoints have no "
-        "authentication — do not expose CodeRouter directly to the internet."
-    )
-
+    return tr("W1101_EXTERNAL_BIND", host=host)
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="coderouter",
-        description="Local-first, free-first, fallback-built-in LLM router.",
+        prog="coderouter-t",
+        description="Local-first, free-first, fallback-built-in LLM router (translate fork).",
     )
-    parser.add_argument("--version", action="version", version=f"coderouter {__version__}")
+    parser.add_argument("--version", action="version", version=f"coderouter-t {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
     serve = sub.add_parser("serve", help="Run the HTTP server.")
@@ -56,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--config",
         default=None,
         help="Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
-        "./providers.yaml, or ~/.coderouter/providers.yaml.",
+        "./providers.yaml, or ~/.coderouter-t/providers.yaml.",
     )
     serve.add_argument(
         "--mode",
@@ -145,7 +136,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "Run env-security checks against a `.env`-style file: "
             "POSIX file mode (0600 expected), .gitignore coverage, "
             "and git-tracking state. Bare `--check-env` (no PATH) "
-            "looks for `./.env` then `~/.coderouter/.env`. "
+            "looks for `./.env` then `~/.coderouter-t/.env`. "
             "See docs/guides/troubleshooting.md §5 for the threat model."
         ),
     )
@@ -170,7 +161,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to providers.yaml. Defaults to $CODEROUTER_CONFIG, "
-            "./providers.yaml, or ~/.coderouter/providers.yaml."
+            "./providers.yaml, or ~/.coderouter-t/providers.yaml."
         ),
     )
     # v1.7-B (#3): --apply writes the doctor-emitted YAML patches back
@@ -194,7 +185,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "created next to each modified file. Idempotent: a re-run "
             "after a successful apply is a no-op (no write, exit 0). "
             "Requires the optional `ruamel.yaml` dependency — install "
-            "via `pip install coderouter-cli[doctor]`."
+            "via `pip install coderouter-t[doctor]` (or `coderouter-cli[doctor]` for upstream)."
         ),
     )
     doctor.add_argument(
@@ -218,7 +209,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Restore files a previous --apply / vscode-init rewrote (v2.14.0).",
         description=(
             "Swap each managed file with its .bak sibling: providers.yaml, "
-            "~/.coderouter/model-capabilities.yaml, and (with --workspace) "
+            "~/.coderouter-t/model-capabilities.yaml, and (with --workspace) "
             ".vscode/settings.json and .envrc. The current contents become "
             "the new .bak, so a second run toggles back. "
             "Exit codes: 0 restored, 2 nothing to restore, 1 a restore failed."
@@ -229,7 +220,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to providers.yaml. Defaults to the same file the loader "
-            "would read ($CODEROUTER_CONFIG, then ~/.coderouter/providers.yaml)."
+            "would read ($CODEROUTER_CONFIG, then ~/.coderouter-t/providers.yaml)."
         ),
     )
     rollback.add_argument(
@@ -307,7 +298,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to the state directory containing audit.jsonl. "
-            "Defaults to ~/.coderouter/state/."
+            "Defaults to ~/.coderouter-t/state/."
         ),
     )
     audit.add_argument(
@@ -353,7 +344,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to the state directory containing requests.jsonl. "
-            "Defaults to ~/.coderouter/state/."
+            "Defaults to ~/.coderouter-t/state/."
         ),
     )
     replay.add_argument(
@@ -475,7 +466,6 @@ def _build_parser() -> argparse.ArgumentParser:
 
     return parser
 
-
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
 
@@ -497,10 +487,10 @@ def main(argv: list[str] | None = None) -> int:
                 try:
                     applied = load_env_file(path, override=args.env_file_override)
                 except FileNotFoundError as exc:
-                    print(f"serve: --env-file: {exc}", file=sys.stderr)
+                    print(tr("E1102_ENV_FILE_NOT_FOUND", error=exc), file=sys.stderr)
                     return 1
                 except EnvFileError as exc:
-                    print(f"serve: --env-file: {exc}", file=sys.stderr)
+                    print(tr("E1103_ENV_FILE_ERROR", error=exc), file=sys.stderr)
                     return 1
                 # Single-line summary so the operator can verify keys
                 # actually landed (vs being skipped because they were
@@ -509,15 +499,17 @@ def main(argv: list[str] | None = None) -> int:
                 # stdout / stderr.
                 if applied:
                     print(
-                        f"serve: --env-file {path}: loaded {len(applied)} "
-                        f"variable(s): {', '.join(sorted(applied))}",
+                        tr(
+                            "I1104_ENV_FILE_LOADED",
+                            path=path,
+                            count=len(applied),
+                            keys=", ".join(sorted(applied)),
+                        ),
                         file=sys.stderr,
                     )
                 else:
                     print(
-                        f"serve: --env-file {path}: 0 variables applied "
-                        f"(all keys already in environment, "
-                        f"--env-file-override disabled)",
+                        tr("I1105_ENV_FILE_EMPTY", path=path),
                         file=sys.stderr,
                     )
 
@@ -575,9 +567,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "vscode-init":
         return _run_vscode_init(args)
 
-    print(f"unknown command: {args.command}", file=sys.stderr)
+    print(tr("E1106_UNKNOWN_COMMAND", command=args.command), file=sys.stderr)
     return 2
-
 
 def _run_doctor(args: argparse.Namespace) -> int:
     """Drive ``coderouter doctor`` (v0.7-B `--check-model`, v1.6.3 `--check-env`).
@@ -596,11 +587,7 @@ def _run_doctor(args: argparse.Namespace) -> int:
     """
     check_secrets = bool(getattr(args, "check_secrets", False))
     if args.check_model is None and args.check_env is None and not check_secrets:
-        print(
-            "doctor: provide --check-model PROVIDER, --check-env [PATH], "
-            "and/or --check-secrets",
-            file=sys.stderr,
-        )
+        print(tr("E1107_DOCTOR_USAGE"), file=sys.stderr)
         return 1
 
     worst_exit = 0
@@ -618,7 +605,6 @@ def _run_doctor(args: argparse.Namespace) -> int:
         worst_exit = max(worst_exit, _run_check_model(args))
 
     return worst_exit
-
 
 def _run_check_model(args: argparse.Namespace) -> int:
     """v0.7-B: per-provider HTTP capability probe.
@@ -639,16 +625,16 @@ def _run_check_model(args: argparse.Namespace) -> int:
     try:
         config = load_config(args.config)
     except FileNotFoundError as exc:
-        print(f"doctor: {exc}", file=sys.stderr)
+        print(tr("E1108_DOCTOR_CONFIG_NOT_FOUND", error=exc), file=sys.stderr)
         return 1
     except Exception as exc:  # pydantic ValidationError, YAML parse error, etc.
-        print(f"doctor: failed to load config: {exc}", file=sys.stderr)
+        print(tr("E1004_CONFIG_VALIDATION", error=exc), file=sys.stderr)
         return 1
 
     try:
         report = run_check_model_sync(config, args.check_model)
     except KeyError as exc:
-        print(f"doctor: {exc}", file=sys.stderr)
+        print(tr("E1108_DOCTOR_CONFIG_NOT_FOUND", error=exc), file=sys.stderr)
         return 1
 
     print(format_report(report))
@@ -671,7 +657,6 @@ def _run_check_model(args: argparse.Namespace) -> int:
 
     return base_exit
 
-
 def _resolve_config_path(explicit: str | None) -> Path:
     """Return the file the loader actually read, for ``--apply`` write-back.
 
@@ -684,7 +669,7 @@ def _resolve_config_path(explicit: str | None) -> Path:
     write patches back into a file that ``load_config`` never read. Keeping
     one source of truth makes that impossible.
 
-    When nothing exists, falls back to ``~/.coderouter/providers.yaml``
+    When nothing exists, falls back to ``~/.coderouter-t/providers.yaml``
     (the loader's last candidate) — the apply step surfaces a clearer
     error against that path than this resolver would.
     """
@@ -693,8 +678,7 @@ def _resolve_config_path(explicit: str | None) -> Path:
     resolved = resolve_config_path(explicit)
     if resolved is not None:
         return resolved
-    return Path.home() / ".coderouter" / "providers.yaml"
-
+    return Path.home() / ".coderouter-t" / "providers.yaml"
 
 def _write_verdict_line(*, write: bool, files_written: int) -> None:
     """Print the one-line "did we touch the disk?" verdict.
@@ -712,7 +696,6 @@ def _write_verdict_line(*, write: bool, files_written: int) -> None:
         print("  0 files written — no file contents changed.")
     else:
         print(f"  {files_written} file(s) written.")
-
 
 def _run_apply_or_dry_run(
     *,
@@ -744,13 +727,13 @@ def _run_apply_or_dry_run(
             write=write,
         )
     except MissingDependencyError as exc:
-        print(f"doctor --apply: {exc}", file=sys.stderr)
+        print(tr("E1109_DOCTOR_APPLY_ERROR", error=exc), file=sys.stderr)
         _write_verdict_line(write=write, files_written=0)
         return 1
     except DoctorApplyError as exc:
         # Every merge happens before the first byte is written, so an
         # abort here always leaves the disk untouched.
-        print(f"doctor --apply: {exc}", file=sys.stderr)
+        print(tr("E1109_DOCTOR_APPLY_ERROR", error=exc), file=sys.stderr)
         _write_verdict_line(write=write, files_written=0)
         return 1
 
@@ -801,7 +784,6 @@ def _run_apply_or_dry_run(
 
     return 0
 
-
 def _print_reformat_notice(result: object, *, write: bool) -> None:
     """Dry-run-only heads-up about cosmetic re-serialization deltas.
 
@@ -824,30 +806,24 @@ def _print_reformat_notice(result: object, *, write: bool) -> None:
     for path in sorted(reformat):
         print(f"    - {path}")
 
-
-
-
 def _run_audit(args: argparse.Namespace) -> int:
     """v2.0-K: read and display the structured audit log.
 
     Resolves the audit log path from --state-dir (or default
-    ~/.coderouter/state/) and renders entries with optional filtering.
+    ~/.coderouter-t/state/) and renders entries with optional filtering.
     """
     import json
 
     from coderouter.state.audit_log import read_audit_log, summarize_audit_log
 
     state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
-        Path.home() / ".coderouter" / "state"
+        Path.home() / ".coderouter-t" / "state"
     )
     log_path = state_dir / "audit.jsonl"
 
     if not log_path.exists():
-        print(f"audit: no audit log found at {log_path}", file=sys.stderr)
-        print(
-            "  Ensure state_dir and audit_log are configured in providers.yaml.",
-            file=sys.stderr,
-        )
+        print(tr("E1111_AUDIT_NO_LOG", path=log_path), file=sys.stderr)
+        print(f"  {tr('E1112_AUDIT_HINT')}", file=sys.stderr)
         return 1
 
     entries = read_audit_log(
@@ -858,7 +834,7 @@ def _run_audit(args: argparse.Namespace) -> int:
     )
 
     if not entries:
-        print("audit: no matching entries found.")
+        print(tr("I1113_AUDIT_NO_ENTRIES"))
         return 0
 
     if args.summary:
@@ -885,7 +861,6 @@ def _run_audit(args: argparse.Namespace) -> int:
 
     return 0
 
-
 def _run_replay(args: argparse.Namespace) -> int:
     """v2.0-K (Replay): statistical A/B analysis of request journal.
 
@@ -906,16 +881,13 @@ def _run_replay(args: argparse.Namespace) -> int:
         log_path = Path(args.log).expanduser()
     else:
         state_dir = Path(args.state_dir).expanduser() if args.state_dir else (
-            Path.home() / ".coderouter" / "state"
+            Path.home() / ".coderouter-t" / "state"
         )
         log_path = state_dir / "requests.jsonl"
 
     if not log_path.exists():
-        print(f"replay: no request journal found at {log_path}", file=sys.stderr)
-        print(
-            "  Ensure state_dir and request_log are configured in providers.yaml.",
-            file=sys.stderr,
-        )
+        print(tr("E1114_REPLAY_NO_LOG", path=log_path), file=sys.stderr)
+        print(f"  {tr('E1115_REPLAY_HINT')}", file=sys.stderr)
         return 1
 
     entries = read_request_log(
@@ -928,7 +900,7 @@ def _run_replay(args: argparse.Namespace) -> int:
         entries = entries[-args.limit:]
 
     if not entries:
-        print("replay: no matching entries found.")
+        print(tr("I1116_REPLAY_NO_ENTRIES"))
         return 0
 
     if getattr(args, "suggest_rules", False):
@@ -960,7 +932,6 @@ def _run_replay(args: argparse.Namespace) -> int:
 
     return 0
 
-
 def _run_vscode_init(args: argparse.Namespace) -> int:
     """v2.10-A: drive :func:`coderouter.vscode_init.run_vscode_init`.
 
@@ -983,10 +954,7 @@ def _run_vscode_init(args: argparse.Namespace) -> int:
 
     target = Path(args.target).expanduser()
     if not target.is_dir():
-        print(
-            f"vscode-init: target directory does not exist: {target}",
-            file=sys.stderr,
-        )
+        print(tr("E1110_VSCODE_TARGET_MISSING", path=target), file=sys.stderr)
         return 1
 
     port = args.port if args.port is not None else DEFAULT_PORT
@@ -1010,13 +978,12 @@ def _run_vscode_init(args: argparse.Namespace) -> int:
     print(format_result(result, dry_run=args.dry_run, port=port))
     return exit_code_for(result)
 
-
 def _run_check_env(arg_value: str) -> int:
     """v1.6.3: filesystem / git security checks for `.env`.
 
     ``arg_value`` is the value argparse hands us:
       * ``""``  → bare ``--check-env`` with no PATH; auto-discover
-                  (./.env then ~/.coderouter/.env).
+                  (./.env then ~/.coderouter-t/.env).
       * else    → operator-supplied path; use verbatim.
     """
     from pathlib import Path
@@ -1031,7 +998,7 @@ def _run_check_env(arg_value: str) -> int:
         target = Path(arg_value).expanduser()
     else:
         # Auto-discovery: cwd first (project-local), then user-global.
-        candidates = [Path.cwd() / ".env", Path.home() / ".coderouter" / ".env"]
+        candidates = [Path.cwd() / ".env", Path.home() / ".coderouter-t" / ".env"]
         target = next((c for c in candidates if c.exists()), candidates[0])
         # Even if neither exists, run check_env_security against the
         # first candidate — its existence check will SKIP loudly so the
@@ -1040,7 +1007,6 @@ def _run_check_env(arg_value: str) -> int:
     report = check_env_security(target)
     print(format_env_security_report(report))
     return exit_code_for_env_security(report)
-
 
 def _run_rollback(args: argparse.Namespace) -> int:
     """v2.14.0: put back what ``--apply`` / ``vscode-init`` overwrote.
@@ -1076,7 +1042,6 @@ def _run_rollback(args: argparse.Namespace) -> int:
     print(format_rollback_report(outcomes, dry_run=bool(args.dry_run)))
     return exit_code_for_rollback(outcomes)
 
-
 def _run_check_secrets(config_path: str | None) -> int:
     """v2.14.0: credential-hygiene audit for the running configuration.
 
@@ -1096,16 +1061,15 @@ def _run_check_secrets(config_path: str | None) -> int:
     try:
         config = load_config(config_path)
     except FileNotFoundError as exc:
-        print(f"doctor: {exc}", file=sys.stderr)
+        print(tr("E1108_DOCTOR_CONFIG_NOT_FOUND", error=exc), file=sys.stderr)
         return 1
     except Exception as exc:
-        print(f"doctor: failed to load config: {exc}", file=sys.stderr)
+        print(tr("E1004_CONFIG_VALIDATION", error=exc), file=sys.stderr)
         return 1
 
     report = check_secret_hygiene(config)
     print(format_secret_report(report))
     return exit_code_for_secret_report(report)
-
 
 if __name__ == "__main__":
     sys.exit(main())

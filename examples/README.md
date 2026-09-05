@@ -1,12 +1,12 @@
 # examples — 設定サンプル早わかり
 
 CodeRouter の `providers.yaml` サンプル集です。**「どれを使えばいいか分からない」を解消するための索引**です。
-まず下の決定表で 1 つ選び、`~/.coderouter/providers.yaml` にコピーして使ってください。
+まず下の決定表で 1 つ選び、`~/.coderouter-t/providers.yaml` にコピーして使ってください。
 
 ```bash
-mkdir -p ~/.coderouter
-cp examples/<選んだファイル> ~/.coderouter/providers.yaml
-coderouter serve --port 8088
+mkdir -p ~/.coderouter-t
+cp examples/<選んだファイル> ~/.coderouter-t/providers.yaml
+coderouter-t serve --port 8088
 ```
 
 > どのファイルも、先頭に `# 【カテゴリ】 …` 行を入れてあります。開いた瞬間に用途が分かります。
@@ -63,7 +63,7 @@ coderouter serve --port 8088
 
 - **`providers-multiagent.yaml`** … 自前マルチエージェントの Phase 0（テスト）構成。planner / coder / reviewer をローカル（Ollama）の別モデルに割り当てる。`X-CodeRouter-Profile` ヘッダでの明示駆動が主経路、`auto_router` は役割を明示しない単発リクエストの保険。
 - **`providers.opusplan.yaml`** … Plan 役を Claude Opus（`agent_cli`、read-only）、実行をローカル→クラウド中位のフォールバックチェーン、レビューは監査を Opus・軽微をローカルに振り分ける構成。`docs/guides/subagent-routing.md` §5(a) から抽出。**Claude Code 純正の `opusplan` エイリアス（Plan モード中は opus、実行に移ると sonnet へ自動切替）とは別物**なので混同しないこと（詳細はファイル冒頭コメント参照）。
-- **`providers-agent-cli.yaml`** … 外部コーディングエージェント CLI（claude / codex / grok / antigravity）を `kind: agent_cli` で1プロバイダとして登録する構成。**v2.9.0 で in-core 実装が削除され、外部プラグイン `coderouter-plugin-agents` の導入（`plugins.enabled: [agents]`）が必須**になった（未導入のまま `kind: agent_cli` の provider があると `coderouter serve` が起動時エラーで止まる）。
+- **`providers-agent-cli.yaml`** … 外部コーディングエージェント CLI（claude / codex / grok / antigravity）を `kind: agent_cli` で1プロバイダとして登録する構成。**v2.9.0 で in-core 実装が削除され、外部プラグイン `coderouter-plugin-agents` の導入（`plugins.enabled: [agents]`）が必須**になった（未導入のまま `kind: agent_cli` の provider があると `coderouter-t serve` が起動時エラーで止まる）。
 
 ### 🟫 認証
 
@@ -77,9 +77,9 @@ coderouter serve --port 8088
 
 ## 動作確認済み
 
-このフォルダの `providers*.yaml` は、CodeRouter 本体の設定ローダ（`load_config`、スキーマ＋起動時バリデーション）と、`coderouter serve` の実起動で確認済みです（設定ロード → サーバ起動 → `/dashboard` 応答まで到達）。実際のルーティングには対応バックエンド（Ollama / llama.cpp など）の起動が別途必要です。
+このフォルダの `providers*.yaml` は、CodeRouter 本体の設定ローダ（`load_config`、スキーマ＋起動時バリデーション）と、`coderouter-t serve` の実起動で確認済みです（設定ロード → サーバ起動 → `/dashboard` 応答まで到達）。実際のルーティングには対応バックエンド（Ollama / llama.cpp など）の起動が別途必要です。
 
-> 例外: **`providers.opusplan.yaml`**（2026-08-10 追加）はスキーマとの突き合わせのみで、`coderouter serve` での実起動確認はまだ行っていません。`kind: agent_cli` を使うため `coderouter-plugin-agents` の導入が前提です。
+> 例外: **`providers.opusplan.yaml`**（2026-08-10 追加）はスキーマとの突き合わせのみで、`coderouter-t serve` での実起動確認はまだ行っていません。`kind: agent_cli` を使うため `coderouter-plugin-agents` の導入が前提です。
 
 ---
 

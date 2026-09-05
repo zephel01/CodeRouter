@@ -74,6 +74,7 @@ from coderouter.config.capability_registry import (
 )
 from coderouter.config.loader import resolve_api_key
 from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
+from coderouter.messages import tr
 from coderouter.output_filters import DEFAULT_STOP_MARKERS
 from coderouter.routing.capability import get_default_registry
 from coderouter.translation.tool_repair import repair_tool_calls_in_text
@@ -88,11 +89,9 @@ __all__ = [
     "run_check_model_sync",
 ]
 
-
 # ---------------------------------------------------------------------------
 # Result types
 # ---------------------------------------------------------------------------
-
 
 class ProbeVerdict(StrEnum):
     """Per-probe verdict.
@@ -112,7 +111,6 @@ class ProbeVerdict(StrEnum):
     UNSUPPORTED = "unsupported"
     AUTH_FAIL = "auth_fail"
     TRANSPORT_ERROR = "transport_error"
-
 
 @dataclass
 class ProbeResult:
@@ -134,7 +132,6 @@ class ProbeResult:
     suggested_patch: str | None = None
     target_file: str | None = None  # "providers.yaml" or "model-capabilities.yaml"
 
-
 @dataclass
 class DoctorReport:
     """Aggregate report for a single ``--check-model`` invocation."""
@@ -143,7 +140,6 @@ class DoctorReport:
     provider: ProviderConfig
     resolved_caps: ResolvedCapabilities
     results: list[ProbeResult] = field(default_factory=list)
-
 
 def exit_code_for(report: DoctorReport) -> int:
     """Derive the CLI exit code from a report (see :class:`ProbeVerdict`)."""
@@ -164,21 +160,17 @@ def exit_code_for(report: DoctorReport) -> int:
         return 2
     return 0
 
-
 # ---------------------------------------------------------------------------
 # HTTP helpers
 # ---------------------------------------------------------------------------
-
 
 def _openai_chat_url(provider: ProviderConfig) -> str:
     base = str(provider.base_url).rstrip("/")
     return f"{base}/chat/completions"
 
-
 def _anthropic_messages_url(provider: ProviderConfig) -> str:
     base = str(provider.base_url).rstrip("/")
     return f"{base}/v1/messages"
-
 
 def _openai_headers(provider: ProviderConfig) -> dict[str, str]:
     headers = {"Content-Type": "application/json", "User-Agent": "CodeRouter-doctor/0.7"}
@@ -186,7 +178,6 @@ def _openai_headers(provider: ProviderConfig) -> dict[str, str]:
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
-
 
 def _anthropic_headers(provider: ProviderConfig) -> dict[str, str]:
     headers = {
@@ -198,7 +189,6 @@ def _anthropic_headers(provider: ProviderConfig) -> dict[str, str]:
     if api_key:
         headers["x-api-key"] = api_key
     return headers
-
 
 async def _http_post_json(
     url: str,
@@ -224,7 +214,6 @@ async def _http_post_json(
     except (json.JSONDecodeError, ValueError):
         return resp.status_code, None, resp.text
     return resp.status_code, parsed, resp.text
-
 
 async def _http_stream_sse(
     url: str,
@@ -283,7 +272,6 @@ async def _http_stream_sse(
     except httpx.HTTPError as exc:
         return None, [], False, f"transport error: {exc}"
 
-
 # ---------------------------------------------------------------------------
 # Patch emitters
 #
@@ -291,7 +279,6 @@ async def _http_stream_sse(
 # small to justify templating, and exact indentation in the emitted YAML
 # matters for copy-paste fidelity.
 # ---------------------------------------------------------------------------
-
 
 def _patch_providers_yaml_capability(provider_name: str, key: str, value: bool) -> str:
     """Emit a providers.yaml patch that flips ``capabilities.<key>``."""
@@ -306,19 +293,17 @@ def _patch_providers_yaml_capability(provider_name: str, key: str, value: bool) 
         f"      {key}: {val}\n"
     )
 
-
 def _patch_model_capabilities_yaml(*, match: str, kind: str, key: str, value: bool) -> str:
     """Emit a model-capabilities.yaml rule that declares ``<key>=<value>``."""
     val = "true" if value else "false"
     return (
-        "# ~/.coderouter/model-capabilities.yaml — append under `rules:`:\n"
+        "# ~/.coderouter-t/model-capabilities.yaml — append under `rules:`:\n"
         "rules:\n"
         f"  - match: {match!r}\n"
         f"    kind: {kind}\n"
         "    capabilities:\n"
         f"      {key}: {val}\n"
     )
-
 
 def _patch_providers_yaml_output_filters(provider_name: str, filters: list[str]) -> str:
     """v1.0-A: Emit a providers.yaml patch setting the full ``output_filters`` chain.
@@ -354,7 +339,6 @@ def _patch_providers_yaml_output_filters(provider_name: str, filters: list[str])
         f"{items}\n"
     )
 
-
 def _union_output_filters(existing: list[str], additions: list[str]) -> list[str]:
     """Existing chain + the filters it is missing, order-preserving.
 
@@ -375,7 +359,6 @@ def _union_output_filters(existing: list[str], additions: list[str]) -> list[str
             chain.append(name)
     return chain
 
-
 def _patch_providers_yaml_num_ctx(provider_name: str, desired_ctx: int = 32768) -> str:
     """v1.0-B: Emit a providers.yaml patch setting ``extra_body.options.num_ctx``.
 
@@ -395,7 +378,6 @@ def _patch_providers_yaml_num_ctx(provider_name: str, desired_ctx: int = 32768) 
         "      options:\n"
         f"        num_ctx: {desired_ctx}\n"
     )
-
 
 def _patch_providers_yaml_num_predict(provider_name: str, desired_predict: int = 4096) -> str:
     """v1.0-C: Emit a providers.yaml patch setting ``extra_body.options.num_predict``.
@@ -419,11 +401,9 @@ def _patch_providers_yaml_num_predict(provider_name: str, desired_predict: int =
         f"        num_predict: {desired_predict}\n"
     )
 
-
 # ---------------------------------------------------------------------------
 # Probes
 # ---------------------------------------------------------------------------
-
 
 # v1.0-B: num_ctx probe constants.
 #
@@ -530,7 +510,6 @@ _TOOL_PROBE_DETAIL_PREVIEW_CHARS = 200
 # generations on broken models.
 _STREAMING_PROBE_NUM_PREDICT_DEFAULT = 4096
 
-
 def _is_ollama_like(provider: ProviderConfig) -> bool:
     """Return True iff num_ctx truncation is plausible for this provider.
 
@@ -555,7 +534,6 @@ def _is_ollama_like(provider: ProviderConfig) -> bool:
     options = provider.extra_body.get("options")
     return isinstance(options, dict) and "num_ctx" in options
 
-
 def _declared_num_ctx(provider: ProviderConfig) -> int | None:
     """Return the provider's declared ``extra_body.options.num_ctx`` if any."""
     options = provider.extra_body.get("options")
@@ -563,7 +541,6 @@ def _declared_num_ctx(provider: ProviderConfig) -> int | None:
         return None
     val = options.get("num_ctx")
     return val if isinstance(val, int) else None
-
 
 def _is_reasoning_model(
     provider: ProviderConfig, resolved: ResolvedCapabilities
@@ -597,7 +574,6 @@ def _is_reasoning_model(
     if resolved.thinking is True:
         return True
     return resolved.reasoning_passthrough is True
-
 
 _PROBE_BASIC_USER_PROMPT = "Reply with exactly the single word: PONG"
 _PROBE_TOOLS_USER_PROMPT = (
@@ -633,7 +609,6 @@ _PROBE_TOOL_SPEC_ANTHROPIC = {
         "required": ["message"],
     },
 }
-
 
 async def _probe_auth_and_basic_chat(
     provider: ProviderConfig,
@@ -680,10 +655,8 @@ async def _probe_auth_and_basic_chat(
         return ProbeResult(
             name="auth+basic-chat",
             verdict=ProbeVerdict.AUTH_FAIL,
-            detail=(
-                f"upstream returned {status}. Check that env var "
-                f"{provider.api_key_env!r} is set "
-                "and holds a valid key (plan.md §9.4 symptom #5)."
+            detail=tr(
+                "E1501_AUTH_FAIL", status=status, env=provider.api_key_env or ""
             ),
         )
 
@@ -691,12 +664,7 @@ async def _probe_auth_and_basic_chat(
         return ProbeResult(
             name="auth+basic-chat",
             verdict=ProbeVerdict.UNSUPPORTED,
-            detail=(
-                f"upstream returned 404 for model {provider.model!r}. "
-                "For Ollama: run `ollama pull "
-                f"{provider.model}`. For OpenRouter: verify the model slug "
-                "at https://openrouter.ai/models (plan.md §9.4 symptom #4)."
-            ),
+            detail=tr("E1502_MODEL_NOT_FOUND", model=provider.model),
         )
 
     if status >= 400:
@@ -727,7 +695,6 @@ async def _probe_auth_and_basic_chat(
         ),
     )
 
-
 def _extract_openai_assistant_choice(
     body: dict[str, Any],
 ) -> dict[str, Any] | None:
@@ -739,7 +706,6 @@ def _extract_openai_assistant_choice(
         return None
     msg = first.get("message")
     return msg if isinstance(msg, dict) else None
-
 
 async def _probe_num_ctx(
     provider: ProviderConfig, resolved: ResolvedCapabilities
@@ -900,8 +866,7 @@ async def _probe_num_ctx(
     # fix, not bumping the response budget.
     thinking = _is_reasoning_model(provider, resolved)
     budget_note = (
-        f" Probe sent max_tokens={max_tokens} (thinking-aware), so the "
-        "miss is prompt-side truncation rather than reply truncation."
+        tr("I1507_BUDGET_NOTE_NUM_CTX_THINKING", max_tokens=max_tokens)
         if thinking
         else ""
     )
@@ -909,12 +874,10 @@ async def _probe_num_ctx(
         return ProbeResult(
             name="num_ctx",
             verdict=ProbeVerdict.NEEDS_TUNING,
-            detail=(
-                f"canary {_NUM_CTX_PROBE_CANARY!r} missing from reply — "
-                "upstream truncated the prompt. No `extra_body.options.num_ctx` "
-                "is declared, so Ollama is running at its 2048-token default, "
-                "which cannot hold Claude Code's system + tool prompts "
-                f"(plan.md §9.4 symptom #1).{budget_note}"
+            detail=tr(
+                "W1503_NUM_CTX_CANARY_MISSING",
+                canary=_NUM_CTX_PROBE_CANARY,
+                budget_note=budget_note,
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_num_ctx(provider.name, 32768),
@@ -950,7 +913,6 @@ async def _probe_num_ctx(
         target_file="providers.yaml",
         suggested_patch=_patch_providers_yaml_num_ctx(provider.name, 32768),
     )
-
 
 async def _probe_streaming(
     provider: ProviderConfig, resolved: ResolvedCapabilities
@@ -1118,27 +1080,24 @@ async def _probe_streaming(
         # the one capping. Surface the budget used so the operator can
         # rule it out at a glance.
         thinking = _is_reasoning_model(provider, resolved)
-        budget_note = (
-            f"Probe sent max_tokens={max_tokens} (thinking-aware), so "
-            "the cap is server-side `options.num_predict` rather than "
-            "the probe budget."
+        _raw_budget = (
+            tr("I1507_BUDGET_NOTE_STREAM_THINKING", max_tokens=max_tokens)
             if thinking
-            else (
-                f"Probe sent max_tokens={max_tokens}; the cap is "
-                "server-side `options.num_predict` rather than the "
-                "probe budget."
-            )
+            else tr("I1507_BUDGET_NOTE_STREAM_DEFAULT", max_tokens=max_tokens)
         )
+        # I1507_* intentionally starts with a leading space (" Probe...") so
+        # W1504 reads as "...predict. Probe..." — normalize via lstrip then
+        # re-add single space to survive trims and keep cat/ph
+        # W1503/W1504 contract in one place (see messages.py NOTE).
+        budget_note = f" {_raw_budget.lstrip()}" if _raw_budget.strip() else ""
         return ProbeResult(
             name="streaming",
             verdict=ProbeVerdict.NEEDS_TUNING,
-            detail=(
-                f"stream closed with `finish_reason='length'` after only "
-                f"{len(content)} chars (expected ≥ "
-                f"{_STREAMING_PROBE_MIN_EXPECTED_CHARS}). Upstream is "
-                f"capping output — most likely `options.num_predict`. "
-                f"{budget_note} Bump it via `extra_body` (plan.md §9.4 "
-                "symptom #1 streaming variant)."
+            detail=tr(
+                "W1504_STREAM_LENGTH",
+                chars=len(content),
+                expected=_STREAMING_PROBE_MIN_EXPECTED_CHARS,
+                budget_note=budget_note,
             ),
             target_file="providers.yaml",
             suggested_patch=_patch_providers_yaml_num_predict(
@@ -1165,7 +1124,6 @@ async def _probe_streaming(
             f"chars, finish_reason={finish_reason!r}{done_note}."
         ),
     )
-
 
 async def _probe_tool_calls(
     provider: ProviderConfig,
@@ -1382,7 +1340,6 @@ async def _probe_tool_calls(
         detail="no tool calls, declaration tools=false — consistent.",
     )
 
-
 async def _probe_thinking(
     provider: ProviderConfig,
     resolved: ResolvedCapabilities,
@@ -1513,7 +1470,6 @@ async def _probe_thinking(
         verdict=ProbeVerdict.OK,
         detail="no thinking block emitted; matches declaration.",
     )
-
 
 async def _probe_reasoning_leak(
     provider: ProviderConfig,
@@ -1676,7 +1632,6 @@ async def _probe_reasoning_leak(
         ),
     )
 
-
 # ---------------------------------------------------------------------------
 # v1.9-B: cache probe (Anthropic prompt caching round-trip verification)
 # ---------------------------------------------------------------------------
@@ -1723,7 +1678,6 @@ _CACHE_PROBE_SYSTEM_FILLER = (
 _CACHE_PROBE_REPEATS = 64
 _CACHE_PROBE_MAX_TOKENS = 32
 
-
 def _cache_probe_body(provider: ProviderConfig) -> dict[str, Any]:
     """Build the cache-probe Anthropic request body.
 
@@ -1744,7 +1698,6 @@ def _cache_probe_body(provider: ProviderConfig) -> dict[str, Any]:
         "max_tokens": _CACHE_PROBE_MAX_TOKENS,
     }
 
-
 def _extract_cache_usage(parsed: dict[str, Any] | None) -> tuple[int, int]:
     """Return ``(cache_read_input_tokens, cache_creation_input_tokens)``.
 
@@ -1761,7 +1714,6 @@ def _extract_cache_usage(parsed: dict[str, Any] | None) -> tuple[int, int]:
     read = raw_read if isinstance(raw_read, int) else 0
     create = raw_create if isinstance(raw_create, int) else 0
     return read, create
-
 
 async def _probe_cache(
     provider: ProviderConfig,
@@ -1912,7 +1864,6 @@ async def _probe_cache(
         ),
     )
 
-
 # ---------------------------------------------------------------------------
 # Phase 2c migration guard (docs/designs/agent-cli-plugin-extraction.md §5.2,
 # §7 "2c" row): a config-level pre-check, not an HTTP probe. Core removed
@@ -1923,7 +1874,6 @@ async def _probe_cache(
 # startup with a ValueError; surfacing it here lets `coderouter doctor`
 # catch it ahead of `coderouter serve`, with a copy-paste-able fix.
 # ---------------------------------------------------------------------------
-
 
 def _check_agent_cli_plugin_migration(
     config: CodeRouterConfig, provider: ProviderConfig
@@ -1962,11 +1912,9 @@ def _check_agent_cli_plugin_migration(
         ),
     )
 
-
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-
 
 async def check_model(
     config: CodeRouterConfig,
@@ -2054,7 +2002,6 @@ async def check_model(
     report.results.append(await _probe_cache(provider, resolved))
     return report
 
-
 def run_check_model_sync(
     config: CodeRouterConfig,
     provider_name: str,
@@ -2064,11 +2011,9 @@ def run_check_model_sync(
     """Sync wrapper — called from the CLI which is not otherwise async."""
     return asyncio.run(check_model(config, provider_name, registry=registry))
 
-
 # ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
-
 
 _VERDICT_BADGE = {
     ProbeVerdict.OK: "[OK]",
@@ -2078,7 +2023,6 @@ _VERDICT_BADGE = {
     ProbeVerdict.AUTH_FAIL: "[AUTH FAIL]",
     ProbeVerdict.TRANSPORT_ERROR: "[TRANSPORT ERROR]",
 }
-
 
 def format_report(report: DoctorReport) -> str:
     """Human-readable, line-oriented report. Goes to stdout."""
@@ -2130,7 +2074,6 @@ def format_report(report: DoctorReport) -> str:
     lines.append(f"Summary: {summary}")
     lines.append(f"Exit: {code}")
     return "\n".join(lines)
-
 
 def _probes_by_name(results: Sequence[ProbeResult]) -> dict[str, ProbeResult]:
     """Small convenience for tests that want to assert on one probe."""

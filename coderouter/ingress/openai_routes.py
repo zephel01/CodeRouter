@@ -220,7 +220,18 @@ async def chat_completions(
             extra={"mode": x_coderouter_mode, "profile": chat_req.profile},
         )
 
+    # Resolve profile from request model field if profile is not explicitly specified
+    if chat_req.profile is None and chat_req.model:
+        resolved = config.resolve_model_to_profile(chat_req.model)
+        if resolved:
+            chat_req.profile = resolved
+            logger.info(
+                "model-resolved-to-profile",
+                extra={"model": chat_req.model, "profile": chat_req.profile},
+            )
+
     # v1.6-A: auto router slot. Only fires when the operator opted in by
+
     # setting ``default_profile: auto`` and no higher-priority caller signal
     # (body / profile header / mode header) already nailed down a profile.
     # When inactive, the engine still falls through to

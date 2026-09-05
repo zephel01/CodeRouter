@@ -153,8 +153,8 @@ plugins:
       consolidate_model: qwen3:1.7b
 ```
 
-`agent_cli` provider を使う場合、`agents` の有効化は opt-in ではなく**必須**です(未導入だと `coderouter serve` が起動時エラーになります)。詳細は [backends/external-agents](backends/external-agents.md) を参照してください。
-When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
+`agent_cli` provider を使う場合、`agents` の有効化は opt-in ではなく**必須**です(未導入だと `coderouter-t serve` が起動時エラーになります)。詳細は [backends/external-agents](backends/external-agents.md) を参照してください。
+When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter-t serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
 
 各プラグインの詳細・設定は上記リポジトリの README を参照してください。
 See each plugin's repo README for full configuration.

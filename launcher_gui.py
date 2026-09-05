@@ -5,7 +5,7 @@ llama.cpp / vllm / mlx と CodeRouter をブラウザなしで起動・管理す
 
 使い方:
   python3 launcher_gui.py
-  python3 launcher_gui.py --config ~/.coderouter/providers.yaml
+  python3 launcher_gui.py --config ~/.coderouter-t/providers.yaml
   uv run python launcher_gui.py
 
 追加パッケージ: 不要 (tkinter は Python 標準、yaml は CodeRouter の依存)
@@ -226,7 +226,7 @@ def _config_search_paths() -> list[Path]:
     paths: list[Path] = []
     if os.environ.get(_CWD_CONFIG_ENV, "").strip().lower() in _CWD_CONFIG_TRUTHY:
         paths.append(Path.cwd() / "providers.yaml")
-    paths.append(Path.home() / ".coderouter" / "providers.yaml")
+    paths.append(Path.home() / ".coderouter-t" / "providers.yaml")
     return paths
 
 
@@ -704,12 +704,12 @@ def _find_coderouter_cmd() -> list[str]:
 
 
 def _ensure_providers_yaml(llama_port: int) -> tuple[bool, str]:
-    """~/.coderouter/providers.yaml が存在しない場合だけ自動生成する。
+    """~/.coderouter-t/providers.yaml が存在しない場合だけ自動生成する。
 
     Returns:
         (created, path) — created=True なら今回新しく作った。
     """
-    config_dir = Path.home() / ".coderouter"
+    config_dir = Path.home() / ".coderouter-t"
     config_path = config_dir / "providers.yaml"
 
     if config_path.exists():

@@ -8,7 +8,7 @@
 #   トリガーできるようにしている。
 #
 # 使い方:
-#   1. cp examples/providers.context-budget-test.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.context-budget-test.yaml ~/.coderouter-t/providers.yaml
 #   2. Ollama (qwen3:32b) or LM Studio (qwen3.5) を起動
 #   3. coderouter serve --port 8088
 #   4. docs/inside/verification-v2.0-F.md の手順を実施

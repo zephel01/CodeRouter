@@ -46,7 +46,7 @@
 #        uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #        # または pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #        # uv tool install 構成の場合は同じツール環境に同居させる:
-#        #   uv tool install coderouter-cli \
+#        #   uv tool install coderouter-t \
 #        #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #      このファイルには下記に `plugins: enabled: [agents]` を既に
 #      含めてある (二段ゲート — インストールしただけでは有効にならない)。
@@ -55,7 +55,7 @@
 #   3. サブスクリプション認証を済ませておく (`claude` を対話起動して
 #      ログイン、または `claude setup-token` で1年トークンを発行し
 #      CLAUDE_CODE_OAUTH_TOKEN として環境変数に設定)。
-#   4. cp examples/providers-agent-cli.yaml ~/.coderouter/providers.yaml
+#   4. cp examples/providers-agent-cli.yaml ~/.coderouter-t/providers.yaml
 #   5. coderouter serve --port 8088
 #   6. 動作確認:
 #        curl http://localhost:8088/v1/chat/completions \
@@ -94,7 +94,7 @@ default_profile: claude-agent
 #   uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #   # または: pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 #   # uv tool install 構成なら:
-#   #   uv tool install coderouter-cli \
+#   #   uv tool install coderouter-t \
 #   #     --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 # 未インストール/未列挙のままだと coderouter serve は起動時エラーで
 # 停止する (docs/backends/external-agents.md のトラブルシューティング参照)。
@@ -116,7 +116,7 @@ providers:
     agent_cli:
       agent: claude
       command: claude            # PATH 解決。絶対パスも可
-      workdir: ~/.coderouter/agents/claude
+      workdir: ~/.coderouter-t/agents/claude
       exec_timeout_s: 600         # ワンショット exec の強制タイムアウト (秒)
       allow_file_writes: false    # 既定 read-only (書き込みには明示 opt-in が必要)
       sandbox_mode: read_only     # --permission-mode plan にマップされる
@@ -154,7 +154,7 @@ providers:
   #   agent_cli:
   #     agent: codex
   #     command: codex
-  #     workdir: ~/.coderouter/agents/codex
+  #     workdir: ~/.coderouter-t/agents/codex
   #     exec_timeout_s: 600
   #     allow_file_writes: false
   #     sandbox_mode: read_only     # -s read-only にマップ
@@ -218,7 +218,7 @@ providers:
   #   agent_cli:
   #     agent: antigravity
   #     # command は省略可 (既定 "agy" — バイナリ名が製品名と異なる)
-  #     workdir: ~/.coderouter/agents/antigravity
+  #     workdir: ~/.coderouter-t/agents/antigravity
   #     exec_timeout_s: 600
   #     allow_file_writes: false
   #     sandbox_mode: read_only     # --mode plan にマップ
@@ -255,7 +255,7 @@ providers:
   #   agent_cli:
   #     agent: grok
   #     command: grok
-  #     workdir: ~/.coderouter/agents/grok
+  #     workdir: ~/.coderouter-t/agents/grok
   #     exec_timeout_s: 600
   #     allow_file_writes: false
   #     sandbox_mode: read_only    # --sandbox read-only --permission-mode plan にマップ

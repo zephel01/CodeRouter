@@ -141,7 +141,7 @@ curl -s http://localhost:8080/v1/chat/completions \
 
 ### Step 5. CodeRouter に provider として登録
 
-`~/.coderouter/providers.yaml` の `providers:` リストに以下を追加：
+`~/.coderouter-t/providers.yaml` の `providers:` リストに以下を追加：
 
 ```yaml
 - name: llamacpp-qwen3-6-35b-a3b
@@ -174,7 +174,7 @@ profiles:
       ...
 ```
 
-> **完全な examples/providers.yaml** には CodeRouter 同梱の `llamacpp-qwen3-6-35b-a3b` provider 例 + コメント詳細あり。`cp examples/providers.yaml ~/.coderouter/providers.yaml` で丸ごと持ってくることも可能。
+> **完全な examples/providers.yaml** には CodeRouter 同梱の `llamacpp-qwen3-6-35b-a3b` provider 例 + コメント詳細あり。`cp examples/providers.yaml ~/.coderouter-t/providers.yaml` で丸ごと持ってくることも可能。
 
 ### Step 6. doctor で動作確認
 
@@ -203,7 +203,7 @@ Exit: 0
 
 ```bash
 # CodeRouter 起動 (test profile を作って llama.cpp 経路だけテストする例)
-coderouter serve --port 8088 --mode test-llamacpp &
+coderouter-t serve --port 8088 --mode test-llamacpp &
 sleep 2
 
 # Anthropic 互換 API で 1 round-trip
@@ -239,7 +239,7 @@ provider-ok provider=llamacpp-qwen3-6-35b-a3b
 ### `tool_calls [NEEDS TUNING]` が出る (CodeRouter v1.8.2 以前)
 
 - v1.8.2 以前は `tool_calls` probe の `max_tokens=64` が thinking モデルの `reasoning_content` で食い切られて偽陽性を出します
-- **v1.8.3 にアップグレード必須** (`uv tool upgrade coderouter-cli`)
+- **v1.8.3 にアップグレード必須** (`uv tool upgrade coderouter-t`)
 
 ### `reasoning_content` フィールドが client に漏れる (v1.8.2 以前)
 

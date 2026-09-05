@@ -15,7 +15,7 @@
 #
 # 使い方:
 #   1. 先にベンダーの CLI でログインしておく (例: `kimi login`, `grok login`)
-#   2. cp examples/providers.cli-session.yaml ~/.coderouter/providers.yaml
+#   2. cp examples/providers.cli-session.yaml ~/.coderouter-t/providers.yaml
 #   3. path / field / expiry_field を実際のファイルに合わせて調整
 #   4. coderouter serve を起動し、起動ログに credential-unavailable /
 #      credential-refresh-failed が出ないことを確認

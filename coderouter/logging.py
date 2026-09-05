@@ -890,7 +890,7 @@ def log_output_filter_applied(
 #     the agentic harness.
 #   - The operator can opt OUT by declaring
 #     ``claude_code_suitability: ok`` for the matching glob in
-#     ``~/.coderouter/model-capabilities.yaml`` (user rules win against
+#     ``~/.coderouter-t/model-capabilities.yaml`` (user rules win against
 #     bundled rules in the registry's first-match-per-flag walk).
 # ---------------------------------------------------------------------------
 

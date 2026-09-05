@@ -265,7 +265,7 @@ auto_router:
 
 ### (c) agent_cli を役として混ぜる — 監査役に外部 claude CLI
 
-`kind: agent_cli` は claude / codex / grok / antigravity の外部 CLI を「1 プロバイダ」として登録するアダプタである。**v2.9.0 以降は `coderouter-plugin-agents` のインストールと `providers.yaml` への `plugins.enabled: [agents]` が必須**(未導入だと `kind: agent_cli` の provider がある状態で `coderouter serve` が起動時エラーになる)。詳細は [`docs/backends/external-agents.md`](../backends/external-agents.md) を参照。
+`kind: agent_cli` は claude / codex / grok / antigravity の外部 CLI を「1 プロバイダ」として登録するアダプタである。**v2.9.0 以降は `coderouter-plugin-agents` のインストールと `providers.yaml` への `plugins.enabled: [agents]` が必須**(未導入だと `kind: agent_cli` の provider がある状態で `coderouter-t serve` が起動時エラーになる)。詳細は [`docs/backends/external-agents.md`](../backends/external-agents.md) を参照。
 
 ```bash
 uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
@@ -342,7 +342,7 @@ profiles:
 
 ## 6. 動作確認
 
-1. **起動時**: `coderouter serve` の起動ログで `plugin-loaded`(agent_cli を使う場合)や設定読み込みエラーが無いことを確認する。
+1. **起動時**: `coderouter-t serve` の起動ログで `plugin-loaded`(agent_cli を使う場合)や設定読み込みエラーが無いことを確認する。
 2. **実リクエストを1本流す**: Claude Code またはサブエージェント相当の curl リクエストを送る。
 3. **auto-router のログを見る**: マッチしたルールは `auto-router-resolved` イベントとして記録され、`signals.model` に実際に届いた `model` 文字列が入る。これが「エイリアスのまま届くか、フルIDに展開されるか」を確認する一次情報になる。ログの形は概ね次の通り。
 

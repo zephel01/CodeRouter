@@ -1,12 +1,12 @@
-<h1 align="center">CodeRouter</h1>
+<h1 align="center">CodeRouter-t</h1>
 
 <p align="center">
   <strong>ローカル LLM で Claude Code を動かすと壊れる問題、<br>ルーター 1 つで直します。</strong>
 </p>
 
 <p align="center">
-  <a href="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/zephel01/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
-  <a href="https://pypi.org/project/coderouter-cli/"><img src="https://img.shields.io/pypi/v/coderouter-cli?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
+  <a href="https://github.com/OrgaiCom/CodeRouter/actions/workflows/ci.yml"><img src="https://github.com/OrgaiCom/CodeRouter/actions/workflows/ci.yml/badge.svg?branch=main" alt="CI"></a>
+  <a href="https://pypi.org/project/coderouter-t/"><img src="https://img.shields.io/pypi/v/coderouter-t?include_prereleases&color=blue&label=pypi" alt="pypi"></a>
   <a href=""><img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="python"></a>
   <a href=""><img src="https://img.shields.io/badge/deps-5-brightgreen" alt="deps"></a>
   <a href=""><img src="https://img.shields.io/badge/license-MIT-yellow" alt="license"></a>
@@ -24,7 +24,7 @@
 あなたのエージェント (Claude Code / codex / agy)
         │
         ▼
-  ┌─ CodeRouter ─┐
+  ┌─ CodeRouter-t ─┐
   │  修復 + ガード │──→  ① ローカル (Ollama — 無料・最速)
   │  監視 + 診断  │──→  ② 無料クラウド (OpenRouter / NIM)
   │  自動フォールバック │──→  ③ 有料 (Claude — opt-in 時のみ)
@@ -37,7 +37,7 @@
 - 8 時間回しても止まらないように 6 種類のガードで守る
 - 1 つ目が落ちたら自動で次のプロバイダに切り替える
 - 有料 API は明示的に許可したときだけ使う (デフォルトは無料のみ)
-- 何がおかしいか `coderouter doctor` コマンド一発で診断する
+- 何がおかしいか `coderouter-t doctor` コマンド一発で診断する
 
 ---
 
@@ -47,7 +47,7 @@
 
 **でも直結では、こうなります:**
 
-| 直結の現実 | CodeRouter 経由 |
+| 直結の現実 | CodeRouter-t 経由 |
 |---|---|
 | 壊れた tool call は壊れたまま届く | 届く前に修復 |
 | backend が落ちたらセッション終了 | ローカル → 無料 → 有料へ自動フォールバック |
@@ -63,15 +63,15 @@
 
 ```bash
 # 1. サンプル設定を置く
-mkdir -p ~/.coderouter
-curl -fsSL https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml \
-  > ~/.coderouter/providers.yaml
+mkdir -p ~/.coderouter-t
+curl -fsSL https://raw.githubusercontent.com/OrgaiCom/CodeRouter/main/examples/providers.yaml \
+  > ~/.coderouter-t/providers.yaml
 
 # 2. 起動 (Python 3.12+)
-uvx --from coderouter-cli coderouter serve --port 8088
+uvx --from coderouter-t coderouter-t serve --port 8088
 ```
 
-恒久インストールしたい場合: `uv tool install coderouter-cli`
+恒久インストールしたい場合: `uv tool install coderouter-t`
 
 ---
 
@@ -79,7 +79,7 @@ uvx --from coderouter-cli coderouter serve --port 8088
 
 ```bash
 # ターミナル 1
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # ターミナル 2
 ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
@@ -87,7 +87,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 これだけ。Claude Code はいつも通り動きますが、裏ではローカルの Ollama が答えています。
 
-**VSCode の統合ターミナルから使う場合** は、環境変数の書き忘れを避けるため `coderouter vscode-init` が便利です。プロジェクトルートで 1 回叩くと `.vscode/settings.json` に `terminal.integrated.env.*` をマージ書き込みするので、以後 VSCode のターミナルで `claude` と打つだけで通ります。Cline / Roo Code / Continue.dev の設定コピペも含めて → [VSCode 連携ガイド](./docs/guides/vscode.md)
+**VSCode の統合ターミナルから使う場合** は、環境変数の書き忘れを避けるため `coderouter-t vscode-init` が便利です。プロジェクトルートで 1 回叩くと `.vscode/settings.json` に `terminal.integrated.env.*` をマージ書き込みするので、以後 VSCode のターミナルで `claude` と打つだけで通ります。Cline / Roo Code / Continue.dev の設定コピペも含めて → [VSCode 連携ガイド](./docs/guides/vscode.md)
 
 ---
 
@@ -131,10 +131,10 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 | 機能 | 何がわかるか |
 |---|---|
-| **`coderouter doctor`** | プロバイダの問題を 7 プローブで即診断 + 修正パッチ出力 |
+| **`coderouter-t doctor`** | プロバイダの問題を 7 プローブで即診断 + 修正パッチ出力 |
 | **`/dashboard`** | ブラウザで今何が起きてるかリアルタイム確認 |
-| **`coderouter audit`** | guard 発火履歴を検索 |
-| **`coderouter replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |
+| **`coderouter-t audit`** | guard 発火履歴を検索 |
+| **`coderouter-t replay`** | provider 切替の効果を統計比較 (A/B 分析) / `--suggest-rules` でルール最適化提案 |
 | **Continuous Probe** | idle 時も定期的に backend を監視 |
 
 ### 言語税トラッキング — v2.6.0
@@ -162,7 +162,7 @@ providers:
     kind: anthropic
     base_url: https://api.anthropic.com
     model: claude-sonnet-4-6
-    tokenizer_path: ~/.coderouter/tokenizers/sonnet.json   # 言語税の正確計測（任意）
+    tokenizer_path: ~/.coderouter-t/tokenizers/sonnet.json   # 言語税の正確計測（任意）
 ```
 
 詳細 → [言語税ガイド](./docs/guides/language-tax.md)
@@ -206,7 +206,7 @@ launcher:
 ## 設定例 (最小)
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 default_profile: claude-code
 
 profiles:
@@ -251,7 +251,7 @@ English: [Quickstart](./docs/start/quickstart.en.md) · [Usage guide](./docs/gui
 
 ## トラブルシューティング (早見表)
 
-**まず**: `coderouter doctor --check-model <provider名>` を走らせてください。大体これで原因がわかります。
+**まず**: `coderouter-t doctor --check-model <provider名>` を走らせてください。大体これで原因がわかります。
 
 | 症状 | 原因 | 詳細 |
 |---|---|---|
@@ -278,11 +278,28 @@ English: [Quickstart](./docs/start/quickstart.en.md) · [Usage guide](./docs/gui
 
 ## エコシステム
 
-CodeRouter は backend ルーター層として独立して動きます。`OPENAI_BASE_URL` を CodeRouter に向けるだけで、他プロジェクトを無改造で吸収:
+CodeRouter-t は backend ルーター層として独立して動きます。`OPENAI_BASE_URL` を CodeRouter-t に向けるだけで、他プロジェクトを無改造で吸収:
 
 - **[Voice Bridge](https://github.com/zephel01/voice-bridge)** — リアルタイム音声翻訳 + AI 音声チャット。CodeRouter 経由でローカル LLM のフォールバックを効かせると、ずんだもんが沈黙しなくなる
 
 ---
+
+## 言語設定
+
+CodeRouter-t の人間向けメッセージ（CLI / Doctor / 起動警告）は日本語と英語を切り替えられます。JSONログは常に英語のままです。
+
+```bash
+# 日本語で表示（推奨: 日本語OSでは自動で日本語になります）
+CODEROUTER_T_LANG=ja coderouter-t serve
+CODEROUTER_T_LANG=ja coderouter-t doctor --check-model local
+
+# 英語で表示
+CODEROUTER_T_LANG=en coderouter-t serve
+```
+
+- `CODEROUTER_T_LANG=ja` / `en` を明示すると最優先されます
+- 未設定時は `LANG` / `LC_MESSAGES` の OSロケールから自動判定（`ja_JP.UTF-8` → 日本語）
+- 不正な値は英語にフォールバックします
 
 ## Security
 

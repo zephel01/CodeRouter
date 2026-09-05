@@ -38,12 +38,12 @@
 #   ollama pull qwen3.5:4b             # しっかり chat (~3.4GB) — 余裕があれば
 #   ollama pull sam860/lfm2.5:350m     # 超軽量・常駐用 (~0.5GB) — 任意
 #
-#   # 3. OpenRouter API key を ~/.coderouter/.env に書く
+#   # 3. OpenRouter API key を ~/.coderouter-t/.env に書く
 #   #    https://openrouter.ai/ で無料アカウント作って API key 取得 (5min)
-#   echo 'OPENROUTER_API_KEY=sk-or-v1-...' >> ~/.coderouter/.env
+#   echo 'OPENROUTER_API_KEY=sk-or-v1-...' >> ~/.coderouter-t/.env
 #
 #   # 4. このファイルを copy + 起動
-#   cp examples/providers.raspberrypi.yaml ~/.coderouter/providers.yaml
+#   cp examples/providers.raspberrypi.yaml ~/.coderouter-t/providers.yaml
 #   coderouter serve
 #
 # Free-tier rate limits (OpenRouter, 2026-04 確認):

@@ -145,7 +145,7 @@ plugins:
       consolidate_model: qwen3:1.7b
 ```
 
-When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
+When using an `agent_cli` provider, enabling `agents` is not optional — it's **required** (without it, `coderouter-t serve` fails at startup). See [backends/external-agents](backends/external-agents.en.md) for details.
 
 See each plugin's repo README for full configuration.
 

@@ -1,7 +1,7 @@
 """Regression guard: every ``examples/providers*.yaml`` must load cleanly.
 
 The sample YAMLs under ``examples/`` are what users copy to
-``~/.coderouter/providers.yaml``. If any of them stop validating after a
+``~/.coderouter-t/providers.yaml``. If any of them stop validating after a
 pydantic-schema tweak, users hit the break at the worst possible moment
 (their very first ``coderouter start``). Parametrizing over the
 directory and calling the real loader makes the break a CI failure

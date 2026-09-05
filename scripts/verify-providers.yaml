@@ -7,7 +7,7 @@
 #   経路 C (CR+Anthropic): Claude Code → CodeRouter → Ollama (Anthropic API)
 #
 # 使い方:
-#   cp scripts/verify-providers.yaml ~/.coderouter/providers.yaml
+#   cp scripts/verify-providers.yaml ~/.coderouter-t/providers.yaml
 #   coderouter serve --port 8088
 #
 # 経路 A は CodeRouter を通さないので、この YAML は経路 B/C 用。

@@ -96,21 +96,21 @@ curl http://localhost:8080/v1/models
 
 ### インストール
 
-venv は CodeRouter 設定と同じ `~/.coderouter/backends/` 配下に、**バックエンドごとに分けて**作ります。vLLM は `~/.coderouter/backends/vllm/` です(vLLM と MLX は依存関係がまったく違うため、venv は必ず分けます)。場所を固定すると `providers.yaml` の `binary:` にそのまま書けます。
+venv は CodeRouter 設定と同じ `~/.coderouter-t/backends/` 配下に、**バックエンドごとに分けて**作ります。vLLM は `~/.coderouter-t/backends/vllm/` です(vLLM と MLX は依存関係がまったく違うため、venv は必ず分けます)。場所を固定すると `providers.yaml` の `binary:` にそのまま書けます。
 
 `uv`(高速な Python 環境管理ツール)での導入が推奨です:
 
 ```bash
-uv venv ~/.coderouter/backends/vllm --python 3.12 --seed
-source ~/.coderouter/backends/vllm/bin/activate
+uv venv ~/.coderouter-t/backends/vllm --python 3.12 --seed
+source ~/.coderouter-t/backends/vllm/bin/activate
 uv pip install vllm --torch-backend=auto
 ```
 
 `pip` でも可:
 
 ```bash
-python3.12 -m venv ~/.coderouter/backends/vllm
-source ~/.coderouter/backends/vllm/bin/activate
+python3.12 -m venv ~/.coderouter-t/backends/vllm
+source ~/.coderouter-t/backends/vllm/bin/activate
 pip install vllm
 ```
 
@@ -131,7 +131,7 @@ Launcher は vLLM を `<python> -m vllm.entrypoints.openai.api_server` の形で
 ```yaml
 backends:
   vllm:
-    binary: ~/.coderouter/backends/vllm/bin/python
+    binary: ~/.coderouter-t/backends/vllm/bin/python
 ```
 
 ### よくあるつまずき
@@ -152,11 +152,11 @@ Apple 製の機械学習フレームワーク MLX を使った推論サーバー
 
 ### インストール
 
-venv は `~/.coderouter/backends/mlx/` に作ります(vLLM とは別の venv。バックエンドごとに分けます):
+venv は `~/.coderouter-t/backends/mlx/` に作ります(vLLM とは別の venv。バックエンドごとに分けます):
 
 ```bash
-python3 -m venv ~/.coderouter/backends/mlx
-source ~/.coderouter/backends/mlx/bin/activate
+python3 -m venv ~/.coderouter-t/backends/mlx
+source ~/.coderouter-t/backends/mlx/bin/activate
 pip install mlx-lm
 ```
 
@@ -183,7 +183,7 @@ Launcher は MLX を `<python> -m mlx_lm.server` の形で起動します。`pro
 ```yaml
 backends:
   mlx:
-    binary: ~/.coderouter/backends/mlx/bin/python
+    binary: ~/.coderouter-t/backends/mlx/bin/python
 ```
 
 ### よくあるつまずき

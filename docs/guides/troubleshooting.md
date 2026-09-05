@@ -53,23 +53,23 @@ doctor を**サーバ起動と同じシェル**から打つことが大事です
 旧サンプル YAML に `coderouter start --profile claude-code-nim` という記述が残っていた時期がありますが、**正しくは**:
 
 ```bash
-coderouter serve --mode claude-code-nim --port 8088
+coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 | よくある間違い | 正解 |
 |---|---|
-| `coderouter start ...` | `coderouter serve ...` (サブコマンド名) |
+| `coderouter start ...` | `coderouter-t serve ...` (サブコマンド名) |
 | `--profile <name>` | `--mode <name>` (フラグ名) |
 | `--port` 省略 | デフォルト 4000。Claude Code の `ANTHROPIC_BASE_URL` に合わせて `--port 8088` 等を明示 |
 
-`coderouter --help` / `coderouter serve --help` で最新の引数を確認できます。
+`coderouter --help` / `coderouter-t serve --help` で最新の引数を確認できます。
 
 ### 1-2. `.env` には `export` が必須
 
 このプロジェクトの `examples/.env.example` は v1.6.2 以降、各キーに `export` を付けた形式に変更されています。
 
 ```bash
-# OK — source .env で子プロセス (coderouter serve / doctor) に渡る
+# OK — source .env で子プロセス (coderouter-t serve / doctor) に渡る
 export NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxx
 export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 ```
@@ -79,7 +79,7 @@ export OPENROUTER_API_KEY=sk-or-v1-xxxxxxxxxxxxxxxx
 NVIDIA_NIM_API_KEY=nvapi-xxxxxxxxxxxxxxxx
 ```
 
-CodeRouter は `.env` を**自動 source しません**。手動で `source .env` するか、`set -a && source .env && set +a` で `KEY=value` 形式を一括 export してから `coderouter serve` を起動してください。
+CodeRouter は `.env` を**自動 source しません**。手動で `source .env` するか、`set -a && source .env && set +a` で `KEY=value` 形式を一括 export してから `coderouter-t serve` を起動してください。
 
 ### 1-3. 環境変数が子プロセスに届いているかの確認
 
@@ -125,7 +125,7 @@ grep -rn NVIDIA_NIM_API_KEY ~/.zshrc ~/.zprofile ~/.bashrc ~/.bash_profile 2>/de
 
 ### 1-6. 別 PC からアクセスすると `Host '...' is not allowed.` (403) — v2.7.0 以降
 
-`coderouter serve --host 0.0.0.0` で LAN に公開したのに、別 PC からは
+`coderouter-t serve --host 0.0.0.0` で LAN に公開したのに、別 PC からは
 `{"detail":"Host '192.168.x.x:8088' is not allowed."}` が返る(ホスト機の
 `curl http://localhost:8088/healthz` は通る)、という症状。v2.6 まで動いていた構成が
 v2.7 で止まった場合はほぼこれです。
@@ -136,7 +136,7 @@ loopback 系(`localhost` / `127.0.0.1` / `::1`)の Host しか受け付けませ
 対処 — **サーバー機自身の IP / ホスト名(= クライアントのブラウザ URL に入っている値。クライアント側の IP ではありません)**を環境変数で許可します(カンマ区切り、ポート不要):
 
 ```bash
-CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter serve --host 0.0.0.0 --port 8088
+CODEROUTER_ALLOWED_HOSTS=192.168.1.50 coderouter-t serve --host 0.0.0.0 --port 8088
 ```
 
 迷ったらエラーメッセージに出ている値(ポートを除く)をそのまま入れれば確実です。
@@ -199,14 +199,14 @@ coderouter audit --tail 20 --filter provider-failed
 
 ### 1-8. `providers.yaml` が読まれない / 設定が反映されない — v2.13.0 以降
 
-**症状**: `./providers.yaml` を編集したのに `coderouter serve` / `doctor` の挙動が変わらない。同じ手順が v2.12 以前では効いていた。
+**症状**: `./providers.yaml` を編集したのに `coderouter-t serve` / `doctor` の挙動が変わらない。同じ手順が v2.12 以前では効いていた。
 
 **原因**: v2.13.0 で、カレントディレクトリの `./providers.yaml` の暗黙読込が既定オフになりました(セキュリティ強化 — 悪意ある `providers.yaml` が置かれたディレクトリでたまたま起動しただけで `restart_command` 等の実行系フィールドが刺さる経路を塞ぐため)。設定ファイルの探索順は次のとおりです:
 
 1. `--config` で明示したパス
 2. `$CODEROUTER_CONFIG` 環境変数
 3. カレントディレクトリの `./providers.yaml` — **`CODEROUTER_ALLOW_CWD_CONFIG` が truthy(`1`/`true`/`yes`/`on`)のときだけ**
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 オプトインが未設定のまま `./providers.yaml` が存在する場合は、起動時に一度だけ `cwd-config-skipped` 警告が出ます。ログにこれが出ていれば原因はほぼ確定です。
 
@@ -214,13 +214,13 @@ coderouter audit --tail 20 --filter provider-failed
 
 ```bash
 # 1) 明示的にオプトインする(信頼できるディレクトリでのみ)
-CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 
 # 2) --config で明示する
-coderouter serve --config ./providers.yaml
+coderouter-t serve --config ./providers.yaml
 
-# 3) 常用ファイルとして ~/.coderouter/providers.yaml へ移す
-mkdir -p ~/.coderouter && cp ./providers.yaml ~/.coderouter/providers.yaml
+# 3) 常用ファイルとして ~/.coderouter-t/providers.yaml へ移す
+mkdir -p ~/.coderouter-t && cp ./providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 1-9. `/dashboard` や `/metrics.json` が 401 を返す — v2.14.0 以降
@@ -487,7 +487,7 @@ note 記事の「Gemma 4 が日常の王者」評価は **Claude Code agentic �
 
 1. **第一候補は枯れたもの**: `qwen2.5-coder:14b` / `qwen2.5-coder:7b` / `gemma4:26b` / `gemma4:e4b`
 2. **doctor で確認**: `cr doctor --check-model <provider>` で 7 probe を回す
-3. **`--apply` で patch 適用**: NEEDS_TUNING の YAML パッチを非破壊書き戻し (`pip install 'coderouter-cli[doctor]'` 必要)
+3. **`--apply` で patch 適用**: NEEDS_TUNING の YAML パッチを非破壊書き戻し (`pip install 'coderouter-t[doctor]'` 必要)
 4. **新興モデルは慎重に**: HF で見つけた新モデルは Ollama 0.20+ でも未対応のことあり、`ollama run` → server log で確認
 5. **fallback chain で守る**: ローカル primary が落ちても NIM / OpenRouter free に流れるように chain を厚く
 
@@ -610,7 +610,7 @@ export ANTHROPIC_API_KEY=op://Personal/Anthropic/credential
 **起動 — `op run` が `.env.tpl` の参照を解決して env として inject**:
 
 ```bash
-op run --env-file=.env.tpl -- coderouter serve --mode claude-code-nim --port 8088
+op run --env-file=.env.tpl -- coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 このパターンの何がいいかというと:
@@ -618,9 +618,9 @@ op run --env-file=.env.tpl -- coderouter serve --mode claude-code-nim --port 808
 - **`.env.tpl` は git にコミットしてよい** (シークレットの実体は入っていない)
 - **ディスク上に平文の `.env` が一切存在しない** (脅威 2 / 6 を完全に防げる)
 - **チームでメンバーごとに別の Vault** を使えるので、退職時の鍵差し替えが Vault 切り替えだけで済む
-- **`coderouter` 側は `--env-file` を介さない** (1Password が直接 env として inject するため、`coderouter serve` から見ると単に export 済み env が見えているだけ)
+- **`coderouter` 側は `--env-file` を介さない** (1Password が直接 env として inject するため、`coderouter-t serve` から見ると単に export 済み env が見えているだけ)
 
-> **`coderouter serve --env-file <path>` は、1Password の出力を一度ファイルに落としてから渡したい場合や、direnv / sops のようにファイル経由で受け渡したい場合に使います。** 1Password を `op run` で直接渡せるなら、`--env-file` は不要です。
+> **`coderouter-t serve --env-file <path>` は、1Password の出力を一度ファイルに落としてから渡したい場合や、direnv / sops のようにファイル経由で受け渡したい場合に使います。** 1Password を `op run` で直接渡せるなら、`--env-file` は不要です。
 
 ### 5-4. direnv + sops で git 管理の暗号化 secret
 
@@ -646,7 +646,7 @@ direnv allow .
 
 # 5. cd するだけで自動 export
 cd ~/works/CodeRouter   # direnv が裏で sops -d する
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 `coderouter` 側は通常通り env から鍵を読むだけ。`--env-file` も不要。
@@ -663,7 +663,7 @@ security add-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w
 
 # 起動時に env として export
 export NVIDIA_NIM_API_KEY=$(security find-generic-password -s NVIDIA_NIM_API_KEY -a $USER -w)
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 `~/.zshrc` の末尾に上の 2 行を書いておけば、新しいシェルを開くたびに自動で展開されます (Touch ID / パスワード認証ダイアログが出ることもあります — これも 1 つのセキュリティ層)。
@@ -676,17 +676,17 @@ secret-tool store --label='NVIDIA NIM' service NVIDIA_NIM_API_KEY
 
 # 起動時
 export NVIDIA_NIM_API_KEY=$(secret-tool lookup service NVIDIA_NIM_API_KEY)
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 ### 5-6. `--env-file` の積み重ねパターン (中級)
 
-`coderouter serve --env-file <path>` は複数指定でき、左から右へ「**先勝ち**」で適用されます。**既に環境変数が設定されている場合、ファイルの値は無視される** (`--env-file-override` で挙動を反転可) という設計なので、層を分けて運用しやすいのが利点。
+`coderouter-t serve --env-file <path>` は複数指定でき、左から右へ「**先勝ち**」で適用されます。**既に環境変数が設定されている場合、ファイルの値は無視される** (`--env-file-override` で挙動を反転可) という設計なので、層を分けて運用しやすいのが利点。
 
 ```bash
 # 例: グローバル defaults + プロジェクト個別 override
-coderouter serve \
-  --env-file ~/.coderouter/global.env \
+coderouter-t serve \
+  --env-file ~/.coderouter-t/global.env \
   --env-file ./project.env \
   --port 8088
 ```
@@ -694,12 +694,12 @@ coderouter serve \
 ```bash
 # 例: 1Password + project-local の合わせ技
 op run --env-file=.env.tpl -- \
-  coderouter serve \
+  coderouter-t serve \
     --env-file ./project-local-overrides.env \
     --port 8088
 ```
 
-`coderouter serve --env-file` 起動時は、ロードされたキーの**名前のみ** (値ではなく) を stderr に 1 行で要約します:
+`coderouter-t serve --env-file` 起動時は、ロードされたキーの**名前のみ** (値ではなく) を stderr に 1 行で要約します:
 
 ```
 serve: --env-file ./project.env: loaded 2 variable(s): CODEROUTER_MODE, OPENROUTER_API_KEY

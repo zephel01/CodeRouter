@@ -38,15 +38,15 @@ llama-server -m ~/models/<model>.gguf --host 127.0.0.1 --port 8080 \
 **vLLM (NVIDIA GPU)**
 
 ```bash
-uv venv ~/.coderouter/backends/vllm
-~/.coderouter/backends/vllm/bin/python -m pip install vllm
-~/.coderouter/backends/vllm/bin/python -m vllm.entrypoints.openai.api_server \
+uv venv ~/.coderouter-t/backends/vllm
+~/.coderouter-t/backends/vllm/bin/python -m pip install vllm
+~/.coderouter-t/backends/vllm/bin/python -m vllm.entrypoints.openai.api_server \
   --model Qwen/Qwen2.5-Coder-7B-Instruct --port 8000 --max-model-len 32768
 ```
 
 > If you'd rather let a GUI handle startup, see [Launcher](./launcher.en.md). Note that the Launcher only takes care of **starting the process** — registering it as a provider (below) is a separate step.
 
-### 2. Register it as a provider in CodeRouter (`~/.coderouter/providers.yaml`)
+### 2. Register it as a provider in CodeRouter (`~/.coderouter-t/providers.yaml`)
 
 ```yaml
 allow_paid: false
@@ -82,7 +82,7 @@ Copying `examples/providers.llamacpp-vllm.yaml` as a starting point is the faste
 
 ```bash
 # Terminal 1
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # Terminal 2 (scope the env vars to this shell only; don't set them globally)
 ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
@@ -125,8 +125,8 @@ If `providers:` only lists local backends, there's nowhere to go the moment one 
 
 Changes don't take effect on a running process immediately.
 
-1. Put the config in **`~/.coderouter/providers.yaml`** (editing files under `examples/` alone has no effect)
-2. **Restart `coderouter serve`** (`launcher:` / profiles are read at startup)
+1. Put the config in **`~/.coderouter-t/providers.yaml`** (editing files under `examples/` alone has no effect)
+2. **Restart `coderouter-t serve`** (`launcher:` / profiles are read at startup)
 3. **Restart the backend** (`--ctx-size` and similar flags only take effect after a restart)
 
 ---
@@ -138,7 +138,7 @@ Changes don't take effect on a running process immediately.
 | `400 exceed_context_size_error` `n_ctx:4096` | ctx-size too small to fit Claude Code's prompt | **Restart** with `--ctx-size 32768` or higher. Use YaRN if exceeding trained ctx |
 | `transport error: All connection attempts failed` (status: null) | Backend is down / **port mismatch** | Start the server + align `base_url`'s port with the real port |
 | Everything shows `provider-failed` → **502 Bad Gateway** | The whole chain's escape hatches are dead | Recover one backend + add a free-cloud fallback at the end |
-| Still `n_ctx=4096` after restarting | An old process is still alive / config not reflected under `~/.coderouter` / serve not restarted | Check the actual command with `ps aux \| grep llama-server` → follow the 3-step reflect process |
+| Still `n_ctx=4096` after restarting | An old process is still alive / config not reflected under `~/.coderouter-t` / serve not restarted | Check the actual command with `ps aux \| grep llama-server` → follow the 3-step reflect process |
 | Backend crashes immediately with OOM | ctx set too high | Lower ctx / KV quantization / smaller model |
 | `capability-degraded: cache_control` | Just dropping the Anthropic prompt-cache marker when translating to OpenAI format | **Harmless**. No action needed |
 | `claude.ai connectors are disabled …` | Env vars `ANTHROPIC_AUTH_TOKEN`/`API_KEY` take priority over the claude.ai login | Scope CodeRouter's env vars to that shell/folder only (`direnv`). `unset` them in your everyday shell |

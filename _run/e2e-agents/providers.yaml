@@ -64,7 +64,7 @@ providers:
     capabilities: { streaming: false, tools: false }
     agent_cli:
       agent: claude
-      workdir: ~/.coderouter/agents/claude   # 既存キャッシュを再利用
+      workdir: ~/.coderouter-t/agents/claude   # 既存キャッシュを再利用
       exec_timeout_s: 300
       allow_file_writes: false
       sandbox_mode: read_only
@@ -77,7 +77,7 @@ providers:
     capabilities: { streaming: false, tools: false }
     agent_cli:
       agent: codex
-      workdir: ~/.coderouter/agents/codex
+      workdir: ~/.coderouter-t/agents/codex
       exec_timeout_s: 300
       allow_file_writes: false
       sandbox_mode: read_only
@@ -90,7 +90,7 @@ providers:
     capabilities: { streaming: false, tools: false }
     agent_cli:
       agent: grok
-      workdir: ~/.coderouter/agents/grok
+      workdir: ~/.coderouter-t/agents/grok
       exec_timeout_s: 300
       allow_file_writes: false
       sandbox_mode: read_only
@@ -103,7 +103,7 @@ providers:
     capabilities: { streaming: false, tools: false }
     agent_cli:
       agent: antigravity       # command 既定 "agy"
-      workdir: ~/.coderouter/agents/antigravity
+      workdir: ~/.coderouter-t/agents/antigravity
       exec_timeout_s: 300
       allow_file_writes: false
       sandbox_mode: read_only

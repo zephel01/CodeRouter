@@ -102,29 +102,29 @@ export ALLOW_PAID=false            # 既定。有料 API を使うときだけ t
 
 `export` を付け忘れると、上流から `Header of type 'authorization' was missing` で 401 が返って一見原因不明のフォールバックループになります。**v1.6.3 で `coderouter doctor --check-env .env` を入れたので、起動前にこれで検査するのが推奨**です（[`docs/troubleshooting.md` §1-2 / §5](./troubleshooting.md#1-2-env-には-export-が必須)）。
 
-> **1Password などの secret manager を使う場合**: `.env` をディスクに置かずに `op run --env-file=.env.tpl -- coderouter serve ...` で env として inject する構成が組めます。レシピは [`docs/troubleshooting.md` §5-3](./troubleshooting.md#5-3-1password-cli-と連携する-推奨) 参照。
+> **1Password などの secret manager を使う場合**: `.env` をディスクに置かずに `op run --env-file=.env.tpl -- coderouter-t serve ...` で env として inject する構成が組めます。レシピは [`docs/troubleshooting.md` §5-3](./troubleshooting.md#5-3-1password-cli-と連携する-推奨) 参照。
 
 ### 3.3 サンプル config をコピーして起動
 
-`coderouter` 本体は **v1.7.0 から PyPI (`coderouter-cli`) に公開**されているので、入手は 1 行:
+`coderouter` 本体は **v1.7.0 から PyPI (`coderouter-t`) に公開**されているので、入手は 1 行:
 
 ```bash
 # サンプル providers.yaml をダウンロード
-mkdir -p ~/.coderouter
-curl -fsSL -o ~/.coderouter/providers.yaml \
+mkdir -p ~/.coderouter-t
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx で起動 (PyPI から都度取得 + 実行)
-# 注: PyPI 配布名 (coderouter-cli) と console script 名 (coderouter) が
+# 注: PyPI 配布名 (coderouter-t) と console script 名 (coderouter) が
 # 異なるため、uv 0.11+ では --from 形式が必須 (旧 uv でも動く)
-uvx --from coderouter-cli coderouter serve --mode claude-code-nim --port 8088
+uvx --from coderouter-t coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 恒久的にインストールしておく場合:
 
 ```bash
-uv tool install coderouter-cli
-coderouter serve --mode claude-code-nim --port 8088
+uv tool install coderouter-t
+coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 > サブコマンド名は `serve`（旧記載の `start` は誤り）、プロファイル指定は `--mode`（`--profile` ではない）、ポートは Claude Code 側の `ANTHROPIC_BASE_URL` に合わせて明示的に。これらは v1.6.2 の hygiene パスで整理しました。
@@ -140,7 +140,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 ```bash
 op run --env-file=.env.tpl -- \
-  coderouter serve --mode claude-code-nim --port 8088
+  coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 ---

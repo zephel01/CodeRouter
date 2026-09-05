@@ -201,7 +201,7 @@ def test_silent_when_claude_code_chain_has_no_degraded_providers(
 def test_user_rule_flipping_to_ok_suppresses_warn(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """When ``~/.coderouter/model-capabilities.yaml`` declares
+    """When ``~/.coderouter-t/model-capabilities.yaml`` declares
     ``claude_code_suitability: ok`` for the matching glob, the user
     rule beats the bundled ``degraded`` rule (user rules are evaluated
     first in the registry's first-match-per-flag walk)."""

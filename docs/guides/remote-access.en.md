@@ -47,7 +47,7 @@ Install [Tailscale](https://tailscale.com/) (a WireGuard-based mesh VPN) on both
 ```bash
 # server — bind to the Tailscale IP only, allow-list its names
 CODEROUTER_ALLOWED_HOSTS=my-server.tailnet-name.ts.net,100.x.y.z \
-  coderouter serve --host 100.x.y.z --port 8088
+  coderouter-t serve --host 100.x.y.z --port 8088
 
 # client (anywhere in the world, as long as it's in the tailnet)
 open http://my-server.tailnet-name.ts.net:8088/dashboard
@@ -74,7 +74,7 @@ coderouter.example.internal {
 
 ```bash
 # CodeRouter stays loopback; allow the Host the proxy presents
-CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter serve --port 8088
+CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter-t serve --port 8088
 ```
 
 - CodeRouter itself is never exposed (only the proxy reaches 127.0.0.1:8088)
@@ -86,7 +86,7 @@ On a home LAN with only people you trust, this is fine and simple.
 
 ```bash
 # on the server (e.g. 192.168.1.10) — ALLOWED_HOSTS is the SERVER's address (the one in the URL)
-CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter serve --host 0.0.0.0 --port 8088
+CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter-t serve --host 0.0.0.0 --port 8088
 ```
 
 Two chores:

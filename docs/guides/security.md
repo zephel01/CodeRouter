@@ -153,28 +153,28 @@ v2.13.0 以降、設定の探索順は次のとおりで、**3 番目はオプ�
 1. `--config` で明示的に渡したパス
 2. 環境変数 `CODEROUTER_CONFIG`
 3. `./providers.yaml` (カレントディレクトリ) — `CODEROUTER_ALLOW_CWD_CONFIG` が設定されているときだけ
-4. `~/.coderouter/providers.yaml`
+4. `~/.coderouter-t/providers.yaml`
 
 オプトインが有効になるのは `CODEROUTER_ALLOW_CWD_CONFIG` の値が `1` / `true` / `yes` / `on` のときだけです (前後の空白は無視、大文字小文字は区別しません)。それ以外の値 — `0`、`false`、空文字列、`enabled` のような綴り — はすべて「無効」に倒れます。
 
 ```bash
 # 信頼できるディレクトリでだけ有効化する
-CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter serve
+CODEROUTER_ALLOW_CWD_CONFIG=1 coderouter-t serve
 ```
 
 **「今まで動いていたのに設定が読まれなくなった」とき**: `./providers.yaml` が存在するのに読まれなかった場合、プロセスに一度だけ `cwd-config-skipped` 警告が出ます (スキップしたパスと直し方を含む)。設定が 1 つも見つからなければ、`FileNotFoundError` のメッセージにも同じ注記が付きます。直し方は 3 つで、上ほど安全です。
 
-1. `coderouter serve --config ./providers.yaml` — そのファイルを明示的に名指しする
+1. `coderouter-t serve --config ./providers.yaml` — そのファイルを明示的に名指しする
 2. `export CODEROUTER_CONFIG=$PWD/providers.yaml` — 同じことを環境変数で
 3. `export CODEROUTER_ALLOW_CWD_CONFIG=1` — 暗黙探索を戻す。**信頼するディレクトリでのみ**
 
-恒久的な置き場所は `~/.coderouter/providers.yaml` です。オプトインを有効にして CWD から読んだ場合は `cwd-config-loaded` 警告が一度だけ出ます。`--config` / `CODEROUTER_CONFIG` で明示的に指したときは (たまたま同じファイルであっても) どちらの警告も出ません — 明示的な選択は、ここで塞いでいる暗黙の挙動ではないからです。
+恒久的な置き場所は `~/.coderouter-t/providers.yaml` です。オプトインを有効にして CWD から読んだ場合は `cwd-config-loaded` 警告が一度だけ出ます。`--config` / `CODEROUTER_CONFIG` で明示的に指したときは (たまたま同じファイルであっても) どちらの警告も出ません — 明示的な選択は、ここで塞いでいる暗黙の挙動ではないからです。
 
 ---
 
 ## 3. ネットワーク姿勢
 
-CodeRouter は既定で `127.0.0.1` にバインドします (`coderouter serve --host`)。運用者が明示的にオプトインしない限り `0.0.0.0` には出ません。信頼境界は「**ループバックのみ**」と定義され、全ルートで Host ヘッダ検証 (DNS rebinding 対策) が働きます — loopback 系以外の Host を持つリクエストは 403 で拒否され、意図的な外部公開時のみ `CODEROUTER_ALLOWED_HOSTS` (カンマ区切り) で許可ホスト名を追加します。チャット入口 (`/v1/messages` / `/v1/chat/completions`) に認証は**ありません**。launcher API の状態変更エンドポイント (start / stop / delete) のみ、`CODEROUTER_LAUNCHER_TOKEN` を設定すると `X-CodeRouter-Token` ヘッダによるトークン認証をオプトインできます (未設定なら従来どおり無認証)。リクエストボディは既定 64 MB が上限で (超過は 413)、`CODEROUTER_MAX_BODY_BYTES` で変更できます。
+CodeRouter は既定で `127.0.0.1` にバインドします (`coderouter-t serve --host`)。運用者が明示的にオプトインしない限り `0.0.0.0` には出ません。信頼境界は「**ループバックのみ**」と定義され、全ルートで Host ヘッダ検証 (DNS rebinding 対策) が働きます — loopback 系以外の Host を持つリクエストは 403 で拒否され、意図的な外部公開時のみ `CODEROUTER_ALLOWED_HOSTS` (カンマ区切り) で許可ホスト名を追加します。チャット入口 (`/v1/messages` / `/v1/chat/completions`) に認証は**ありません**。launcher API の状態変更エンドポイント (start / stop / delete) のみ、`CODEROUTER_LAUNCHER_TOKEN` を設定すると `X-CodeRouter-Token` ヘッダによるトークン認証をオプトインできます (未設定なら従来どおり無認証)。リクエストボディは既定 64 MB が上限で (超過は 413)、`CODEROUTER_MAX_BODY_BYTES` で変更できます。
 
 **読み取り専用エンドポイントも既定では開いています** (v2.14.0)。`/dashboard`、`/metrics.json`、`/metrics` は状態を変えないので launcher のトークン化の対象外でしたが、「読み取り専用」は「無害」ではありません。`/metrics.json` は全プロバイダの名前・種類・有料フラグ・`base_url` と、プロファイルグラフを返します — つまり**どのモデルをどのベンダーへ払って運用しているかのトポロジ全体**です。ラップトップでは問題になりませんが、ポートが他から届くマシンでは無料の偵察エンドポイントになります。
 
@@ -182,7 +182,7 @@ CodeRouter は既定で `127.0.0.1` にバインドします (`coderouter serve 
 
 ```bash
 export CODEROUTER_METRICS_TOKEN="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
-coderouter serve
+coderouter-t serve
 curl -H "X-CodeRouter-Token: $CODEROUTER_METRICS_TOKEN" http://127.0.0.1:4000/metrics.json
 ```
 

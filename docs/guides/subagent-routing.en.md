@@ -265,7 +265,7 @@ auto_router:
 
 ### (c) Mixing in agent_cli — an audit role via an external claude CLI
 
-`kind: agent_cli` registers an external CLI — claude / codex / grok / antigravity — as a single CodeRouter provider. **As of v2.9.0, this requires installing `coderouter-plugin-agents` and adding `plugins.enabled: [agents]` to `providers.yaml`** (without it, `coderouter serve` fails at startup as soon as any `kind: agent_cli` provider is present). See [`docs/backends/external-agents.md`](../backends/external-agents.en.md) for full details.
+`kind: agent_cli` registers an external CLI — claude / codex / grok / antigravity — as a single CodeRouter provider. **As of v2.9.0, this requires installing `coderouter-plugin-agents` and adding `plugins.enabled: [agents]` to `providers.yaml`** (without it, `coderouter-t serve` fails at startup as soon as any `kind: agent_cli` provider is present). See [`docs/backends/external-agents.md`](../backends/external-agents.en.md) for full details.
 
 ```bash
 uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
@@ -342,7 +342,7 @@ profiles:
 
 ## 6. Verifying it works
 
-1. **At startup**: check the `coderouter serve` startup log for `plugin-loaded` (if using agent_cli) and for the absence of config-load errors.
+1. **At startup**: check the `coderouter-t serve` startup log for `plugin-loaded` (if using agent_cli) and for the absence of config-load errors.
 2. **Send one real request**: from Claude Code, or a curl request shaped like a sub-agent call.
 3. **Read the auto-router log**: a matched rule is recorded as an `auto-router-resolved` event, and `signals.model` carries the actual `model` string that arrived — this is your primary source for confirming whether the alias stayed as-is or expanded to a full ID. The shape of the log line is roughly:
 

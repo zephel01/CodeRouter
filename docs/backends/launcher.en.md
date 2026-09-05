@@ -58,10 +58,10 @@ python3 launcher_gui.py
 uv run python launcher_gui.py
 
 # Explicitly specify a config file
-python3 launcher_gui.py --config ~/.coderouter/providers.yaml
+python3 launcher_gui.py --config ~/.coderouter-t/providers.yaml
 ```
 
-Config file lookup order: ① `--config` if given → ② `providers.yaml` in the current directory → ③ `~/.coderouter/providers.yaml`. If none exist, it starts with an empty configuration (you can still start things by entering values manually in the UI).
+Config file lookup order: ① `--config` if given → ② `providers.yaml` in the current directory → ③ `~/.coderouter-t/providers.yaml`. If none exist, it starts with an empty configuration (you can still start things by entering values manually in the UI).
 
 > **As of v2.13.0, step ② (implicit discovery of `providers.yaml` in the current directory) is disabled by default.** This closes a code-execution vector: a hostile `providers.yaml` dropped into the working directory could otherwise hijack executable references such as `launcher.backends[*].binary`. It only becomes opt-in enabled when `CODEROUTER_ALLOW_CWD_CONFIG=1` is set (`true`/`yes`/`on` also work). If it's unset and a `providers.yaml` exists in the current directory, it is skipped rather than loaded.
 
@@ -74,7 +74,7 @@ At the top of the desktop edition there is a **CodeRouter bar** not present in t
 - ▶ Start CodeRouter / ■ Stop
 - Claude Code connection string — `ANTHROPIC_BASE_URL=http://localhost:<port> ANTHROPIC_AUTH_TOKEN=dummy claude`. Click or use "Copy" to send it to the clipboard
 
-When CodeRouter starts, if `~/.coderouter/providers.yaml` doesn't exist yet, a minimal config is auto-generated (this auto-generated file does not include a `launcher:` block — more on this below). Closing the window automatically stops the CodeRouter instance and all backend processes it started.
+When CodeRouter starts, if `~/.coderouter-t/providers.yaml` doesn't exist yet, a minimal config is auto-generated (this auto-generated file does not include a `launcher:` block — more on this below). Closing the window automatically stops the CodeRouter instance and all backend processes it started.
 
 ---
 
@@ -83,7 +83,7 @@ When CodeRouter starts, if `~/.coderouter/providers.yaml` doesn't exist yet, a m
 The operational UI you use in a browser while CodeRouter is running.
 
 1. Add a `launcher:` section to `providers.yaml` (see [Configuration Reference](#configuration-reference))
-2. Start CodeRouter — `coderouter serve --port 8088`
+2. Start CodeRouter — `coderouter-t serve --port 8088`
 3. Open `http://localhost:8088/launcher` in a browser
 
 ---
@@ -504,7 +504,7 @@ An equivalent of [llama-swap](https://github.com/mostlygeek/llama-swap)'s core l
 ### Minimal configuration
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 default_profile: auto
 
 auto_router:
@@ -579,12 +579,12 @@ For the full design — concurrency model, security considerations, and review d
 
 ## Configuration reference
 
-The MODELS list, option profiles, and binary paths are all loaded from the `launcher:` block in `~/.coderouter/providers.yaml`. **Shared between the desktop and Web editions**.
+The MODELS list, option profiles, and binary paths are all loaded from the `launcher:` block in `~/.coderouter-t/providers.yaml`. **Shared between the desktop and Web editions**.
 
 ### The full `launcher:` block
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 launcher:
   model_dirs:           # list[str]  required
     - ~/llm/models
@@ -612,12 +612,12 @@ launcher:
     llama.cpp:
       binary: ~/llama.cpp/build/bin/llama-server         # source build example
     vllm:
-      binary: ~/.coderouter/backends/vllm/bin/python     # venv example
+      binary: ~/.coderouter-t/backends/vllm/bin/python     # venv example
     mlx:
-      binary: ~/.coderouter/backends/mlx/bin/python      # venv example
+      binary: ~/.coderouter-t/backends/mlx/bin/python      # venv example
 ```
 
-If `binary` is omitted or `null`, the default name (`llama-server` / `python`) is looked up in PATH. Tilde (`~`) expansion is supported. For vLLM/MLX, it's recommended to keep separate venvs per backend under `~/.coderouter/backends/<backend-name>/` (see the [Installation Guide](./install-backends.en.md) for details). The resolved path is shown below the "Backend" select in the UI.
+If `binary` is omitted or `null`, the default name (`llama-server` / `python`) is looked up in PATH. Tilde (`~`) expansion is supported. For vLLM/MLX, it's recommended to keep separate venvs per backend under `~/.coderouter-t/backends/<backend-name>/` (see the [Installation Guide](./install-backends.en.md) for details). The resolved path is shown below the "Backend" select in the UI.
 
 A key may also be a **variant name** such as `llama.cpp-cuda` (v2.11.0+). This lets you register several builds of the same backend — typically llama.cpp compiled for different GPU runtimes — and pick one per launch. See [Switching specialized builds](#switching-specialized-builds-llamacpp).
 

@@ -177,7 +177,7 @@ tool_calls                NEEDS_TUNING   model emitted a tool_use block but regi
 thinking                  N/A            kind=openai_compat; thinking probe is anthropic-only
 reasoning-leak            OK             no stray `reasoning` field on choice.message
 
-suggested patch for ~/.coderouter/providers.yaml:
+suggested patch for ~/.coderouter-t/providers.yaml:
   providers:
     - name: ollama-qwen-coder-14b
       capabilities:
@@ -210,7 +210,7 @@ suggested patch for ~/.coderouter/providers.yaml:
 
 ## モデルケイパビリティレジストリ
 
-`coderouter/data/model-capabilities.yaml` にパッケージ同梱。ユーザー上書きは `~/.coderouter/model-capabilities.yaml`:
+`coderouter/data/model-capabilities.yaml` にパッケージ同梱。ユーザー上書きは `~/.coderouter-t/model-capabilities.yaml`:
 
 ```yaml
 version: 1
@@ -259,7 +259,7 @@ providers:
 ### 永続化レイヤ (v2.0-K)
 
 ```yaml
-state_dir: "~/.coderouter/state/"    # sqlite3 KV store + JSONL logs
+state_dir: "~/.coderouter-t/state/"    # sqlite3 KV store + JSONL logs
 audit_log: active                     # 22 種イベントを JSONL 記録
 request_log: active                   # per-request metadata journal
 ```
@@ -295,7 +295,7 @@ Per-request: openrouter-free is 100.0% cheaper than anthropic-api
 
 ```bash
 # ターミナル 1: CodeRouter 起動
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 
 # ターミナル 2: Claude Code を向ける
 ANTHROPIC_BASE_URL=http://localhost:8088 \

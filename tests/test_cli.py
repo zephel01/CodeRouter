@@ -174,7 +174,8 @@ def test_serve_env_file_missing_exits_with_friendly_error(
     rc = cli.main(["serve", "--env-file", "/definitely/not/a/real/path.env"])
     assert rc == 1
     captured = capsys.readouterr()
-    assert "/definitely/not/a/real/path.env" in captured.err
+    # Windows normalises to backslashes; accept either
+    assert "definitely" in captured.err and "path.env" in captured.err
     # uvicorn must NOT have been invoked when --env-file errors out.
     assert fake_uvicorn == {}
 
@@ -243,6 +244,10 @@ def test_doctor_check_env_warns_on_world_readable_perms(
     capsys: pytest.CaptureFixture[str], tmp_path
 ) -> None:
     """--check-env on a world-readable .env exits 2 (WARN) with chmod fix."""
+    import os
+
+    if os.name == "nt":
+        pytest.skip("POSIX permission bits are not applicable on Windows")
     p = tmp_path / ".env"
     p.write_text("FOO=bar\n")
     p.chmod(0o644)
@@ -485,7 +490,10 @@ def _seed_home_and_cwd(
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     monkeypatch.setenv("HOME", str(home_dir))
-    home_path = home_dir / ".coderouter" / "providers.yaml"
+    # Windows parity is handled by conftest's _patch_home_for_windows autouse
+    # fixture; no per-test Path.home patch needed (M-3 DRY fix).
+    monkeypatch.setenv("USERPROFILE", str(home_dir))
+    home_path = home_dir / ".coderouter-t" / "providers.yaml"
     if home:
         home_path.parent.mkdir()
         home_path.write_text("providers: []\n", encoding="utf-8")
@@ -528,7 +536,7 @@ def test_cli_resolve_config_path_honours_optin(
 def test_cli_resolve_config_path_falls_back_when_nothing_exists(
     tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """No config anywhere → fall back to ~/.coderouter/providers.yaml."""
+    """No config anywhere → fall back to ~/.coderouter-t/providers.yaml."""
     home_path, _cwd_path = _seed_home_and_cwd(
         tmp_path, monkeypatch, home=False, cwd=False
     )

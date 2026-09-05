@@ -20,6 +20,7 @@ from coderouter.ingress.launcher_routes import router as launcher_router
 from coderouter.ingress.metrics_routes import router as metrics_router
 from coderouter.ingress.openai_routes import router as openai_router
 from coderouter.logging import configure_logging, get_logger
+from coderouter.messages import tr
 from coderouter.metrics import install_collector
 from coderouter.plugins import discover_and_load
 from coderouter.routing import FallbackEngine
@@ -128,9 +129,10 @@ class BodySizeLimitMiddleware:
         return JSONResponse(
             status_code=413,
             content={
-                "detail": (
-                    f"Request body too large: {observed} bytes exceeds "
-                    f"the {self._max_bytes}-byte limit."
+                "detail": tr(
+                    "E1202_BODY_TOO_LARGE",
+                    observed=observed,
+                    limit=self._max_bytes,
                 )
             },
         )
@@ -195,7 +197,7 @@ class HostValidationMiddleware(BaseHTTPMiddleware):
         if host not in self._allowed:
             return JSONResponse(
                 status_code=403,
-                content={"detail": f"Host {host_header!r} is not allowed."},
+                content={"detail": tr("E1201_HOST_NOT_ALLOWED", host=host_header)},
             )
         return await call_next(request)
 
@@ -255,6 +257,48 @@ def create_app(config_path: str | None = None) -> FastAPI:
         # chronological order. Non-fatal — the chain still works, just
         # potentially sub-optimally for the agentic harness.
         check_claude_code_chain_suitability(config, logger=logger)
+
+        # Translation layer: initialize TranslatorManager when enabled (CPU-only, resident)
+        # Stored on app.state so ingress and fallback can reach it via request.app.state
+        translator_manager = None
+        tcfg = getattr(config, "translation", None)
+        if tcfg is not None and getattr(tcfg, "enabled", False):
+            try:
+                import os as _os
+                import time as _time
+
+                _os.environ["ARGOS_DEVICE_TYPE"] = "cpu"
+                from coderouter.jp_translation.manager import TranslatorManager
+
+                translator_manager = TranslatorManager(model_dir=getattr(tcfg, "model_dir", None))
+                _tr_start = _time.monotonic()
+                # load() is sync blocking (Argos/CTranslate2 init). In lifespan async context
+                # this blocks startup; manager.load() now logs elapsed_ms and slow-startup warning.
+                translator_manager.load()
+                _tr_elapsed_ms = (_time.monotonic() - _tr_start) * 1000
+                logger.info(
+                    "translation-manager-started",
+                    extra={
+                        "model_dir": getattr(tcfg, "model_dir", None) or "argos-cache",
+                        "elapsed_ms": round(_tr_elapsed_ms, 1),
+                    },
+                )
+                if _tr_elapsed_ms > 5000:
+                    logger.warning(
+                        "translation-manager-slow-startup-app",
+                        extra={"elapsed_ms": round(_tr_elapsed_ms, 1)},
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "translation-manager-failed",
+                    extra={"error": str(exc), "hint": "translation layer disabled, falling back to passthrough"},
+                )
+                translator_manager = None
+        # Expose on app.state and engine
+        app.state.translator_manager = translator_manager
+        # Attach to engine so routing/fallback can translate responses without request.app
+        with contextlib.suppress(Exception):
+            engine.attach_translator_manager(translator_manager)
 
         # v2.0-K: attach persistent state store + audit/request log if configured.
         state_store = None
@@ -414,6 +458,22 @@ def create_app(config_path: str | None = None) -> FastAPI:
                 _logging.getLogger().removeHandler(request_log_handler)
                 request_log_handler.close()
 
+        # Translation layer: release Argos resources (B-1 fix)
+        # Use app.state (robust against closure variable rename) + fallback to locals
+        with contextlib.suppress(Exception):
+            tm = getattr(app.state, "translator_manager", None)
+            if tm is None:
+                tm = locals().get("translator_manager")
+            if tm is not None and hasattr(tm, "close"):
+                tm.close()
+                logger.info("translation-manager-closed")
+            # ensure state is cleared for test isolation (also covered by conftest autouse)
+            with contextlib.suppress(Exception):
+                app.state.translator_manager = None
+            with contextlib.suppress(Exception):
+                if hasattr(engine, "_translator_manager"):
+                    engine._translator_manager = None  # type: ignore[attr-defined]
+
         logger.info("coderouter-shutdown")
 
     app = FastAPI(
@@ -426,6 +486,10 @@ def create_app(config_path: str | None = None) -> FastAPI:
     # Inject engine + config so route handlers can reach them via app.state
     app.state.engine = engine
     app.state.config = config
+    # Translation manager placeholder (lifespan will populate when enabled)
+    # Ensures request.app.state.translator_manager is always defined
+    if not hasattr(app.state, "translator_manager"):
+        app.state.translator_manager = None
 
     # Phase 1 on-demand model swap (docs/designs/launcher-model-swap.md).
     # None (default) leaves the engine's swap dispatch hooks as cheap

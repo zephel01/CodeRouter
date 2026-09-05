@@ -32,7 +32,7 @@ Launcher が起動する推論バックエンドを 1 つ入れます。**迷っ
 
 複数のインストール方法・OS 別の詳細・動作確認・つまずき集は **[バックエンド インストール手順書](./install-backends.md)** にまとめてあります。
 
-> vLLM / MLX は専用の Python 仮想環境（venv）が必要です。venv はバックエンドごとに `~/.coderouter/backends/<バックエンド名>/`（例: `~/.coderouter/backends/vllm/`）に分けて作る方針です。詳細は同手順書を参照。
+> vLLM / MLX は専用の Python 仮想環境（venv）が必要です。venv はバックエンドごとに `~/.coderouter-t/backends/<バックエンド名>/`（例: `~/.coderouter-t/backends/vllm/`）に分けて作る方針です。詳細は同手順書を参照。
 
 ---
 
@@ -48,10 +48,10 @@ Launcher が起動する推論バックエンドを 1 つ入れます。**迷っ
 
 ## 3. providers.yaml に launcher ブロックを書く
 
-Launcher はモデル一覧・オプションプロファイル・バイナリパスを `~/.coderouter/providers.yaml` の `launcher:` ブロックから読み込みます。
+Launcher はモデル一覧・オプションプロファイル・バイナリパスを `~/.coderouter-t/providers.yaml` の `launcher:` ブロックから読み込みます。
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 launcher:
   model_dirs:
     - ~/llm/models                      # .gguf 等を再帰検索
@@ -61,7 +61,7 @@ launcher:
       # Homebrew / winget なら backends ごと省略可（PATH から自動解決）。
       binary: ~/llama.cpp/build/bin/llama-server
     vllm:
-      binary: ~/.coderouter/backends/vllm/bin/python   # vLLM を入れた venv
+      binary: ~/.coderouter-t/backends/vllm/bin/python   # vLLM を入れた venv
   option_profiles:
     llama.cpp:
       - name: "GPU フル活用"
@@ -102,7 +102,7 @@ uv run python launcher_gui.py
 Web版は CodeRouter の中で動くため、先に CodeRouter を起動します:
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 ブラウザで `http://localhost:8088/launcher` を開き、モデルを選んで「▶ 起動」します。

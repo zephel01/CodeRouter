@@ -58,6 +58,8 @@ import re
 from collections.abc import Iterable
 from pathlib import Path
 
+from coderouter.messages import tr
+
 __all__ = [
     "EnvFileError",
     "load_env_file",
@@ -86,13 +88,22 @@ _DQ_ESCAPES = {
 }
 
 
-class EnvFileError(ValueError):
+class EnvFileError(ValueError, Exception):
     """Raised when a `.env`-style file cannot be parsed.
 
     The exception message contains the file path and 1-based line
     number so the user can jump straight to the offending row. Caught
     by the CLI to emit a friendly error and exit 1.
+
+    v2.15.0: also inherits from :class:`coderouter.errors.CodeRouterError`
+    semantics via ``message_id`` attribute when raised through the
+    bilingual path (see :mod:`coderouter.messages`).
     """
+
+    def __init__(self, message: str = "", *, message_id: str | None = None) -> None:
+        super().__init__(message)
+        self.message_id = message_id
+        self.hint = None
 
 
 def parse_env_file(path: str | os.PathLike[str]) -> dict[str, str]:
@@ -130,14 +141,20 @@ def parse_env_file(path: str | os.PathLike[str]) -> dict[str, str]:
 
         # Split on the FIRST `=`. Subsequent `=` are part of the value.
         if "=" not in line:
-            raise EnvFileError(f"{p}:{lineno}: missing `=` separator: {raw_line!r}")
+            raise EnvFileError(tr("E1301_ENV_MISSING_EQ", path=p, lineno=lineno, line=raw_line), message_id="E1301_ENV_MISSING_EQ")
         key_raw, value_raw = line.split("=", 1)
         key = key_raw.strip()
 
         if not _KEY_RE.match(key):
             raise EnvFileError(
-                f"{p}:{lineno}: invalid key {key!r} "
-                f"(must match {_KEY_RE.pattern})"
+                tr(
+                    "E1302_ENV_INVALID_KEY",
+                    path=p,
+                    lineno=lineno,
+                    key=key,
+                    reason=f"must match {_KEY_RE.pattern}",
+                ),
+                message_id="E1302_ENV_INVALID_KEY",
             )
 
         try:
@@ -194,7 +211,7 @@ def load_env_files(
 ) -> list[tuple[str, list[str]]]:
     """Apply :func:`load_env_file` to multiple paths in order.
 
-    Useful for layering: ``[~/.coderouter/.env, ./.env]`` lets a user
+    Useful for layering: ``[~/.coderouter-t/.env, ./.env]`` lets a user
     keep cross-project defaults globally and override per-project at
     the cwd. Files are processed left-to-right, so later files override
     earlier ones (when ``override=True``) or fill in gaps (default).
@@ -271,12 +288,13 @@ def _parse_double_quoted(s: str) -> str:
             tail = s[i + 1 :].lstrip()
             if tail and not tail.startswith("#"):
                 raise EnvFileError(
-                    f"unexpected content after closing quote: {tail!r}"
+                    tr("E1305_ENV_TRAILING_CONTENT", tail=tail),
+                    message_id="E1305_ENV_TRAILING_CONTENT",
                 )
             return "".join(out)
         out.append(ch)
         i += 1
-    raise EnvFileError("unterminated double-quoted value")
+    raise EnvFileError(tr("E1303_ENV_UNTERMINATED_DQ"), message_id="E1303_ENV_UNTERMINATED_DQ")
 
 
 def _parse_single_quoted(s: str) -> str:
@@ -288,8 +306,8 @@ def _parse_single_quoted(s: str) -> str:
     assert s[0] == "'"
     end = s.find("'", 1)
     if end == -1:
-        raise EnvFileError("unterminated single-quoted value")
+        raise EnvFileError(tr("E1304_ENV_UNTERMINATED_SQ"), message_id="E1304_ENV_UNTERMINATED_SQ")
     tail = s[end + 1 :].lstrip()
     if tail and not tail.startswith("#"):
-        raise EnvFileError(f"unexpected content after closing quote: {tail!r}")
+        raise EnvFileError(tr("E1305_ENV_TRAILING_CONTENT", tail=tail), message_id="E1305_ENV_TRAILING_CONTENT")
     return s[1:end]

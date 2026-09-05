@@ -4,7 +4,7 @@
 
 `kind: "agent_cli"` は、Claude Code CLI のような外部コーディングエージェントを CodeRouter の 1 プロバイダとして登録するアダプタである。v2.7.7 で新規追加され(Phase 1a: claude)、v2.7.8 で grok が追加され(Phase 1d)、v2.7.9 で codex が追加され(Phase 1b)、v2.7.10 で antigravity が追加された(Phase 1c)。これにより **Phase 1(4バックエンド)は完了**した。詳細設計は [`docs/designs/external-agents-adapter.md`](../designs/external-agents-adapter.md) を参照。
 
-> **重要: v2.9.0 で破壊的変更(agent_cli plugin 切り出し Phase 2c)** — in-core の `agent_cli` アダプタは v2.9.0 で削除された。`kind: "agent_cli"` を使うには外部プラグイン **`coderouter-plugin-agents`** のインストールと、`providers.yaml` への `plugins.enabled: [agents]` の指定が **必須**になった。v2.8.x までは in-core 実装が優先して動く猶予期間(Phase 2b)があったが、v2.9.0 でその猶予は終了している。手順は下記の[クイックスタート](#クイックスタート)を参照。プラグイン未導入のまま `kind: agent_cli` を書くと `coderouter serve` は起動時にエラーで停止し、移行手順を示すメッセージが表示される。`coderouter doctor` も同じ設定ミスを検出して警告する。`agent_cli:` サブ設定(`AgentCliConfig`)のスキーマ自体および各プロバイダのエントリは無変更であり、書き換える必要はない。
+> **重要: v2.9.0 で破壊的変更(agent_cli plugin 切り出し Phase 2c)** — in-core の `agent_cli` アダプタは v2.9.0 で削除された。`kind: "agent_cli"` を使うには外部プラグイン **`coderouter-plugin-agents`** のインストールと、`providers.yaml` への `plugins.enabled: [agents]` の指定が **必須**になった。v2.8.x までは in-core 実装が優先して動く猶予期間(Phase 2b)があったが、v2.9.0 でその猶予は終了している。手順は下記の[クイックスタート](#クイックスタート)を参照。プラグイン未導入のまま `kind: agent_cli` を書くと `coderouter-t serve` は起動時にエラーで停止し、移行手順を示すメッセージが表示される。`coderouter doctor` も同じ設定ミスを検出して警告する。`agent_cli:` サブ設定(`AgentCliConfig`)のスキーマ自体および各プロバイダのエントリは無変更であり、書き換える必要はない。
 
 ---
 
@@ -46,7 +46,7 @@ Google が後継として案内しているのは **Antigravity CLI**(コマン�
 
 ## クイックスタート
 
-1. **`coderouter-plugin-agents` をインストールし、有効化する**(v2.9.0 以降必須。未実施だと `kind: agent_cli` の provider がある状態で `coderouter serve` が起動時エラーになる):
+1. **`coderouter-plugin-agents` をインストールし、有効化する**(v2.9.0 以降必須。未実施だと `kind: agent_cli` の provider がある状態で `coderouter-t serve` が起動時エラーになる):
 
    ```bash
    # uv の場合
@@ -56,7 +56,7 @@ Google が後継として案内しているのは **Antigravity CLI**(コマン�
    pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
 
    # CodeRouter 本体を uv tool install で入れている場合は同じツール環境に同居させる
-   uv tool install coderouter-cli \
+   uv tool install coderouter-t \
      --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"
    ```
 
@@ -72,7 +72,7 @@ Google が後継として案内しているのは **Antigravity CLI**(コマン�
 4. **サンプル設定で起動する**(`examples/providers-agent-cli.yaml` には既に `plugins.enabled: [agents]` が入っている):
 
    ```bash
-   uv run coderouter serve --config examples/providers-agent-cli.yaml --port 8088
+   uv run coderouter-t serve --config examples/providers-agent-cli.yaml --port 8088
    ```
 
 5. **動作確認**:
@@ -141,7 +141,7 @@ Claude Code CLI は Keychain からトークンを解決する際に `USER` 環�
 |---|---|---|---|
 | `agent` | `"claude" \| "codex" \| "antigravity" \| "gemini" \| "grok"` | (必須) | 呼び出す CLI。**v2.7.10 で `claude`・`codex`・`antigravity`・`grok` の4つすべてが実装済み(Phase 1 完了)。`gemini` はスキーマに残るがアダプタ構築時に拒否される** |
 | `command` | `str \| null` | `null`(未設定時は `agent` と同名) | CLI 実行ファイル名 or 絶対パス。`PATH` から解決。**`agent: antigravity` のみ既定値は `agy`**(バイナリ名が製品名と異なるため) |
-| `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
+| `workdir` | `str \| null` | `null`(未設定時は `~/.coderouter-t/agents/<プロバイダ名>`) | ワンショット exec の作業ディレクトリ。`~` / 環境変数展開あり。`..` を含むパスは拒否される |
 | `exec_timeout_s` | `float` | `600.0`(範囲 `1.0`–`1800.0`) | exec 全体の強制タイムアウト(秒)。`ProviderConfig.timeout_s` とは**別系統**(後者は agent_cli では使われない)。antigravity ではこの値から `--print-timeout` も生成される(下記参照) |
 | `allow_file_writes` | `bool` | `false` | ファイル書き込みを許可するか。`false` のときは `sandbox_mode` の値に関わらず read-only にクランプされる |
 | `sandbox_mode` | `"read_only" \| "edit" \| "full_auto"` | `"read_only"` | 各 CLI のサンドボックス/承認フラグへマッピングされる(claude は[下表](#sandbox_mode--permission-mode-マッピングclaude)、codex は [codex セクション](#sandbox_mode--codex-フラグのマッピング)、antigravity は [antigravity セクション](#sandbox_mode--antigravity-フラグのマッピング)、grok は [grok セクション](#sandbox_mode--grok-フラグのマッピング)参照) |
@@ -184,7 +184,7 @@ providers:
     agent_cli:
       agent: codex
       command: codex
-      workdir: ~/.coderouter/agents/codex
+      workdir: ~/.coderouter-t/agents/codex
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -282,7 +282,7 @@ providers:
     agent_cli:
       agent: antigravity
       # command は省略可(既定 "agy" — バイナリ名が製品名と異なる点に注意)
-      workdir: ~/.coderouter/agents/antigravity
+      workdir: ~/.coderouter-t/agents/antigravity
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -385,7 +385,7 @@ providers:
     agent_cli:
       agent: grok
       command: grok
-      workdir: ~/.coderouter/agents/grok
+      workdir: ~/.coderouter-t/agents/grok
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -471,7 +471,7 @@ grok CLI は early beta である(v0.2.93 [stable] チャネル、2026-07-10 時
 | `agent: gemini` を指定すると `AdapterError` になる/`IneligibleTierError` が出る | Google が2026年6月に個人アカウント向け Gemini CLI 提供を終了したため(実機で `IneligibleTierError: This client is no longer supported for Gemini Code Assist for individuals...` を確認) | `agent: antigravity` に切り替える。設定例は [antigravity(Google Antigravity CLI)](#antigravitygoogle-antigravity-cli) セクションを参照 |
 | `agy` が応答を返さずハングする | agy に stdin をパイプしている(例: `printf '...' \| agy -p "..."`) | stdin をパイプしない。何も書かず `</dev/null` にリダイレクトする。CodeRouter 経由の呼び出しではアダプタが既にこの対策(stdin 即クローズ)を取っている |
 | CLI 起動に失敗する(`failed to launch ...`) | `command`(既定は `agent` と同名。ただし antigravity のみ既定 `agy`)が `PATH` 上に無い | `claude --version` / `codex --version` / `agy --version` / `grok --version` が通ることを確認する。フルパスを `command` に指定してもよい |
-| `kind: agent_cli` の provider があるのに `coderouter serve` が起動時にエラーで停止する | v2.9.0(Phase 2c)で in-core `agent_cli` アダプタが削除され、`coderouter-plugin-agents` の導入 + `plugins.enabled: [agents]` が必須になった | `uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"`(または pip、あるいは `uv tool install coderouter-cli --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"`)を実行し、`providers.yaml` に `plugins.enabled: [agents]` を追記する。起動時のエラーメッセージ自体にも同じ移行手順(インストール + `plugins.enabled`)が案内される |
+| `kind: agent_cli` の provider があるのに `coderouter-t serve` が起動時にエラーで停止する | v2.9.0(Phase 2c)で in-core `agent_cli` アダプタが削除され、`coderouter-plugin-agents` の導入 + `plugins.enabled: [agents]` が必須になった | `uv pip install "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"`(または pip、あるいは `uv tool install coderouter-t --with "coderouter-plugin-agents @ git+https://github.com/zephel01/coderouter-plugin-agents"`)を実行し、`providers.yaml` に `plugins.enabled: [agents]` を追記する。起動時のエラーメッセージ自体にも同じ移行手順(インストール + `plugins.enabled`)が案内される |
 | `coderouter doctor` が `agent_cli` 関連の設定警告を出す | `kind: agent_cli` の provider があるのに `plugins.enabled` に `agents` が含まれていない(または plugin 未インストール) | 上記と同じインストールコマンド + `plugins.enabled: [agents]` の追記で解消する。`doctor` の出力にも修正用の yaml スニペットが表示される |
 
 ---

@@ -47,7 +47,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 ```bash
 # サーバー側 — Tailscale IP でだけ待ち受け、その名前を許可
 CODEROUTER_ALLOWED_HOSTS=my-server.tailnet-name.ts.net,100.x.y.z \
-  coderouter serve --host 100.x.y.z --port 8088
+  coderouter-t serve --host 100.x.y.z --port 8088
 
 # クライアント側(tailnet 参加済みなら世界中どこからでも)
 open http://my-server.tailnet-name.ts.net:8088/dashboard
@@ -74,7 +74,7 @@ coderouter.example.internal {
 
 ```bash
 # CodeRouter は loopback のまま。プロキシが名乗る Host を許可
-CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter serve --port 8088
+CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter-t serve --port 8088
 ```
 
 - CodeRouter 自体は外に出さない(プロキシだけが 127.0.0.1:8088 に届く)
@@ -86,7 +86,7 @@ CODEROUTER_ALLOWED_HOSTS=coderouter.example.internal coderouter serve --port 808
 
 ```bash
 # サーバー機(例: 192.168.1.10)で — ALLOWED_HOSTS はサーバー自身のIP(URLに打つ方)
-CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter serve --host 0.0.0.0 --port 8088
+CODEROUTER_ALLOWED_HOSTS=192.168.1.10 coderouter-t serve --host 0.0.0.0 --port 8088
 ```
 
 やること 2 つ:

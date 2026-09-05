@@ -47,8 +47,62 @@ def _clear_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "CODEROUTER_CONFIG",
         "CODEROUTER_MODE",
         "OPENROUTER_API_KEY",
+        "CODEROUTER_T_LANG",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Ensure tests run with deterministic English messages by default
+    monkeypatch.setenv("CODEROUTER_T_LANG", "en")
+
+
+@pytest.fixture(autouse=True)
+def _patch_home_for_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Windows: Path.home() reads USERPROFILE, not HOME.
+
+    Tests isolate HOME via monkeypatch.setenv("HOME", tmp_path).
+    This fixture makes Path.home() honour HOME for cross-platform parity,
+    so the same test logic works on Windows and POSIX without per-test
+    copy-paste patches (M-3 DRY fix).
+    """
+    import os as _os
+
+    _orig_home = Path.home
+
+    def _patched_home() -> Path:
+        h = _os.environ.get("HOME")
+        if h:
+            return Path(h)
+        u = _os.environ.get("USERPROFILE")
+        if u:
+            return Path(u)
+        return _orig_home()
+
+    monkeypatch.setattr(Path, "home", _patched_home)
+
+
+@pytest.fixture(autouse=True)
+def _reset_translator_manager() -> Iterator[None]:
+    """B-M1: clear translator manager between tests to avoid cross-test leakage.
+
+    The ingress lifespan writes to both app.state.translator_manager and
+    engine._translator_manager; when the engine is reused across tests (via
+    _lazy_app), a stale manager would survive. Reset both sides.
+    """
+    yield
+    try:
+        import contextlib
+
+        from coderouter.ingress import app as app_module
+
+        lazy = getattr(app_module, "_lazy_app", None)
+        if lazy is not None:
+            with contextlib.suppress(Exception):
+                if hasattr(lazy.state, "translator_manager"):
+                    lazy.state.translator_manager = None  # type: ignore[attr-defined]
+                eng = getattr(lazy.state, "engine", None)
+                if eng is not None and hasattr(eng, "_translator_manager"):
+                    eng._translator_manager = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
 @pytest.fixture

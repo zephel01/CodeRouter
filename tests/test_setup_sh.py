@@ -17,7 +17,7 @@ Scope:
 
 The script is invoked via ``subprocess.run`` rather than imported
 because it is bash. The tests stage everything in tmp dirs so the
-real ``~/.coderouter`` is never touched.
+real ``~/.coderouter-t`` is never touched.
 """
 
 from __future__ import annotations
@@ -339,7 +339,7 @@ def test_dry_run_does_not_write_anything(tmp_path: Path) -> None:
 
 
 def test_creates_parent_directory_for_config_path(tmp_path: Path) -> None:
-    """The wizard targets ~/.coderouter/providers.yaml by default, which
+    """The wizard targets ~/.coderouter-t/providers.yaml by default, which
     likely doesn't exist on a fresh machine. mkdir -p must create the
     parent silently."""
     cfg = tmp_path / "deep" / "nested" / "providers.yaml"

@@ -5,7 +5,7 @@ Search order (first hit wins):
     2. $CODEROUTER_CONFIG env var
     3. ./providers.yaml (current working dir) — opt-in since v2.13.0,
        gated behind ``CODEROUTER_ALLOW_CWD_CONFIG`` (truthy: 1/true/yes/on)
-    4. ~/.coderouter/providers.yaml
+    4. ~/.coderouter-t/providers.yaml
 
 Secrets are resolved by reading the env var named by `api_key_env`.
 
@@ -34,6 +34,7 @@ import yaml
 
 from coderouter.config.schemas import CodeRouterConfig
 from coderouter.logging import get_logger
+from coderouter.messages import tr
 from coderouter.secret_redaction import register_config_secrets, register_secret
 
 logger = get_logger(__name__)
@@ -70,7 +71,7 @@ def _candidate_paths(explicit: str | os.PathLike[str] | None) -> list[Path]:
     # binaries simply because CodeRouter was started from that directory.
     if cwd_config_allowed():
         paths.append(Path.cwd() / "providers.yaml")
-    paths.append(Path.home() / ".coderouter" / "providers.yaml")
+    paths.append(Path.home() / ".coderouter-t" / "providers.yaml")
     return paths
 
 
@@ -132,14 +133,7 @@ def _warn_if_cwd_config(
         "cwd-config-loaded",
         extra={
             "path": str(chosen),
-            "hint": (
-                f"loaded providers.yaml from the current working "
-                f"directory ({chosen}) because CODEROUTER_ALLOW_CWD_CONFIG "
-                "opt-in is enabled. This file's restart_command / "
-                "launcher.backends[*].binary / "
-                "launcher.bench.command_template decide which executables "
-                "run — only enable the opt-in in directories you trust."
-            ),
+            "hint": tr("W1002_CWD_LOADED", path=chosen),
         },
     )
 
@@ -170,15 +164,7 @@ def _warn_if_cwd_config_skipped(
             "cwd-config-skipped",
             extra={
                 "path": str(cwd_path),
-                "hint": (
-                    f"found providers.yaml in the current working "
-                    f"directory ({cwd_path}) but did NOT load it: implicit "
-                    "CWD discovery is opt-in since v2.13.0 (a hostile "
-                    "providers.yaml can steer restart_command / launcher "
-                    "binaries). To use it, set CODEROUTER_ALLOW_CWD_CONFIG=1 "
-                    "(only in directories you trust) or pass --config "
-                    f"{cwd_path} to name it explicitly."
-                ),
+                "hint": tr("W1003_CWD_SKIPPED", path=cwd_path),
             },
         )
     return cwd_path
@@ -191,19 +177,14 @@ def load_config(path: str | os.PathLike[str] | None = None) -> CodeRouterConfig:
     chosen: Path | None = next((p for p in candidates if p.is_file()), None)
     if chosen is None:
         searched = "\n  ".join(str(p) for p in candidates)
-        message = (
-            f"providers.yaml not found. Searched:\n  {searched}\n"
-            f"Hint: copy examples/providers.yaml to ~/.coderouter/providers.yaml"
-        )
+        from coderouter.errors import ConfigNotFoundError
+
+        message = tr("E1001", searched=searched)
+        hint: str | None = None
         if skipped_cwd is not None:
-            message += (
-                f"\nNote: {skipped_cwd} exists but was NOT read — implicit "
-                "CWD discovery is opt-in since v2.13.0. Three ways to use "
-                f"it: pass --config {skipped_cwd}, set "
-                f"CODEROUTER_CONFIG={skipped_cwd}, or set "
-                "CODEROUTER_ALLOW_CWD_CONFIG=1 (only in directories you trust)."
-            )
-        raise FileNotFoundError(message)
+            hint = tr("E1001_CWD_NOTE", path=skipped_cwd)
+            message += "\n" + hint
+        raise ConfigNotFoundError(message, message_id="E1001", hint=hint)
     _warn_if_cwd_config(chosen, explicit=path)
 
     with chosen.open("r", encoding="utf-8") as f:

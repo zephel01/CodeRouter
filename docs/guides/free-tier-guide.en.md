@@ -102,30 +102,30 @@ export ALLOW_PAID=false            # default; flip to true only when you want pa
 
 Without `export`, upstream returns `Header of type 'authorization' was missing` 401 and the chain falls through silently. **v1.6.3 added `coderouter doctor --check-env .env` so you can audit this in one command** — see [`docs/troubleshooting.en.md` §1-2 / §5](./troubleshooting.en.md#1-2-env-requires-export).
 
-> **Using a secret manager (e.g. 1Password)?** You can keep `.env` off disk entirely with `op run --env-file=.env.tpl -- coderouter serve ...`. Recipes in [`docs/troubleshooting.en.md` §5-3](./troubleshooting.en.md#5-3-1password-cli-integration-recommended).
+> **Using a secret manager (e.g. 1Password)?** You can keep `.env` off disk entirely with `op run --env-file=.env.tpl -- coderouter-t serve ...`. Recipes in [`docs/troubleshooting.en.md` §5-3](./troubleshooting.en.md#5-3-1password-cli-integration-recommended).
 
 ### 3.3 Copy the sample config and start
 
-`coderouter` itself **ships on PyPI as `coderouter-cli` from v1.7.0**, so install + run is a single line:
+`coderouter` itself **ships on PyPI as `coderouter-t` from v1.7.0**, so install + run is a single line:
 
 ```bash
 # Download the sample providers.yaml
-mkdir -p ~/.coderouter
-curl -fsSL -o ~/.coderouter/providers.yaml \
+mkdir -p ~/.coderouter-t
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.nvidia-nim.yaml
 
 # uvx fetches and runs in one shot
-# Note: PyPI distribution name (coderouter-cli) differs from the console
+# Note: PyPI distribution name (coderouter-t) differs from the console
 # script name (coderouter), so uv 0.11+ requires the --from form. It also
 # works on older uv, so this is the canonical incantation.
-uvx --from coderouter-cli coderouter serve --mode claude-code-nim --port 8088
+uvx --from coderouter-t coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 For a permanent install:
 
 ```bash
-uv tool install coderouter-cli
-coderouter serve --mode claude-code-nim --port 8088
+uv tool install coderouter-t
+coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 > Subcommand is `serve` (the older `start` was a typo); the profile flag is `--mode` (not `--profile`); pass `--port` so it matches your `ANTHROPIC_BASE_URL`. These were tidied up in the v1.6.2 hygiene pass.
@@ -141,7 +141,7 @@ Or via 1Password:
 
 ```bash
 op run --env-file=.env.tpl -- \
-  coderouter serve --mode claude-code-nim --port 8088
+  coderouter-t serve --mode claude-code-nim --port 8088
 ```
 
 ---

@@ -4,7 +4,7 @@
 #
 # What this script does
 # ---------------------
-# Walks a fresh user from "I just installed coderouter-cli" to a working
+# Walks a fresh user from "I just installed coderouter-t" to a working
 # providers.yaml in ~5 lines of output. Concretely:
 #
 #   1. Detects the OS (macOS / Linux) and total RAM.
@@ -14,7 +14,7 @@
 #   3. Checks whether `ollama` is installed; if not, prints the install
 #      hint from ollama.com and bails out so the user can install + retry.
 #   4. Runs `ollama pull <model>` (skippable with --no-pull).
-#   5. Writes ~/.coderouter/providers.yaml from a minimal embedded
+#   5. Writes ~/.coderouter-t/providers.yaml from a minimal embedded
 #      template — single local provider, single profile — that
 #      `coderouter serve` can boot from immediately.
 #   6. Prints the next steps (`coderouter doctor --check-model local`,
@@ -23,9 +23,9 @@
 # What this script deliberately does NOT do
 # -----------------------------------------
 # - It does NOT install anything for the user beyond the Ollama model.
-#   Python / uv / coderouter-cli is the user's job (the README's
-#   `uvx coderouter-cli serve` already covers that path).
-# - It does NOT touch any existing ~/.coderouter/providers.yaml. If a
+#   Python / uv / coderouter-t is the user's job (the README's
+#   `uvx coderouter-t serve` already covers that path).
+# - It does NOT touch any existing ~/.coderouter-t/providers.yaml. If a
 #   config is already there, the wizard writes ./providers.yaml.new
 #   instead and tells the user to diff/merge — destroying a hand-edited
 #   config silently would be a much worse bug than a one-line warning.
@@ -40,7 +40,7 @@
 # Pure bash + standard POSIX tools (sysctl on macOS, awk on Linux,
 # mkdir, cat, printf). Does NOT shell out to Python — every heredoc
 # templated above is hand-written so this script can run on a brand-new
-# machine where coderouter-cli has been `uvx`-installed but the
+# machine where coderouter-t has been `uvx`-installed but the
 # Python venv is opaque to a non-Python user. The follow-up
 # `coderouter doctor --check-model local` is the natural next step
 # but is left for the user to run so the wizard's exit code reflects
@@ -53,7 +53,7 @@ set -euo pipefail
 # Configurable defaults — flags can override at the command line
 # ----------------------------------------------------------------------------
 
-CONFIG_PATH_DEFAULT="${HOME}/.coderouter/providers.yaml"
+CONFIG_PATH_DEFAULT="${HOME}/.coderouter-t/providers.yaml"
 CONFIG_PATH=""           # set by --config-path or to default after parse
 RAM_GB_OVERRIDE=""       # set by --ram-gb (testing / VMs with weird sysctl)
 INTERACTIVE="auto"       # "auto" detects tty; --non-interactive forces "no"
@@ -279,7 +279,7 @@ detect_ram_gb() {
 #
 # 「もっと良いモデルにしたい」運用は main の最後で hint を表示:
 #   1. `ollama pull <larger-model>` でモデル取得
-#   2. `~/.coderouter/providers.yaml` を手動編集 OR
+#   2. `~/.coderouter-t/providers.yaml` を手動編集 OR
 #      `./setup.sh --ram-gb <larger> --force` で上書き再生成
 #   3. Qwen3.6 系を狙うなら llama.cpp 直叩き経路 (docs/llamacpp-direct.md)
 #
@@ -431,7 +431,7 @@ emit_providers_yaml() {
 #   coderouter doctor --check-model ${provider_name}
 #
 # Need YAML auto-patching? install the [doctor] extra and use --apply:
-#   pip install 'coderouter-cli[doctor]'
+#   pip install 'coderouter-t[doctor]'
 #   coderouter doctor --check-model ${provider_name} --apply
 # ============================================================================
 

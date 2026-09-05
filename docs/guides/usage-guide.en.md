@@ -22,13 +22,13 @@ Japanese version: [`docs/usage-guide.md`](./usage-guide.md)
 
 CodeRouter itself is pure Python 3.12+ and five pip dependencies — the server runs anywhere CPython runs. The constraints come from two adjacent pieces: **Ollama** (the local model backend most users pair this with) and **Claude Code** (the CLI client). OS support is effectively `min(coderouter, ollama, claude-code)`.
 
-| OS | CodeRouter server | Ollama | Claude Code | Verified path |
+| OS | coderouter-t server | Ollama | Claude Code | Verified path |
 |---|---|---|---|---|
 | macOS — Apple Silicon (M1–M5) | ✅ | ✅ native (Metal) | ✅ via `npm install -g @anthropic-ai/claude-code` | **Primary dev target.** All v1.0 real-machine verify runs use this path. |
 | macOS — Intel | ✅ | ✅ but slow (CPU only; no Metal GPU) | ✅ | Works for CodeRouter wire layer; local inference impractical — use cloud fallback only. |
 | Linux — x86_64 (Ubuntu / Debian / Fedora) | ✅ | ✅ native (CUDA if NVIDIA GPU, else CPU) | ✅ | Fully supported. `uv` + `pip install` path identical to macOS. |
 | Linux — ARM64 (Raspberry Pi 5 / AWS Graviton) | ✅ | ⚠️ CPU-only on Pi; cloud instances fine | ✅ | CodeRouter runs fine; usable primarily as a "route-to-cloud" proxy on Pi-class hardware. |
-| Windows — native (PowerShell / cmd) | ⚠️ partial | ✅ native (CUDA) | ⚠️ `claude` CLI has known Windows-native quirks | `coderouter serve` works. `scripts/verify_*.sh` are bash-only — run them under WSL or Git Bash. |
+| Windows — native (PowerShell / cmd) | ⚠️ partial | ✅ native (CUDA) | ⚠️ `claude` CLI has known Windows-native quirks | `coderouter-t serve` works. `scripts/verify_*.sh` are bash-only — run them under WSL or Git Bash. |
 | Windows — WSL2 (Ubuntu) | ✅ | ✅ (install inside WSL or bridge to Windows-host Ollama at `host.docker.internal:11434`) | ✅ | **Recommended Windows path.** Same UX as Linux from inside WSL2. |
 
 Quick decision rules:
@@ -222,7 +222,7 @@ Terminal 1 — start CodeRouter:
 
 ```bash
 cd /path/to/CodeRouter
-uv run coderouter serve --port 8088 --mode claude-code
+uv run coderouter-t serve --port 8088 --mode claude-code
 ```
 
 Terminal 2 — start Claude Code pointed at CodeRouter:
@@ -248,7 +248,7 @@ npm install -g @anthropic-ai/claude-code
 ```powershell
 # Terminal 1
 cd C:\path\to\CodeRouter
-uv run coderouter serve --port 8088 --mode claude-code
+uv run coderouter-t serve --port 8088 --mode claude-code
 
 # Terminal 2
 $env:ANTHROPIC_BASE_URL = "http://localhost:8088"
@@ -294,7 +294,7 @@ Set `OPENROUTER_API_KEY` before launch — OpenRouter free still requires auth:
 
 ```bash
 export OPENROUTER_API_KEY=sk-or-v1-...    # get one at https://openrouter.ai/keys
-uv run coderouter serve --port 8088
+uv run coderouter-t serve --port 8088
 ```
 
 Pairing strategy that works in practice:
@@ -335,7 +335,7 @@ uv run coderouter doctor --check-model ollama-qwen-coder-7b
 
 ### `coderouter rollback` — undo an `--apply` (v2.14.0)
 
-Both `doctor --apply` and `vscode-init` have always written a `.bak` before rewriting a file, but there was no way to put it back. `coderouter rollback` restores `providers.yaml`, `~/.coderouter/model-capabilities.yaml`, and (with `--workspace`) `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
+Both `doctor --apply` and `vscode-init` have always written a `.bak` before rewriting a file, but there was no way to put it back. `coderouter rollback` restores `providers.yaml`, `~/.coderouter-t/model-capabilities.yaml`, and (with `--workspace`) `.vscode/settings.json` / `.envrc` from their `.bak` siblings.
 
 Restoring is a **swap** — the current contents become the new `.bak`, so running `rollback` a **second time reverts back to where you started** (not a one-way overwrite).
 

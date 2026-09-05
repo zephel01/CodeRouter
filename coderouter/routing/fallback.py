@@ -131,6 +131,43 @@ from coderouter.translation import (
 
 logger = get_logger(__name__)
 
+# Translation layer constants (design §3.4.3)
+_TRANSLATION_MAX_BUFFER_CHARS = 64 * 1024
+_TRANSLATION_TIMEOUT_S = 5.0
+
+# ---------------------------------------------------------------------------
+# Translation helpers — content extraction (dict/object agnostic, F-1 fix)
+# ---------------------------------------------------------------------------
+
+
+def _anthropic_text_blocks(content: list[Any] | None) -> list[str]:
+    """Extract text from Anthropic content blocks, handling both dict and Pydantic objects."""
+    if not content:
+        return []
+    texts: list[str] = []
+    for b in content:
+        if isinstance(b, dict):
+            if b.get("type") == "text":
+                texts.append(str(b.get("text", "")))
+        else:
+            if getattr(b, "type", None) == "text":
+                texts.append(str(getattr(b, "text", "") or ""))
+    return texts
+
+
+def _anthropic_has_tool_use(content: list[Any] | None) -> bool:
+    """Check if content has tool_use block, handling both dict and Pydantic objects."""
+    if not content:
+        return False
+    for b in content:
+        if isinstance(b, dict):
+            if b.get("type") == "tool_use":
+                return True
+        else:
+            if getattr(b, "type", None) == "tool_use":
+                return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # M1: request-scoped drift verdict
@@ -1102,6 +1139,92 @@ def _log_fallback_trace(trace: FallbackTrace | None, *, profile: str | None) -> 
         )
 
 
+# ---------------------------------------------------------------------------
+# Translation layer helpers (design §3.3, §3.4, §7)
+# ---------------------------------------------------------------------------
+
+
+def _translation_enabled(config: CodeRouterConfig) -> bool:
+    tcfg = getattr(config, "translation", None)
+    return bool(tcfg is not None and getattr(tcfg, "enabled", False))
+
+
+async def _translate_en_ja_with_timeout(
+    resp: AnthropicResponse,
+    manager: Any | None,
+) -> AnthropicResponse:
+    """Common helper for EN→JA with to_thread + timeout."""
+    from coderouter.jp_translation.translator import (
+        translate_anthropic_response_en_to_ja,
+    )
+
+    return await asyncio.wait_for(
+        asyncio.to_thread(translate_anthropic_response_en_to_ja, resp, manager),
+        timeout=_TRANSLATION_TIMEOUT_S,
+    )
+
+
+async def _maybe_translate_response(
+    resp: AnthropicResponse,
+    *,
+    config: CodeRouterConfig,
+    manager: Any | None,
+) -> AnthropicResponse:
+    """Translate resp EN→JA if enabled. Fail-open (return original on error/timeout)."""
+    if not _translation_enabled(config) or manager is None:
+        return resp
+    try:
+        is_avail = getattr(manager, "is_available", lambda: False)
+        if not is_avail():
+            return resp
+    except Exception:
+        return resp
+    try:
+        translated = await _translate_en_ja_with_timeout(resp, manager)
+        tcfg = getattr(config, "translation", None)
+        if tcfg is not None and getattr(tcfg, "log_translations", False):
+            logger.info("translation-en-ja-applied", extra={"blocks": len(translated.content)})
+        return translated
+    except Exception as exc:
+        logger.warning("translation-en-ja-failed", extra={"error": str(exc)})
+        return resp
+
+
+def _prepare_anthropic_effective_request(
+    request: AnthropicRequest,
+    *,
+    adapter: BaseAdapter,
+    will_degrade: bool,
+    tool_choice_action: str,
+    cache_control_action: str,
+    request_had_cache_control: bool,
+) -> AnthropicRequest:
+    """Build effective AnthropicRequest for a single adapter attempt (M-1 dedup helper).
+
+    Centralizes strip_thinking / capability-degraded logging / tool_choice &
+    cache_control shims so generate_anthropic and buffered-stream share one
+    code path. Divergence between the two paths was the root cause of M-1.
+    """
+    effective = request
+    if will_degrade:
+        effective = strip_thinking(request)
+        log_capability_degraded(
+            logger, provider=adapter.name, dropped=["thinking"], reason="provider-does-not-support"
+        )
+    if request_had_cache_control and not provider_supports_cache_control(adapter.config):
+        log_capability_degraded(
+            logger, provider=adapter.name, dropped=["cache_control"], reason="translation-lossy"
+        )
+    effective = _apply_tool_choice_shim(effective, adapter=adapter, action=tool_choice_action)
+    effective = _apply_cache_control_shim(
+        effective,
+        adapter=adapter,
+        action=cache_control_action,
+        request_had_cache_control=request_had_cache_control,
+    )
+    return effective
+
+
 class FallbackEngine:
     """Sequential fallback router — the core of CodeRouter.
 
@@ -1234,6 +1357,16 @@ class FallbackEngine:
         # ``launcher.swap.enabled``. None (default / legacy engines) —
         # every dispatch entry point's swap hook is then a cheap no-op.
         self._swap_manager: Any | None = None
+        # Translation layer: resident manager (None = disabled / tests)
+        self._translator_manager: Any | None = None
+
+    def attach_translator_manager(self, manager: Any | None) -> None:
+        """Wire TranslatorManager for EN→JA response translation.
+
+        Called from ingress/app.py lifespan when translation.enabled.
+        None (default) leaves response path as passthrough.
+        """
+        self._translator_manager = manager
 
     def attach_swap_manager(self, manager: Any) -> None:
         """Wire a SwapManager for on-demand model-swap dispatch (Phase 1).
@@ -2474,6 +2607,12 @@ class FallbackEngine:
         without success, raises :class:`NoProvidersAvailableError` with
         the full per-provider error list so the ingress layer can
         surface a single 502.
+
+        Translation layer note (M-4): JA↔EN translation is intentionally
+        NOT applied on the OpenAI-compatible path. Claude Code uses the
+        Anthropic path (generate_anthropic / stream_anthropic); OpenAI
+        path passthrough is by design. Future Phase 3 may add translation
+        here if needed — TODO: OpenAI path translation.
         """
         # v2.15.0: open the trace *before* chain resolution so the gate
         # skips inside ``_resolve_chain`` land on this request's trace and
@@ -3165,6 +3304,13 @@ class FallbackEngine:
                 stream=False,
                 response_fingerprint=_fp(_fp_text) if _fp_text else None,
             )
+            # Translation layer: EN→JA after Repair (design §2.2 step 6)
+            # resp already has repaired tool_use blocks; only text is translated.
+            resp = await _maybe_translate_response(
+                resp,
+                config=self.config,
+                manager=getattr(self, "_translator_manager", None),
+            )
             # ⑧ (empty-response): per-request empty-response handling. Runs
             # after the drift observation above (which still gets the real
             # output_tokens=0 signal for the windowed empty_response_rate)
@@ -3311,6 +3457,21 @@ class FallbackEngine:
             request, _ctx_status = _apply_context_budget_guard(
                 request, config=self.config, first_provider_config=first_provider_config,
             )
+
+        # Translation streaming: buffering mode when enabled (design §3.4.2 Phase1/2)
+        # If enabled, we downgrade streaming to buffered non-streaming → translate → synthesize
+        # This avoids token-by-token translation and guarantees Repair→Translate order.
+        _mgr = getattr(self, "_translator_manager", None)
+        if _translation_enabled(self.config) and _mgr is not None and getattr(_mgr, "is_available", lambda: False)():
+            logger.info(
+                "stream-downgraded-for-translation",
+                extra={"reason": "translation-enabled-buffered-mode"},
+            )
+            async for ev in self._stream_anthropic_buffered_translate(
+                request, chain=chain, trace=trace
+            ):
+                yield ev
+            return
 
         overrides = self._resolve_profile_overrides(request.profile)
         errors: list[AdapterError] = []
@@ -3778,6 +3939,199 @@ class FallbackEngine:
             _log_fallback_trace(trace, profile=request.profile)
             for buffered_ev in last_empty_stream_buffer:
                 yield buffered_ev
+            return
+
+        profile = request.profile or self.config.default_profile
+        _warn_if_uniform_auth_failure(errors, profile=profile)
+        _log_fallback_trace(trace, profile=profile)
+        raise NoProvidersAvailableError(profile=profile, errors=errors)
+
+    async def _stream_anthropic_buffered_translate(
+        self,
+        request: AnthropicRequest,
+        *,
+        chain: list[tuple[BaseAdapter, bool]],
+        trace: FallbackTrace,
+    ) -> AsyncIterator[AnthropicStreamEvent]:
+        """Buffered translation for streaming requests (Phase1/2).
+
+        Design §3.4.2: token-by-token translation is not done. Instead we
+        run the request non-streaming internally (so Repair is complete),
+        translate the final AnthropicResponse, and synthesize SSE events.
+        Overflow (>64KB) falls back to passthrough synthesis without translation
+        to avoid OOM.
+
+        M-1 fix: delegates effective-request construction to
+        ``_prepare_anthropic_effective_request`` so the shim/degrade logic
+        is not duplicated with ``_stream_anthropic_impl``.
+        M-2 fix: drift observation uses the original (English) response
+        fingerprint, not the translated one, to keep language-drift metrics
+        unbiased (non-streaming path uses pre-translation fingerprint).
+        M-3 fix: empty_response fallback is honored — an empty 200 is not
+        treated as success but falls through to the next provider.
+        """
+        from coderouter.guards._fingerprint import fingerprint_response as _fp_s
+
+        overrides = self._resolve_profile_overrides(request.profile)
+        errors: list[AdapterError] = []
+        tool_names = [t.name for t in request.tools] if request.tools else None
+        request_had_cache_control = anthropic_request_has_cache_control(request)
+        tool_choice_action, cache_control_action = self._resolve_shim_actions(request.profile)
+        manager = getattr(self, "_translator_manager", None)
+        empty_response_action = self._resolve_empty_response_action(request.profile)
+        last_empty_resp: AnthropicResponse | None = None
+
+        for adapter, will_degrade in chain:
+            effective_request = _prepare_anthropic_effective_request(
+                request,
+                adapter=adapter,
+                will_degrade=will_degrade,
+                tool_choice_action=tool_choice_action,
+                cache_control_action=cache_control_action,
+                request_had_cache_control=request_had_cache_control,
+            )
+            trace.record_attempt(adapter.name)
+            logger.info(
+                "try-provider",
+                extra={
+                    "provider": adapter.name,
+                    "stream": True,
+                    "native_anthropic": isinstance(adapter, AnthropicAdapter),
+                    "downgrade": True,
+                    "degraded": will_degrade,
+                },
+            )
+            attempt_started = time.monotonic()
+            try:
+                if isinstance(adapter, AnthropicAdapter):
+                    resp = await adapter.generate_anthropic(effective_request, overrides=overrides)
+                else:
+                    chat_req = to_chat_request(effective_request)
+                    chat_req.stream = False
+                    chat_resp = await adapter.generate(chat_req, overrides=overrides)
+                    resp = await asyncio.to_thread(
+                        to_anthropic_response, chat_resp, allowed_tool_names=tool_names
+                    )
+            except AdapterError as exc:
+                self._adaptive.record_attempt(
+                    adapter.name,
+                    latency_ms=None if exc.status_code in {401, 403} else (time.monotonic() - attempt_started) * 1000.0,
+                    success=False,
+                )
+                logger.warning(
+                    "provider-failed",
+                    extra={
+                        "provider": adapter.name,
+                        "status": exc.status_code,
+                        "retryable": exc.retryable,
+                        "error": str(exc)[:500],
+                    },
+                )
+                self._observe_provider_failure(adapter.name, exc, profile=request.profile)
+                self._observe_drift_signal(
+                    adapter.name, profile=request.profile, is_error=True, request_had_tools=bool(request.tools), stream=True
+                )
+                errors.append(exc)
+                trace.record_failure(adapter.name, classify_adapter_error(exc), detail=describe_adapter_error(exc), stream=True)
+                if not exc.retryable:
+                    break
+                continue
+            self._adaptive.record_attempt(
+                adapter.name, latency_ms=(time.monotonic() - attempt_started) * 1000.0, success=True
+            )
+            self._observe_provider_success(adapter.name, profile=request.profile)
+            logger.info(
+                "provider-ok",
+                extra={
+                    "provider": adapter.name,
+                    "stream": True,
+                    "native_anthropic": isinstance(adapter, AnthropicAdapter),
+                    "downgrade": True,
+                },
+            )
+
+            # M-2 fix: drift observation BEFORE translation (English fingerprint)
+            # — mirrors generate_anthropic non-streaming path and keeps drift
+            # metrics unbiased by translation output.
+            _orig_fp_text = " ".join(_anthropic_text_blocks(resp.content))
+            self._observe_drift_signal(
+                adapter.name,
+                profile=request.profile,
+                output_tokens=resp.usage.output_tokens if resp.usage else 0,
+                has_tool_use=_anthropic_has_tool_use(resp.content),
+                request_had_tools=bool(request.tools),
+                stop_reason=resp.stop_reason,
+                stream=True,
+                response_fingerprint=_fp_s(_orig_fp_text) if _orig_fp_text else None,
+            )
+
+            # Translation (after drift, before empty check — same order as non-streaming)
+            total_chars = sum(len(t) for t in _anthropic_text_blocks(resp.content))
+            if total_chars > _TRANSLATION_MAX_BUFFER_CHARS:
+                # F-2 fix: single warning (removed duplicate)
+                logger.warning(
+                    "translation-buffer-overflow",
+                    extra={
+                        "provider": adapter.name,
+                        "buffered_chars": total_chars,
+                        "limit": _TRANSLATION_MAX_BUFFER_CHARS,
+                    },
+                )
+                translated = resp
+            else:
+                try:
+                    translated = await _translate_en_ja_with_timeout(resp, manager)
+                except Exception as exc:
+                    logger.warning("translation-en-ja-stream-failed", extra={"error": str(exc)})
+                    translated = resp
+
+            # M-3 fix: empty_response handling (mirrors generate_anthropic)
+            if empty_response_action != "off" and _anthropic_response_is_empty(translated):
+                if empty_response_action == "fallback":
+                    last_empty_resp = translated
+                    log_empty_response_detected(logger, adapter.name, action="fallback", stream=True)
+                    trace.record_failure(adapter.name, REASON_EMPTY_RESPONSE, stream=True)
+                    continue
+                log_empty_response_detected(logger, adapter.name, action="warn", stream=True)
+
+            _lt_s = None
+            _tok_s = getattr(adapter.config, "tokenizer_path", None)
+            if _tok_s:
+                _lt_s = estimate_language_tax_for_request(request.system, request.messages, tokenizer_path=_tok_s)
+            _emit_cache_observed(
+                translated,
+                provider=adapter.name,
+                request_had_cache_control=request_had_cache_control,
+                streaming=True,
+                provider_config=adapter.config,
+                budget=self._budget,
+                language_tax=_lt_s,
+            )
+            self._fanout_observers(
+                "request_completed",
+                request=request,
+                response=translated,
+                provider=adapter.name,
+                latency_ms=(time.monotonic() - attempt_started) * 1000.0,
+                stream=True,
+            )
+            _log_fallback_trace(trace, profile=request.profile)
+            async for ev in synthesize_anthropic_stream_from_response(translated):
+                yield ev
+            return
+
+        # M-3: if every provider returned empty, return last empty verbatim
+        if last_empty_resp is not None:
+            log_empty_response_detected(
+                logger,
+                last_empty_resp.coderouter_provider or "unknown",
+                action="fallback",
+                stream=True,
+                chain_exhausted=True,
+            )
+            _log_fallback_trace(trace, profile=request.profile)
+            async for ev in synthesize_anthropic_stream_from_response(last_empty_resp):
+                yield ev
             return
 
         profile = request.profile or self.config.default_profile

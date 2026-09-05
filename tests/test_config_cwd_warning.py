@@ -45,6 +45,10 @@ def _reset_cwd_warning_once_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     independent scenarios in one pytest process, so each test needs its
     own clean slate to observe (or not observe) the warnings on its own
     terms.
+
+    Windows Path.home parity is handled globally by conftest's
+    ``_patch_home_for_windows`` autouse fixture (M-3 DRY fix); no per-file
+    patch needed here.
     """
     monkeypatch.setattr(loader_module, "_cwd_config_warning_emitted", False)
     monkeypatch.setattr(loader_module, "_cwd_config_skip_warning_emitted", False)
@@ -179,12 +183,12 @@ def test_home_config_does_not_warn(
     home_dir = tmp_path / "home"
     home_dir.mkdir()
     monkeypatch.setenv("HOME", str(home_dir))
-    coderouter_dir = home_dir / ".coderouter"
+    coderouter_dir = home_dir / ".coderouter-t"
     coderouter_dir.mkdir()
     (coderouter_dir / "providers.yaml").write_text(_minimal_config_yaml(), encoding="utf-8")
 
     # CWD has no providers.yaml of its own, so the search must fall through
-    # to ~/.coderouter/providers.yaml.
+    # to ~/.coderouter-t/providers.yaml.
     cwd_dir = tmp_path / "cwd_without_config"
     cwd_dir.mkdir()
     monkeypatch.chdir(cwd_dir)
@@ -218,7 +222,7 @@ def _write_home_and_cwd(
     home_dir.mkdir()
     monkeypatch.setenv("HOME", str(home_dir))
     if home_model is not None:
-        cr_dir = home_dir / ".coderouter"
+        cr_dir = home_dir / ".coderouter-t"
         cr_dir.mkdir()
         (cr_dir / "providers.yaml").write_text(
             _minimal_config_yaml(model=home_model), encoding="utf-8"
@@ -382,7 +386,7 @@ def test_resolve_config_path_matches_load_config(
     cwd_dir, home_dir = _write_home_and_cwd(
         tmp_path, monkeypatch, home_model="home-model", cwd_model="cwd-model"
     )
-    home_path = home_dir / ".coderouter" / "providers.yaml"
+    home_path = home_dir / ".coderouter-t" / "providers.yaml"
     cwd_path = cwd_dir / "providers.yaml"
 
     # Opt-in off → resolver points at home (the file load_config reads).

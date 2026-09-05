@@ -4,10 +4,10 @@
 #
 # Default behavior:
 #   - allow_paid: false  (paid providers are skipped unless ALLOW_PAID=true)
-#   - default_profile: 'default'
+#   - default_profile: 'multi'  (以降は用途別: coding / general / reasoning / multi)
 #
 # To use:
-#   1. cp examples/providers.yaml ~/.coderouter/providers.yaml
+#   1. cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 #   2. Edit base_url / model to match your local stack
 #   3. cp examples/.env.example .env  and fill in OPENROUTER_API_KEY if you want fallback
 #   4. coderouter serve
@@ -69,6 +69,11 @@ mode_aliases:
   vision: multi     # 画像入力をしたいとき
   think: reasoning  # 長文推論したいとき
   cheap: general    # 一番安く済ませたいとき
+  # v2.16: Claude Code 互換エイリアス — `sonnet`/`opus`/`haiku` で直接 profile 指定可能
+  # クライアントが model 名として `sonnet` 等を送った際の resolve_model_to_profile でも同等に解決
+  opus: reasoning   # Opus 相当 — 難問・長文推論
+  sonnet: coding    # Sonnet 相当 — 標準コーディング (default_profile と同等)
+  haiku: general    # Haiku 相当 — 軽量・高速
 
 # v1.5-E: timezone used to render timestamps in the dashboard header /
 # "Recent Events" list and in `coderouter stats` output. Must be an IANA
@@ -1234,3 +1239,22 @@ profiles:
   - name: verify-v1-tuned
     providers:
       - verify-ollama-tuned
+
+# ============================================================
+# v2.16: JA<->EN translation layer (CPU Argos Translate) — CodeRouter-t デフォルトON
+# providers.yaml のトップレベルに配置。CodeRouter-t (t=translate) では
+# 翻訳を主機能とするため enabled: true が既定。有効時は日本語 user メッセージを
+# 英訳して上流モデルに渡し、応答を日訳して返す (code block / path / tool名は masking)。
+# 無効化したい場合は enabled: false にしてください。
+# 前提:
+#   1. pip install -e ".[translation]"  (または installCodeRouter.bat が自動実行)
+#   2. python scripts/setup_argos_models.py  (ja<->en モデル取得)
+# モデル未導入でも起動は成功します — lifespan で warning を出して
+# pass-through にフォールバックします (fail-open, app.py:291)。
+# 詳細: doc/翻訳層設計書.md / coderouter/jp_translation/
+# ============================================================
+translation:
+  enabled: true       # CodeRouter-t 既定: true (汎用 CodeRouter 上流は false)
+  device: cpu         # 現状 cpu のみ許可 (VRAM zero guarantee)
+  log_translations: true   # CodeRouter-t 既定: true (redacted debug ログ)
+  # model_dir: null   # 省略時は Argos 標準キャッシュ。カスタム配置時のみ指定

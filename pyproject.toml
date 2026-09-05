@@ -1,17 +1,16 @@
 [project]
-# v1.7-A: PyPI distribution name is `coderouter-cli` because the bare
+# v1.7-A: PyPI distribution name was `coderouter-cli` because the bare
 # `coderouter` slot was already taken by Lawrence Chen's unrelated HTTP
-# routing library (uploaded 2025-06, single 0.1.0 release). The
-# Python *import* name and the *console script* name both stay
-# `coderouter` (unchanged), so user-facing commands look identical:
-#     pip install coderouter-cli         # install
-#     coderouter serve --port 8088       # run
-#     import coderouter                  # import
-# A PEP 541 reclamation request for `coderouter` is tracked separately
-# in plan.md §11.B; once granted, this name will become an alias and
-# `coderouter` will become the canonical distribution name.
-name = "coderouter-cli"
-version = "2.15.0"
+# routing library (uploaded 2025-06, single 0.1.0 release).
+# Fork: this distribution is `coderouter-t` (t = translate) - a
+# translate-enhanced fork of zephel01/CodeRouter. The Python *import*
+# name stays `coderouter` (unchanged) so existing code keeps working:
+#     pip install coderouter-t           # install (fork)
+#     coderouter-t serve --port 8088     # run (fork, primary)
+#     coderouter serve --port 8088       # run (alias, kept for compatibility)
+#     import coderouter                  # import (unchanged)
+name = "coderouter-t"
+version = "2.16.0"
 description = "Local-first, free-first, fallback-built-in LLM router. Claude Code / OpenAI compatible."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -52,8 +51,8 @@ dependencies = [
 # comments or formatting on dump. Kept OPTIONAL (not in the strict 5 base
 # deps) because the typical user path (``serve``) never needs it; only
 # operators who actually run ``doctor --apply`` install it via
-# ``pip install coderouter-cli[doctor]`` (or ``uv tool install
-# coderouter-cli --with ruamel.yaml``). Lazy-imported in
+# ``pip install coderouter-t[doctor]`` (or ``uv tool install
+# coderouter-t --with ruamel.yaml``). Lazy-imported in
 # ``coderouter.doctor_apply`` so the absence is invisible until the
 # feature is invoked.
 doctor = [
@@ -72,6 +71,16 @@ accuracy = [
 repair = [
     "json-repair>=0.60.1",
 ]
+# Translation layer — CPU Argos Translate. Optional: only needed when
+# translation.enabled = true. Argos 1.x is pydantic v1 based → Python 3.12-3.13 only.
+# NOTE: lower bound is 1.11 (not 1.11.1) because 1.11.1 is not yet on PyPI
+# (2026-09-02 only 1.11.0 published); keep <2 for future breaking changes.
+# Marker restricts to 3.12-3.13 so pip on 3.14+/3.11 does not try to resolve
+# pydantic-v1 Argos (would fail). Base package requires-python is >=3.12,
+# so 3.11 is already excluded, but marker makes intent explicit.
+translation = [
+    "argostranslate>=1.11,<2; python_version >= '3.12' and python_version < '3.14'",
+]
 dev = [
     "pytest>=8.3.0",
     "pytest-asyncio>=0.24.0",
@@ -88,14 +97,15 @@ dev = [
 ]
 
 [project.scripts]
+coderouter-t = "coderouter.cli:main"
 coderouter = "coderouter.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/zephel01/CodeRouter"
-Repository = "https://github.com/zephel01/CodeRouter"
-Issues = "https://github.com/zephel01/CodeRouter/issues"
-Changelog = "https://github.com/zephel01/CodeRouter/blob/main/CHANGELOG.md"
-Documentation = "https://github.com/zephel01/CodeRouter#documentation"
+Homepage = "https://github.com/OrgaiCom/CodeRouter"
+Repository = "https://github.com/OrgaiCom/CodeRouter"
+Issues = "https://github.com/OrgaiCom/CodeRouter/issues"
+Changelog = "https://github.com/OrgaiCom/CodeRouter/blob/main/CHANGELOG.md"
+Documentation = "https://github.com/OrgaiCom/CodeRouter#documentation"
 
 [build-system]
 requires = ["hatchling"]
@@ -178,6 +188,13 @@ select = [
     "RUF",          # ruff-specific
 ]
 ignore = ["E501"]  # line length handled by formatter
+
+[tool.ruff.lint.per-file-ignores]
+# v2.15.0 i18n: Japanese catalog strings intentionally use fullwidth
+# punctuation （）／： etc. — RUF001/002/003 flag them as ambiguous
+# unicode but they are correct Japanese typography. Ignore only here;
+# the rest of the codebase keeps the check to catch homoglyph bugs.
+"coderouter/messages.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.ruff.format]
 quote-style = "double"

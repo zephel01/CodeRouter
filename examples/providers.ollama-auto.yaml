@@ -3,7 +3,7 @@
 # 【カテゴリ】 Ollama 通常 / auto_router ゼロ設定スターター
 #
 # This is the beginner-first starter for v1.6's auto_router. Drop it in
-# as your ~/.coderouter/providers.yaml and every request is classified
+# as your ~/.coderouter-t/providers.yaml and every request is classified
 # by the request body and sent to the right profile automatically:
 #
 #   - image attached                    → profile "multi"   (VL model)

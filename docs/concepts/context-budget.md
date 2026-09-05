@@ -207,8 +207,8 @@ Gates セクションに `ctx_budget_warnings` / `ctx_budget_trims` / `latest_ra
 検証用の providers.yaml が同梱されています:
 
 ```bash
-cp examples/providers.v2-context-budget.yaml ~/.coderouter/providers.yaml
-coderouter serve --port 8088 --log-level debug
+cp examples/providers.v2-context-budget.yaml ~/.coderouter-t/providers.yaml
+coderouter-t serve --port 8088 --log-level debug
 ```
 
 閾値を下げて少ないデータ量で warn / trim をトリガーできるようになっています。詳細は `docs/inside/verification-v2.0-F.md` 参照。

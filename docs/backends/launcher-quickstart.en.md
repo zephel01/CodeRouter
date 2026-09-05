@@ -32,7 +32,7 @@ Install one inference backend that the Launcher will start. **When in doubt, lla
 
 Multiple install methods, OS-specific details, verification steps, and common pitfalls are collected in the **[Backend Installation Guide](./install-backends.en.md)**.
 
-> vLLM / MLX need a dedicated Python virtual environment (venv). The policy is to keep a separate venv per backend under `~/.coderouter/backends/<backend-name>/` (e.g. `~/.coderouter/backends/vllm/`). See that guide for details.
+> vLLM / MLX need a dedicated Python virtual environment (venv). The policy is to keep a separate venv per backend under `~/.coderouter-t/backends/<backend-name>/` (e.g. `~/.coderouter-t/backends/vllm/`). See that guide for details.
 
 ---
 
@@ -48,10 +48,10 @@ Keep local files like `.gguf` in one directory (e.g. `~/llm/models/`). Subfolder
 
 ## 3. Write the launcher block in providers.yaml
 
-The Launcher loads the model list, option profiles, and binary paths from the `launcher:` block in `~/.coderouter/providers.yaml`.
+The Launcher loads the model list, option profiles, and binary paths from the `launcher:` block in `~/.coderouter-t/providers.yaml`.
 
 ```yaml
-# ~/.coderouter/providers.yaml
+# ~/.coderouter-t/providers.yaml
 launcher:
   model_dirs:
     - ~/llm/models                      # recursively searches for .gguf etc.
@@ -62,7 +62,7 @@ launcher:
       # (auto-resolved from PATH).
       binary: ~/llama.cpp/build/bin/llama-server
     vllm:
-      binary: ~/.coderouter/backends/vllm/bin/python   # the venv where vLLM is installed
+      binary: ~/.coderouter-t/backends/vllm/bin/python   # the venv where vLLM is installed
   option_profiles:
     llama.cpp:
       - name: "Full GPU utilization"
@@ -103,7 +103,7 @@ See the [Launcher Guide](./launcher.en.md) for details.
 The Web edition runs inside CodeRouter, so start CodeRouter first:
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 Open `http://localhost:8088/launcher` in a browser, pick a model, and press "▶ Launch".

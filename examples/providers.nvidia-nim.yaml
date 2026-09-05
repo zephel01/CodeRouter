@@ -54,7 +54,7 @@
 #      only if you've successfully done it before in this shell.
 #   5. Start CodeRouter with `coderouter serve --mode claude-code-nim --port 8088`.
 #      (This file already sets `default_profile: claude-code-nim`, so if you
-#      copy it to ~/.coderouter/providers.yaml you can also just run
+#      copy it to ~/.coderouter-t/providers.yaml you can also just run
 #      `coderouter serve --port 8088`. The `--port` MUST match what your
 #      Claude Code env vars expect, e.g. `ANTHROPIC_BASE_URL=http://localhost:8088`.)
 #

@@ -286,7 +286,7 @@ def merge_capabilities_rule_into_doc(doc: Any, patch_dict: dict[str, Any]) -> bo
     Returns True on append or change; False on idempotent no-op.
 
     The ``rules:`` key is auto-created when absent (the user-side
-    ``~/.coderouter/model-capabilities.yaml`` may legitimately start
+    ``~/.coderouter-t/model-capabilities.yaml`` may legitimately start
     empty).
     """
     if not isinstance(doc, dict):
@@ -362,9 +362,9 @@ def _load_yaml_with_comments(path: Path) -> tuple[Any, str]:
         raise MissingDependencyError(
             "doctor --apply / --dry-run requires the optional "
             "'ruamel.yaml' dependency. Install with one of:\n"
-            "  pip install coderouter-cli[doctor]\n"
+            "  pip install coderouter-t[doctor]\n"
             "  uv pip install ruamel.yaml\n"
-            "  uv tool install coderouter-cli --with ruamel.yaml"
+            "  uv tool install coderouter-t --with ruamel.yaml"
         ) from exc
 
     raw_text = path.read_text(encoding="utf-8")
@@ -505,7 +505,7 @@ def _resolve_target_path(
     ``"providers.yaml"`` resolves to the same path the loader picked up
     (i.e. the file backing the live ``CodeRouterConfig``). The
     ``model-capabilities.yaml`` token resolves to the user-side
-    override path (``~/.coderouter/model-capabilities.yaml``) — the
+    override path (``~/.coderouter-t/model-capabilities.yaml``) — the
     bundled file inside the package is intentionally read-only, and
     new rules belong in the user-layer override per the registry's
     layering contract.
@@ -516,7 +516,7 @@ def _resolve_target_path(
     if target_file == "providers.yaml":
         return config_path
     if target_file == "model-capabilities.yaml":
-        return Path.home() / ".coderouter" / "model-capabilities.yaml"
+        return Path.home() / ".coderouter-t" / "model-capabilities.yaml"
     return None
 
 
@@ -574,7 +574,7 @@ def apply_doctor_patches(
 
     ``user_capabilities_path`` is a test-only injection point — leave
     None in production to use the standard
-    ``~/.coderouter/model-capabilities.yaml`` resolution.
+    ``~/.coderouter-t/model-capabilities.yaml`` resolution.
     """
     # Pre-import ruamel once so a missing dep fails fast before we read
     # the report. The actual load/dump still happens via the lazy helpers

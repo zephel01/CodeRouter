@@ -82,7 +82,7 @@ providers:
     agent_cli:
       agent: claude
       command: claude            # PATH 解決。絶対パスも可
-      workdir: ~/.coderouter/agents/claude
+      workdir: ~/.coderouter-t/agents/claude
       exec_timeout_s: 600
       allow_file_writes: false   # 既定 read-only
       max_turns: 8
@@ -99,7 +99,7 @@ providers:
     agent_cli:
       agent: codex
       command: codex
-      workdir: ~/.coderouter/agents/codex
+      workdir: ~/.coderouter-t/agents/codex
       exec_timeout_s: 600
       allow_file_writes: false
       sandbox_mode: read_only
@@ -115,7 +115,7 @@ providers:
     agent_cli:
       agent: gemini
       command: gemini
-      workdir: ~/.coderouter/agents/gemini
+      workdir: ~/.coderouter-t/agents/gemini
       exec_timeout_s: 600
       allow_file_writes: false
       max_turns: 8               # settings.json の maxSessionTurns 相当
@@ -132,7 +132,7 @@ providers:
     agent_cli:
       agent: grok
       command: grok
-      workdir: ~/.coderouter/agents/grok
+      workdir: ~/.coderouter-t/agents/grok
       exec_timeout_s: 600
       allow_file_writes: false
       max_turns: 8
@@ -494,7 +494,7 @@ subprocess は任意コード実行の攻撃面である（`ANALYSIS-code.md` §
 |---|---|
 | **allowlist argv のみ** | `create_subprocess_exec` にリスト argv を渡す。`shell=True` は**禁止**。プロンプトは引数値または stdin で渡し、シェル解釈を経由させない |
 | **既定 read-only** | `allow_file_writes=False` / `sandbox_mode="read_only"` が既定。書き込みは明示 opt-in（`restart_command` の「opt-in・既定オフ」先例に倣う） |
-| **workdir 境界** | `workdir` を絶対パスへ正規化し、専用隔離ディレクトリ配下に限定。`..` によるエスケープを拒否。未設定時は `~/.coderouter/agents/<name>` を自動生成 |
+| **workdir 境界** | `workdir` を絶対パスへ正規化し、専用隔離ディレクトリ配下に限定。`..` によるエスケープを拒否。未設定時は `~/.coderouter-t/agents/<name>` を自動生成 |
 | **timeout 強制 kill** | `exec_timeout_s` を `asyncio.wait_for` で強制、超過時は PGID ごと SIGKILL（§5.1.8） |
 | **env allowlist** | 親環境を継承せず最小注入。`ANTHROPIC_API_KEY` は既定で渡さない（§5.3） |
 | **ネスト上限** | `CODEROUTER_AGENT_DEPTH` + `agent_depth_limit`（§5.5） |

@@ -13,7 +13,7 @@ Purpose
          Python-literal regex in v0.5-A). The bundled default registry
          at ``coderouter/data/model-capabilities.yaml`` encodes the
          families we've verified accept the feature; users can extend /
-         override via ``~/.coderouter/model-capabilities.yaml``.
+         override via ``~/.coderouter-t/model-capabilities.yaml``.
       3. Lets the fallback engine prefer capable providers and silently
          strip the block when it has to hand off to a non-capable one,
          logging the degradation so operators can see it after the fact.
@@ -95,7 +95,7 @@ def get_default_registry() -> CapabilityRegistry:
     """Return the process-wide default capability registry.
 
     First call loads ``coderouter/data/model-capabilities.yaml`` +
-    optional ``~/.coderouter/model-capabilities.yaml``; subsequent calls
+    optional ``~/.coderouter-t/model-capabilities.yaml``; subsequent calls
     return the cached instance.
     """
     global _DEFAULT_REGISTRY
@@ -144,7 +144,7 @@ def provider_supports_thinking(
     default (both produce False); the registry only promotes to True. A
     user who wants to hard-disable thinking on a registry-capable model
     can change the provider's model to one that isn't declared, or add a
-    more-specific rule to ``~/.coderouter/model-capabilities.yaml`` that
+    more-specific rule to ``~/.coderouter-t/model-capabilities.yaml`` that
     declares ``thinking: false`` earlier in the chain.
 
     The ``registry`` kwarg is for tests — production callers pass
@@ -560,7 +560,7 @@ canonical names used in ``examples/providers.nvidia-nim.yaml``
 (``claude-code-nim``) and ``examples/providers.yaml``
 (``claude-code-local``); operators with custom profile names that should
 trigger the same check should adopt the prefix or override per-provider
-in ``~/.coderouter/model-capabilities.yaml`` (declaring
+in ``~/.coderouter-t/model-capabilities.yaml`` (declaring
 ``claude_code_suitability: ok`` to opt out of the warn).
 """
 

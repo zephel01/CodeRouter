@@ -66,7 +66,7 @@ ollama serve &   # すでに動いていれば不要
 > 24 GB GGUF を載せると swap で遅くなる）。
 >
 > RAM を見て自動推奨させたいときは [`./setup.sh`](../../setup.sh) を実行
-> — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter/providers.yaml`
+> — RAM tier に応じて安全側のモデルを推奨 + 自動 pull + `~/.coderouter-t/providers.yaml`
 > 生成まで一気にやってくれます。あとで上のような大きいモデルに上げるには
 > 手動編集 or `./setup.sh --ram-gb <larger> --force` で再生成。
 > 詳しくは v1.8.0 で出した [examples/providers.yaml](../../examples/providers.yaml)
@@ -74,7 +74,7 @@ ollama serve &   # すでに動いていれば不要
 
 ### 2. CodeRouter をインストール
 
-**v1.7.0 から PyPI (`coderouter-cli`) で公開**しています。用途別に 3 経路:
+**v1.7.0 から PyPI (`coderouter-t`) で公開**しています。用途別に 3 経路:
 
 - **(a) `uvx` で都度起動 — 一番軽い**
 - **(b) `uv tool install` で PATH に通す — 日常運用**
@@ -89,9 +89,9 @@ ollama serve &   # すでに動いていれば不要
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # 起動時に一緒にインストール + 実行される
-# 注: PyPI 配布名 (coderouter-cli) と console script 名 (coderouter) が
+# 注: PyPI 配布名 (coderouter-t) と console script 名 (coderouter) が
 # 異なるため、uv 0.11+ では --from 形式が必須 (旧 uv でも動く)
-uvx --from coderouter-cli coderouter serve --port 8088
+uvx --from coderouter-t coderouter-t serve --port 8088
 ```
 
 PyPI のバージョンが常に取れるので、「最新で動かしたい、2 週間ぶりに触る」みたいな人に最適。
@@ -99,12 +99,12 @@ PyPI のバージョンが常に取れるので、「最新で動かしたい、
 **(b) 日常運用 — `uv tool install` で PATH に置く**
 
 ```bash
-uv tool install coderouter-cli
+uv tool install coderouter-t
 coderouter --version           # coderouter 1.7.0
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
-`pipx` 派なら同等の `pipx install coderouter-cli`。以降 `coderouter` コマンドがどこからでも叩けます。
+`pipx` 派なら同等の `pipx install coderouter-t`。以降 `coderouter` コマンドがどこからでも叩けます。
 
 **(c) ソースを読む / `auto_router:` ルールを手元でいじる場合 — clone + venv**
 
@@ -112,28 +112,28 @@ coderouter serve --port 8088
 git clone https://github.com/zephel01/CodeRouter.git
 cd CodeRouter
 uv sync                         # venv 自動作成 + 依存インストール
-uv run coderouter serve --port 8088
+uv run coderouter-t serve --port 8088
 ```
 
 毎回 `uv run` プレフィックスを付ければ venv activate は不要 (direnv や shell 起動フックでの自動 activate も一案)。
 
-> **補足**: PyPI 上のパッケージ名は `coderouter-cli` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-cli-一発で動く) 参照。
+> **補足**: PyPI 上のパッケージ名は `coderouter-t` ですが、**コマンド名と Python import 名は `coderouter` のまま**です (`from coderouter import ...` / `coderouter-t serve ...`)。`pip install` 時の名前だけ若干違う、という形。詳しくは [CHANGELOG `[v1.7.0]`](../../CHANGELOG.md#v170--2026-04-25-pypi-公開-uvx-coderouter-t-一発で動く) 参照。
 >
-> **v1.8.0 から用途別 4 プロファイル**: `coderouter serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) と [`examples/providers.yaml`](../../examples/providers.yaml) のコメントを参照。
+> **v1.8.0 から用途別 4 プロファイル**: `coderouter-t serve --mode coding|general|multi|reasoning` で起動時に切り替え可能 (デフォルトは `multi`)。詳しくは [CHANGELOG `[v1.8.0]`](../../CHANGELOG.md) と [`examples/providers.yaml`](../../examples/providers.yaml) のコメントを参照。
 
 ### 3. `providers.yaml` を配置
 
 サンプル設定をコピーするだけで OK です (中身は本手順書の構成と一致しています)。
 
 ```bash
-mkdir -p ~/.coderouter
+mkdir -p ~/.coderouter-t
 
 # 経路 (a) / (b) = uvx / uv tool install で入れた場合は直接ダウンロード
-curl -fsSL -o ~/.coderouter/providers.yaml \
+curl -fsSL -o ~/.coderouter-t/providers.yaml \
   https://raw.githubusercontent.com/zephel01/CodeRouter/main/examples/providers.yaml
 
 # 経路 (c) = clone 済みの場合
-# cp examples/providers.yaml ~/.coderouter/providers.yaml
+# cp examples/providers.yaml ~/.coderouter-t/providers.yaml
 ```
 
 ### 4. (任意) OpenRouter API キーを設定
@@ -149,7 +149,7 @@ export OPENROUTER_API_KEY="sk-or-v1-xxxxxxxxxxxxxxxx"
 ### 5. CodeRouter を起動
 
 ```bash
-coderouter serve --port 8088
+coderouter-t serve --port 8088
 ```
 
 別ターミナルで、起動確認:
@@ -244,13 +244,13 @@ codex "write a python function that reverses a string"
 
 ## うまく動かない時 (よくある 3 つ)
 
-### (1) `coderouter serve` が `address already in use` で落ちる
+### (1) `coderouter-t serve` が `address already in use` で落ちる
 
 別プロセスが 8088 を掴んでいます。別ポートで起動するか、該当プロセスを落とす:
 
 ```bash
 lsof -i :8088        # 占有プロセスを確認
-coderouter serve --port 8089   # ポート変更で逃げる
+coderouter-t serve --port 8089   # ポート変更で逃げる
 ```
 
 ポートを変えたら `ANTHROPIC_BASE_URL` / `OPENAI_BASE_URL` も合わせて変更。
@@ -272,7 +272,7 @@ curl http://localhost:11434/api/version
 
 ### (4) `pip install` が `externally-managed-environment` で落ちる
 
-macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uvx --from coderouter-cli coderouter`) または (b) (`uv tool install coderouter-cli`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
+macOS (Homebrew Python) / Ubuntu 23+ / Debian bookworm+ で PEP 668 によりシステム Python への素の `pip install` が拒否されているパターンです。手順 2 の経路 (a) (`uvx --from coderouter-t coderouter-t`) または (b) (`uv tool install coderouter-t`) のどちらかに乗り換えてください。`--break-system-packages` を付けての強行はシステムの Python 環境を壊す原因になるので非推奨です。
 
 ---
 
@@ -295,7 +295,7 @@ ollama pull qwen2.5vl:7b         # multi    (~6 GB、画像を送らないなら
 ### C-2. `providers.yaml` を `providers.auto.yaml` に差し替える
 
 ```bash
-cp examples/providers.auto.yaml ~/.coderouter/providers.yaml
+cp examples/providers.auto.yaml ~/.coderouter-t/providers.yaml
 ```
 
 中身の肝は 2 行だけです:
@@ -305,7 +305,7 @@ default_profile: auto   # ← この sentinel が auto_router を有効化する
 # profiles: には multi / coding / writing の 3 本を用意しておく
 ```
 
-この状態で `coderouter serve` を再起動すると、以降のリクエストは内蔵ルール (画像添付 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) で自動振り分けされます。`X-CodeRouter-Profile` ヘッダや `body.profile` で都度上書きする道は残っているので、「普段は任せて、特定のリクエストだけ手動指定」という使い方も可能です。
+この状態で `coderouter-t serve` を再起動すると、以降のリクエストは内蔵ルール (画像添付 → `multi` / コードフェンス比率 ≥ 0.3 → `coding` / それ以外 → `writing`) で自動振り分けされます。`X-CodeRouter-Profile` ヘッダや `body.profile` で都度上書きする道は残っているので、「普段は任せて、特定のリクエストだけ手動指定」という使い方も可能です。
 
 ### C-3. ルールをカスタマイズしたい場合
 

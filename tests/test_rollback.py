@@ -121,7 +121,7 @@ def test_restore_many_continues_past_a_file_with_no_backup(tmp_path: Path) -> No
 def test_discovery_includes_the_user_layer_capabilities_file() -> None:
     """doctor --apply writes there regardless of which config was loaded."""
     paths = discover_managed_files(config_path="/etc/coderouter/providers.yaml")
-    assert Path.home() / ".coderouter" / "model-capabilities.yaml" in paths
+    assert Path.home() / ".coderouter-t" / "model-capabilities.yaml" in paths
 
 
 def test_discovery_adds_the_workspace_outputs(tmp_path: Path) -> None:
@@ -131,7 +131,7 @@ def test_discovery_adds_the_workspace_outputs(tmp_path: Path) -> None:
 
 
 def test_discovery_does_not_repeat_a_path() -> None:
-    shared = Path.home() / ".coderouter" / "model-capabilities.yaml"
+    shared = Path.home() / ".coderouter-t" / "model-capabilities.yaml"
     paths = discover_managed_files(config_path=shared)
     assert paths.count(shared) == 1
 
