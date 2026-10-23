@@ -34,8 +34,8 @@ profiles:
 ```yaml
 providers:
   - name: local-llamacpp
-    kind: openai_compat
-    base_url: http://127.0.0.1:8080/v1
+    kind: anthropic                  # pass straight through to llama-server's /v1/messages
+    base_url: http://127.0.0.1:8080
     model: ""
     ttft_timeout_s: 20     # no first output within 20 s → next provider
 ```
@@ -44,6 +44,8 @@ providers:
 - **Stops** at the first real output; opening events alone do not stop it. Watching past the opening events needs `empty_response_action: fallback` (without it those events go to the client at once and the stream is committed).
 - **Never applied to the last provider of a chain** — there is nothing to fall back to, so waiting is the better answer.
 - Not applied to non-streaming requests (`timeout_s` bounds those).
+- **Only the `/v1/messages` (Anthropic) streaming path** is covered; `/v1/chat/completions` is not.
+- **Not applied to `kind: openai_compat` requests that carry tools** (Claude Code sends tools on almost every request). That combination calls the upstream non-streaming so tool calls can be repaired (the tool-turn downgrade), which makes the "first output" the whole answer; a deadline there would throw away slow but healthy local replies. To use the TTFT cut-off with a local llama.cpp / Ollama, connect with `kind: anthropic` (native `/v1/messages`) as in the example above.
 - An abandoned attempt is an ordinary failure: `X-CodeRouter-Fallback-Reason: ttft-timeout`, and the self-healing guards learn from it.
 
 Typical use: a local llama-server is still loading a model or chewing through a long prompt while a cloud provider could answer now. Start at two to three times your usual local TTFT; too short and every request escapes to the cloud.

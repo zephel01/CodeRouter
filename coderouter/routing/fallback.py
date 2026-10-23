@@ -112,6 +112,7 @@ from coderouter.routing.fallback_trace import (
     REASON_PAID_GATE,
     REASON_SELF_HEALING_EXCLUDED,
     REASON_STREAM_TRUNCATED,
+    REASON_TTFT_TIMEOUT,
     REASON_UNKNOWN_PROVIDER,
     FallbackTrace,
     begin_fallback_trace,
@@ -3473,12 +3474,12 @@ class FallbackEngine:
                     # v0.3-D downgrade: run non-streaming, repair, replay.
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await _await_within_ttft(
-                        adapter.generate(chat_req, overrides=overrides),
-                        deadline=ttft_deadline,
-                        provider=adapter.name,
-                        ttft_timeout_s=ttft_s,
-                    )
+                    # v2.17.0: no TTFT deadline here. This branch is a
+                    # *non-streaming* call (the tool-turn downgrade), so its
+                    # "first output" is the whole answer — a TTFT cut would
+                    # become a total-generation limit and throw away slow
+                    # but healthy local replies. ``timeout_s`` bounds it.
+                    chat_resp = await adapter.generate(chat_req, overrides=overrides)
                     # H-4: same as the non-streaming branch — keep the
                     # CPU-bound repair scan off the event loop.
                     anth_resp = await asyncio.to_thread(
@@ -3676,8 +3677,28 @@ class FallbackEngine:
                     # message — so the hop is recorded as ``stream-truncated``
                     # and the empty-response log is skipped. The adapter has
                     # already emitted ``stream-truncation-detected``.
-                    truncated = isinstance(exc, StreamTruncatedError)
-                    if truncated:
+                    #
+                    # v2.17.0: a TTFT cut-off lands here too, and its buffer
+                    # is just as unterminated (opening events, no
+                    # ``message_stop``). Treat it like a truncation so the
+                    # chain-exhausted flush below never replays it as a
+                    # "complete empty answer" — that would hand the client a
+                    # 200 stream that never ends. Close the abandoned upstream
+                    # stream now rather than waiting for GC.
+                    ttft_cut = isinstance(exc, TTFTTimeoutError)
+                    truncated = isinstance(exc, StreamTruncatedError) or ttft_cut
+                    if ttft_cut:
+                        aclose_iter = getattr(event_iter, "aclose", None)
+                        if aclose_iter is not None:
+                            with contextlib.suppress(Exception):
+                                await aclose_iter()
+                        trace.record_failure(
+                            adapter.name,
+                            REASON_TTFT_TIMEOUT,
+                            detail=describe_adapter_error(exc),
+                            stream=True,
+                        )
+                    elif truncated:
                         trace.record_failure(
                             adapter.name,
                             REASON_STREAM_TRUNCATED,

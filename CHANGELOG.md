@@ -19,12 +19,22 @@ are kept verbatim where the Japanese text itself is the subject).
   the chain moves on — e.g. a local llama-server still loading a model or
   prefilling a long prompt while a cloud provider could answer now. Never
   applied to the last provider of a chain (nothing to fall back to), nor to
-  non-streaming requests (`timeout_s` covers those). It always covers the
+  non-streaming requests (`timeout_s` covers those), nor to the
+  `/v1/chat/completions` route. It is also skipped for the tool-turn
+  downgrade (`kind: openai_compat` with tools, which calls the upstream
+  non-streaming so tool calls can be repaired): there the "first output" is
+  the whole answer, and a deadline would discard slow but healthy replies —
+  use `kind: anthropic` (native `/v1/messages`) to get the cut-off for a
+  local server. It always covers the
   wait for the first event; covering the gap between the opening events and
   the first real output needs `empty_response_action: fallback`, which is
   what withholds those events from the client. Abandoned attempts are
   ordinary retryable failures: new fallback reason `ttft-timeout` (detail
-  `no-first-token`) and the self-healing guards learn from them. Default
+  `no-first-token`) and the self-healing guards learn from them. A cut that
+  happens after the opening events is handled like a truncated stream: the
+  withheld, unterminated preamble is never flushed to the client if the
+  rest of the chain also fails, and the abandoned upstream stream is closed
+  immediately. Default
   `None` (off). Docs: `docs/concepts/commit-point.md` / `.en.md`.
 - **`x-should-retry` on `/v1/messages` errors.** Every Anthropic-shaped
   error CodeRouter produces now says whether retrying can help — the header

@@ -173,3 +173,65 @@ def test_ttft_error_classifies_as_ttft_timeout() -> None:
 def test_schema_rejects_non_positive_ttft() -> None:
     with pytest.raises(ValueError):
         ProviderConfig(name="x", base_url="http://127.0.0.1:1/v1", model="m", ttft_timeout_s=0)
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (v2.17.0)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ttft_cut_in_buffered_loop_never_flushes_unterminated_preamble() -> None:
+    """Opening events then a stall, next provider fails: the client must get
+    an error — not a 200 stream holding message_start and nothing else."""
+    from coderouter.adapters.base import AdapterError
+    from coderouter.routing.fallback_trace import current_fallback_trace
+
+    config = _config(ttft=0.05, empty_fallback=True)
+    stall = SlowAdapter(config.providers[0], delay_before_content=1.0)
+    broken = FakeAnthropicAdapter(
+        config.providers[1], fail_with=AdapterError("busy", provider="second", status_code=503)
+    )
+    engine = _engine_with_adapters(config, {"first": stall, "second": broken})
+    with pytest.raises(NoProvidersAvailableError) as info:
+        await _collect(engine, _anth_req(stream=True))
+    assert isinstance(info.value.errors[0], TTFTTimeoutError)
+    assert stall.closed  # abandoned upstream stream was closed, not left to GC
+    trace = current_fallback_trace()
+    if trace is not None:  # the trace is request-scoped; check when visible
+        assert REASON_TTFT_TIMEOUT in str(trace.as_event_payload())
+
+
+@pytest.mark.asyncio
+async def test_ttft_not_applied_to_non_streaming_tool_downgrade() -> None:
+    """openai_compat + tools runs the non-streaming downgrade; its 'first
+    output' is the whole answer, so TTFT must not cut it."""
+    from coderouter.translation import AnthropicTool
+    from tests.test_fallback_anthropic import FakeOpenAIAdapter
+
+    class SlowOpenAI(FakeOpenAIAdapter):
+        async def generate(self, request, *, overrides=None):  # type: ignore[no-untyped-def]
+            await asyncio.sleep(0.2)
+            return await super().generate(request, overrides=overrides)
+
+    cfg = CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[
+            ProviderConfig(
+                name="first", base_url="http://127.0.0.1:9931/v1", model="m", ttft_timeout_s=0.05
+            ),
+            ProviderConfig(name="second", base_url="http://127.0.0.1:9932/v1", model="m"),
+        ],
+        profiles=[FallbackChain(name="default", providers=["first", "second"])],
+    )
+    slow = SlowOpenAI(cfg.providers[0], text="local answer")
+    other = FakeOpenAIAdapter(cfg.providers[1], text="cloud answer")
+    engine = _engine_with_adapters(cfg, {"first": slow, "second": other})
+    req = _anth_req(stream=True)
+    req = req.model_copy(
+        update={"tools": [AnthropicTool(name="t", description="d", input_schema={"type": "object"})]}
+    )
+    events = await _collect(engine, req)
+    assert "local answer" in _text(events)
+    assert other.generate_calls == [] and other.stream_calls == []
