@@ -875,3 +875,58 @@ class TestRestoredHeadRespectsBudget:
                 f"over-window at {window} but the preserve floor ({floor}) fits — "
                 f"the restored head caused it: {result}"
             )
+
+
+# ---------------------------------------------------------------------------
+# v2.16.0: context_budget_action: reject
+# ---------------------------------------------------------------------------
+
+
+class TestContextBudgetReject:
+    # Reuse the builders without re-running the parent class's tests.
+    _make_config = TestEngineApplyContextBudget._make_config
+    _make_engine = TestEngineApplyContextBudget._make_engine
+
+    def test_reject_over_threshold_raises_prompt_is_too_long(self):
+        from coderouter.guards.context_budget import ContextBudgetRejectError
+
+        config = self._make_config(action="reject", max_context_tokens=100)
+        engine = self._make_engine(config)
+        request = _make_long_request(10, chars_per_msg=96)
+        with pytest.raises(ContextBudgetRejectError) as info:
+            engine.apply_context_budget(request)
+        assert str(info.value).startswith("prompt is too long")
+        assert info.value.max_context_tokens == 100
+
+    def test_reject_between_warn_and_threshold_only_warns(self):
+        config = self._make_config(
+            action="reject", max_context_tokens=100, warn_threshold=0.80, trim_threshold=0.95
+        )
+        engine = self._make_engine(config)
+        request = _make_request([("user", "x" * 340)])  # 85%
+        result_req, status = engine.apply_context_budget(request)
+        assert status == "warning"
+        assert len(result_req.messages) == 1
+
+    def test_reject_reaches_client_as_anthropic_400(self, monkeypatch):
+        from fastapi.testclient import TestClient
+
+        from coderouter.ingress.app import create_app
+        from coderouter.routing import FallbackEngine
+
+        config = self._make_config(action="reject", max_context_tokens=100)
+        monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: config)
+        app = create_app()
+        app.state.engine = FallbackEngine(config)
+        app.state.config = config
+        body = {
+            "model": "claude-sonnet-5",
+            "max_tokens": 16,
+            "messages": [{"role": "user", "content": "x" * 2000}],
+        }
+        for stream in (False, True):
+            resp = TestClient(app).post("/v1/messages", json={**body, "stream": stream})
+            assert resp.status_code == 400, resp.text
+            payload = resp.json()
+            assert payload["error"]["type"] == "invalid_request_error"
+            assert payload["error"]["message"].startswith("prompt is too long")

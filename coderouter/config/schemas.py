@@ -1089,7 +1089,13 @@ class FallbackChain(BaseModel):
     #                (``context_budget_preserve_last_n``) are always
     #                kept, and tool_use / tool_result pairs are preserved
     #                atomically to avoid breaking agent loops.
-    context_budget_action: Literal["off", "warn", "trim"] = Field(
+    #   * ``reject`` — v2.16.0: ``warn`` + at ``context_budget_trim_threshold``
+    #                refuse the request with Anthropic's own overflow error
+    #                (HTTP 400, ``prompt is too long: ...``). Claude Code
+    #                answers that by compacting the conversation itself
+    #                (a summary, not a silent cut), so this is the
+    #                recommended action for Claude Code sessions.
+    context_budget_action: Literal["off", "warn", "trim", "reject"] = Field(
         default="off",
         description=(
             "v2.0-F (L1): action when estimated request tokens approach "
@@ -1097,7 +1103,10 @@ class FallbackChain(BaseModel):
             "disables the guard entirely. ``warn`` emits a log and "
             "response header at ``context_budget_warn_threshold``. "
             "``trim`` additionally removes old messages at "
-            "``context_budget_trim_threshold`` to reclaim context space."
+            "``context_budget_trim_threshold`` to reclaim context space. "
+            "``reject`` (v2.16.0) instead answers HTTP 400 "
+            "``prompt is too long`` at that threshold so the client "
+            "compacts the conversation itself (Claude Code does)."
         ),
     )
     context_budget_warn_threshold: float = Field(
@@ -1222,6 +1231,31 @@ class FallbackChain(BaseModel):
     # --- v2.0-H (L6): Mid-stream partial stitching --------------------------
     #   * ``off``      — discard partial content on mid-stream failure (legacy).
     #   * ``surface``  — return partial content as a truncated-but-valid response.
+    # v2.16.0 (tool search): Claude Code 2.1.304+ turns tool search on behind
+    # a custom ANTHROPIC_BASE_URL. The request then carries a server-side
+    # tool-search tool (``type: tool_search_tool_*``) and tools marked
+    # ``defer_loading: true``, which only api.anthropic.com executes. A
+    # local model sees the search tool as an ordinary function (and may
+    # "call" it), while every deferred MCP tool lands in its context anyway.
+    # Claude Code retries without tool search when the gateway answers 400.
+    #   * ``auto``        — ``passthrough`` when every provider in the chain
+    #                       is ``kind: anthropic`` on api.anthropic.com,
+    #                       otherwise ``reject`` (default).
+    #   * ``reject``      — answer 400 so the client turns tool search off.
+    #   * ``expand``      — drop the search tool and the ``defer_loading``
+    #                       flags; every tool is sent up front.
+    #   * ``passthrough`` — forward unchanged (pre-v2.16.0 behaviour).
+    deferred_tools_action: Literal["auto", "reject", "expand", "passthrough"] = Field(
+        default="auto",
+        description=(
+            "v2.16.0: what to do with Claude Code tool search "
+            "(``defer_loading`` tools / ``tool_search_tool_*``). ``auto`` "
+            "passes it through only for chains made entirely of "
+            "api.anthropic.com providers and rejects it (HTTP 400, which "
+            "makes Claude Code retry without tool search) otherwise."
+        ),
+    )
+
     partial_stitch_action: Literal["off", "surface"] = Field(
         default="off",
         description=(

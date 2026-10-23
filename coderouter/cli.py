@@ -166,6 +166,17 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     doctor.add_argument(
+        "--check-claude-code",
+        action="store_true",
+        help=(
+            "v2.16.0: check the local Claude Code install for gateway use — "
+            "known-bad versions (<2.1.301, 2.1.304) and the env vars that "
+            "matter behind a non-Anthropic gateway (ENABLE_TOOL_SEARCH, "
+            "CLAUDE_CODE_MAX_CONTEXT_TOKENS, CLAUDE_CODE_AUTO_MODE_SERVER). "
+            "No network. Exit 0 OK / 2 needs attention."
+        ),
+    )
+    doctor.add_argument(
         "--config",
         default=None,
         help=(
@@ -455,6 +466,28 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     vscode_init.add_argument(
+        "--max-context-tokens",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "v2.16.0: also write CLAUDE_CODE_MAX_CONTEXT_TOKENS=N so Claude "
+            "Code compacts before your local model's context fills up "
+            "(since 2.1.285 it assumes 1M behind a gateway). Use the "
+            "smallest context window in the profile's chain."
+        ),
+    )
+    vscode_init.add_argument(
+        "--no-claude-code-env",
+        action="store_true",
+        help=(
+            "v2.16.0: do not write the Claude Code gateway settings "
+            "(ENABLE_TOOL_SEARCH=false, CLAUDE_CODE_AUTO_MODE_SERVER=0, "
+            "and --max-context-tokens). Use when the chain is "
+            "api.anthropic.com only."
+        ),
+    )
+    vscode_init.add_argument(
         "--dry-run",
         action="store_true",
         help=(
@@ -595,10 +628,16 @@ def _run_doctor(args: argparse.Namespace) -> int:
     risks AND broken providers can use a single command.
     """
     check_secrets = bool(getattr(args, "check_secrets", False))
-    if args.check_model is None and args.check_env is None and not check_secrets:
+    check_claude_code = bool(getattr(args, "check_claude_code", False))
+    if (
+        args.check_model is None
+        and args.check_env is None
+        and not check_secrets
+        and not check_claude_code
+    ):
         print(
             "doctor: provide --check-model PROVIDER, --check-env [PATH], "
-            "and/or --check-secrets",
+            "--check-secrets and/or --check-claude-code",
             file=sys.stderr,
         )
         return 1
@@ -613,6 +652,14 @@ def _run_doctor(args: argparse.Namespace) -> int:
 
     if check_secrets:
         worst_exit = max(worst_exit, _run_check_secrets(args.config))
+
+    if check_claude_code:
+        from coderouter.doctor_claude_code import format_report as _cc_format
+        from coderouter.doctor_claude_code import run_check as _cc_run
+
+        cc_report = _cc_run()
+        print(_cc_format(cc_report))
+        worst_exit = max(worst_exit, cc_report.exit_code)
 
     if args.check_model is not None:
         worst_exit = max(worst_exit, _run_check_model(args))
@@ -976,6 +1023,7 @@ def _run_vscode_init(args: argparse.Namespace) -> int:
     """
     from coderouter.vscode_init import (
         DEFAULT_PORT,
+        claude_code_env,
         exit_code_for,
         format_result,
         run_vscode_init,
@@ -991,6 +1039,22 @@ def _run_vscode_init(args: argparse.Namespace) -> int:
 
     port = args.port if args.port is not None else DEFAULT_PORT
 
+    extra_env: dict[str, str] | None = None
+    max_ctx = getattr(args, "max_context_tokens", None)
+    if getattr(args, "no_claude_code_env", False):
+        if max_ctx is not None:
+            print(
+                "vscode-init: --max-context-tokens has no effect with --no-claude-code-env",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        try:
+            extra_env = claude_code_env(max_context_tokens=max_ctx)
+        except ValueError as exc:
+            print(f"vscode-init: {exc}", file=sys.stderr)
+            return 2
+
     try:
         result = run_vscode_init(
             target,
@@ -999,6 +1063,7 @@ def _run_vscode_init(args: argparse.Namespace) -> int:
             with_envrc=args.with_envrc,
             dry_run=args.dry_run,
             force=args.force,
+            extra_env=extra_env,
         )
     except FileNotFoundError as exc:
         # Raised only when target vanishes between the pre-check above

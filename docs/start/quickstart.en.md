@@ -190,6 +190,16 @@ export ANTHROPIC_BASE_URL="http://localhost:8088"
 export ANTHROPIC_AUTH_TOKEN="dummy"   # CodeRouter ignores auth; any placeholder works
 ```
 
+Recommended (v2.16.0+) for Claude Code behind a gateway:
+
+```bash
+export ENABLE_TOOL_SEARCH=false              # tool search runs only on api.anthropic.com
+export CLAUDE_CODE_AUTO_MODE_SERVER=0        # keep auto mode's permission classifier client-side
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768  # match your local model's context window
+```
+
+`coderouter vscode-init --max-context-tokens 32768` writes these into VSCode's integrated terminal, and `coderouter doctor --check-claude-code` checks them (and warns about Claude Code versions with known gateway bugs).
+
 ### A-3. Start it
 
 ```bash

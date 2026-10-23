@@ -9,6 +9,80 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.16.0] — 2026-10-24 (Claude Code 2.1.3xx behind a gateway)
+
+Claude Code 2.1.285–2.1.309 changed several defaults for sessions behind a
+custom `ANTHROPIC_BASE_URL`: tool search is on, Opus 4.7+ / Sonnet 5+ /
+Fable ids are treated as 1M-context models, auto mode asks the gateway for a
+server-side classifier, and recovery from rejected features or an
+overflowing prompt now depends on reading the gateway's error message. This
+release makes CodeRouter answer in the shape those recoveries expect.
+
+### Added
+
+- **Anthropic-shaped errors when the whole chain fails (`/v1/messages`).**
+  A failed chain used to come back as FastAPI's `{"detail": "..."}` with
+  HTTP 502 whatever the upstreams said. It now uses Anthropic's envelope
+  (`{"type": "error", "error": {"type", "message"}}`) and a status chosen
+  from what the upstreams said (`coderouter/ingress/anthropic_errors.py`):
+  - an upstream context-overflow error (llama.cpp
+    `exceed_context_size_error`, vLLM / OpenAI "maximum context length",
+    Ollama "prompt too long", …) → **400 `invalid_request_error`, message
+    starting `prompt is too long`**, which is what triggers Claude Code's
+    reactive compaction. An overflow caused by the *completion* budget
+    ("… 32000 in the completion", `max_tokens`) is not reported this way —
+    compacting the prompt cannot fix it — and goes out as a plain 400;
+  - a non-retryable upstream 400 / 422 → 400 with the upstream's own
+    message (Claude Code drops a rejected beta header / feature only when it
+    can read why);
+  - 413 → `request_too_large`; 429 → `rate_limit_error` with the upstream's
+    `retry-after` passed through;
+  - upstream 401 / 403 and everything else → 502 `api_error` (they concern
+    CodeRouter's own upstream credentials, not the client's).
+  Upstream messages are secret-redacted and length-capped. `AdapterError`
+  now keeps the upstream body (capped at 4096 chars) and `Retry-After`.
+- **Streaming requests get a real HTTP status for pre-content failures.**
+  The route now pulls the engine's first event before committing the
+  response, so a chain that fails before producing anything is answered
+  with the status above instead of `200` plus an in-stream `error` event —
+  as api.anthropic.com does. Once the first event exists, nothing changes.
+  The wait shares the stream's overall M14 ceiling (one deadline, not two),
+  and a client that disconnects during it cancels the upstream attempt.
+- **`deferred_tools_action` (profile; `auto` | `reject` | `expand` |
+  `passthrough`, default `auto`).** Claude Code 2.1.304+ sends a server-side
+  `tool_search_tool_*` and tools marked `defer_loading: true`; only
+  api.anthropic.com runs the search. `auto` passes the request through only
+  when every provider in the chain is `kind: anthropic` on api.anthropic.com
+  and otherwise answers 400, which makes Claude Code (2.1.305+) retry
+  without tool search. `expand` drops the search tool and the flags and
+  sends every tool up front.
+- **`context_budget_action: reject`.** At `context_budget_trim_threshold`
+  the guard answers 400 `prompt is too long: ~N tokens > M maximum` instead
+  of trimming, so Claude Code summarizes the conversation itself rather
+  than losing history silently. Works for streaming and non-streaming.
+- **`coderouter vscode-init` writes Claude Code gateway settings** by
+  default: `ENABLE_TOOL_SEARCH=false`, `CLAUDE_CODE_AUTO_MODE_SERVER=0`,
+  and — with the new `--max-context-tokens N` —
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS=N`. `--no-claude-code-env` opts out. Same
+  merge / conflict rules as the existing variables; an export of one of
+  them outside the `.envrc` fence conflicts only when this run writes it.
+- **`coderouter doctor --check-claude-code`.** Local-only check of the
+  Claude Code install: warns on versions with known gateway bugs (before
+  2.1.301: compaction can repeat; 2.1.304: every request fails when the
+  gateway rejects tool search) and on missing `ENABLE_TOOL_SEARCH`,
+  `CLAUDE_CODE_MAX_CONTEXT_TOKENS` (2.1.285+) and
+  `CLAUDE_CODE_AUTO_MODE_SERVER`. Exit 0 OK / 2 needs attention.
+
+### Changed
+
+- **Breaking for clients that parse error bodies:** `/v1/messages` errors
+  for a failed chain are no longer `{"detail": "..."}`, and a streaming
+  request whose chain fails before the first event is no longer
+  `200` + `event: error`. Both now match the Anthropic API. The
+  `/v1/chat/completions` (OpenAI) route is unchanged.
+
+---
+
 ## [v2.15.1] — 2026-10-24 (docs and defaults for the October 2026 ecosystem)
 
 ### Added

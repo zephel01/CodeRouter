@@ -458,6 +458,8 @@ class AnthropicAdapter(BaseAdapter):
                 provider=self.name,
                 status_code=resp.status_code,
                 retryable=resp.status_code in _RETRYABLE_STATUSES,
+                upstream_body=resp.text,
+                retry_after=resp.headers.get("retry-after"),
             )
 
         try:
@@ -570,6 +572,8 @@ class AnthropicAdapter(BaseAdapter):
                         provider=self.name,
                         status_code=resp.status_code,
                         retryable=resp.status_code in _RETRYABLE_STATUSES,
+                        upstream_body=body.decode("utf-8", errors="replace"),
+                        retry_after=resp.headers.get("retry-after"),
                     )
 
                 # Anthropic SSE block shape:

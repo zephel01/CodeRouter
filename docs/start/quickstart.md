@@ -185,7 +185,14 @@ npm install -g @anthropic-ai/claude-code
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:8088"
 export ANTHROPIC_AUTH_TOKEN="dummy"   # CodeRouter は認証を見ない、ダミーで OK
+
+# 推奨 (v2.16.0〜): ゲートウェイ越しの Claude Code 向け設定
+export ENABLE_TOOL_SEARCH=false            # tool search は api.anthropic.com 専用
+export CLAUDE_CODE_AUTO_MODE_SERVER=0      # auto mode の権限判定をクライアント側で
+export CLAUDE_CODE_MAX_CONTEXT_TOKENS=32768  # ローカルモデルの文脈長に合わせる
 ```
+
+`coderouter vscode-init --max-context-tokens 32768` を使えば、これらを VSCode の統合ターミナルに書き込めます。設定の確認は `coderouter doctor --check-claude-code` で行えます（既知の不具合がある Claude Code の版も警告します）。
 
 ### A-3. 起動
 

@@ -36,10 +36,10 @@ profiles:
     providers:
       - ollama-qwen3
     # Context Budget Guard (v2.0.0)
-    context_budget_action: warn          # off | warn | trim
+    context_budget_action: warn          # off | warn | trim | reject
     context_budget_warn_threshold: 0.80  # 使用率 80% で warning
-    # ↓ 以下 3 つは action: trim のときだけ効く (warn では inert)
-    context_budget_trim_threshold: 0.90  # 使用率 90% で自動 trim
+    # ↓ trim_threshold は trim / reject で効く。下の 2 つは trim のときだけ (warn では inert)
+    context_budget_trim_threshold: 0.90  # 使用率 90% で自動 trim (reject なら 400 を返す)
     context_budget_trim_target: 0.75     # trim 後の目標使用率
     context_budget_preserve_last_n: 4    # 直近 N messages は常に保持
 ```
@@ -57,9 +57,9 @@ profiles:
 
 | パラメータ | デフォルト | 説明 |
 |---|---|---|
-| `context_budget_action` | `off` | `off`: 無効 / `warn`: 警告のみ / `trim`: 警告 + 自動トリム |
+| `context_budget_action` | `off` | `off`: 無効 / `warn`: 警告のみ / `trim`: 警告 + 自動トリム / `reject`(v2.16.0): 警告 + 閾値超えで HTTP 400 `prompt is too long` を返す |
 | `context_budget_warn_threshold` | `0.80` | 警告を発する context 使用率 |
-| `context_budget_trim_threshold` | `0.90` | 自動 trim を発火する context 使用率 |
+| `context_budget_trim_threshold` | `0.90` | 自動 trim(`reject` なら 400)を発火する context 使用率 |
 | `context_budget_trim_target` | `0.75` | trim 後の目標使用率 (ここまで messages を削除) |
 | `context_budget_preserve_last_n` | `4` | 直近 N messages は trim しても必ず保持 |
 
@@ -68,7 +68,8 @@ profiles:
 | ユースケース | 推奨 action |
 |---|---|
 | まず様子を見たい | `warn` — ログと header で通知、messages は触らない |
-| 長時間 session を安定運用したい | `trim` — 自動で overflow を防ぐ |
+| Claude Code で長時間 session を回したい | **`reject`**(v2.16.0) — Anthropic と同じ「prompt is too long」の 400 を返し、**Claude Code 自身に会話を要約(compaction)させる**。履歴を黙って削らない |
+| Claude Code 以外のクライアントで長時間 session を安定運用したい | `trim` — 自動で overflow を防ぐ |
 | 自前で token 管理している | `off` — guard 無効 |
 
 ## 動作の仕組み

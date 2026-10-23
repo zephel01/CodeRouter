@@ -436,6 +436,16 @@ def _apply_context_budget_guard(
     if profile.context_budget_action == "warn" or not estimate.over_trim_threshold:
         return request, "warning"
 
+    # v2.16.0: reject → let the client compact instead of trimming here.
+    if profile.context_budget_action == "reject":
+        from coderouter.guards.context_budget import ContextBudgetRejectError
+
+        raise ContextBudgetRejectError(
+            estimated_tokens=estimate.estimated_tokens,
+            max_context_tokens=estimate.max_context_tokens,
+            profile=profile.name,
+        )
+
     # Over trim threshold + action is trim → trim messages
     trimmed_request, trim_result = trim_to_budget(
         request,
