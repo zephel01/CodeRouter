@@ -6,8 +6,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from coderouter.config.schemas import (
-    AutoRouteRule,
     AutoRouterConfig,
+    AutoRouteRule,
     CodeRouterConfig,
     FallbackChain,
     ProviderConfig,

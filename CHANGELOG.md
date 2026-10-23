@@ -9,6 +9,38 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.18.0] — 2026-10-24 (route on Claude Code's own request hints)
+
+### Added
+
+- **auto_router matchers on Claude Code's gateway hint headers.** With
+  `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (Claude Code 2.1.273+), every request
+  says what it is. Three new `RuleMatcher` fields read those headers:
+  - `request_class` — `x-claude-code-request-class` (`main` / `subagent` /
+    `workflow` / `compaction` / `auxiliary`), case-insensitive;
+  - `agent_type` — `x-claude-code-agent-type` (e.g. `Explore`),
+    case-insensitive;
+  - `compaction: true` — `x-claude-code-compaction` is truthy (`false` is
+    rejected at load, like the other boolean matchers).
+  Typical use: auto-mode classifier / title calls (`auxiliary`) to the
+  smallest local model, compaction to a long-context profile, `Explore`
+  sub-agents to a fast one. Without the headers these matchers never match,
+  so existing rule sets behave exactly as before. `classify()` gained an
+  optional `hints` argument; both `/v1/messages` and `/v1/chat/completions`
+  pass the headers through. Docs: `docs/guides/subagent-routing.md` / `.en.md`.
+- **`slot_affinity_slots` (provider; llama.cpp only).** For
+  `llama-server --parallel N`: requests carrying a conversation key
+  (`x-claude-code-session-id`) get `id_slot = sha256(key) % N`, so every
+  turn of a conversation reuses the same slot's prompt cache instead of
+  re-prefilling on whichever slot is free. Stable across restarts; an
+  explicit `id_slot` in `extra_body` wins; off by default. Works on both the
+  native (`kind: anthropic`) and translated (`kind: openai_compat`) paths.
+  Docs: `docs/backends/llamacpp-direct.md` / `.en.md`.
+- **`vscode-init` also writes `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`**, and
+  `doctor --check-claude-code` reports (as info) when it is missing.
+
+---
+
 ## [v2.17.0] — 2026-10-24 (time-to-first-token cut-off, retry signals)
 
 ### Added

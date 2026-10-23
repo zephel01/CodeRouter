@@ -316,3 +316,23 @@ provider name は `llamacpp-<モデル>` の命名で揃えると `examples/prov
 既知の問題として、nextn 埋め込みモデル(または speculative decoding 有効時)と `--split-mode tensor` の組み合わせは llama.cpp がクラッシュすることがあります([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309))。該当する場合は `--split-mode layer` を使ってください。
 
 **この一連の手組みは [CodeRouter Launcher](./launcher.md#mtp--speculative-decoding-llamacpp) が自動化しています** — メインの gguf に nextn が埋め込まれているか、同じフォルダに companion の draft/MTP gguf があれば、Launcher が `--spec-type` / `--model-draft` を自動検出して起動コマンドに付与します(`MTP` 欄で `off` にすれば無効化も可能)。
+
+## 複数スロットで会話ごとに KV キャッシュを使い回す（v2.18.0）
+
+`llama-server --parallel N` で起動すると、サーバは N 個のスロットを持ち、それぞれがプロンプトのキャッシュを抱えます。何も指定しないと空いているスロットが選ばれるため、同じ会話の次のターンが別のスロットに行き、プロンプト全体を処理し直すことがあります。
+
+provider に `slot_affinity_slots: N`（`--parallel` と同じ数）を書くと、CodeRouter は会話ごとに `id_slot = hash(セッション) % N` を付けて送り、同じ会話は毎回同じスロットに入ります。
+
+```yaml
+providers:
+  - name: local-llamacpp
+    kind: openai_compat
+    base_url: http://127.0.0.1:8080/v1
+    model: ""
+    slot_affinity_slots: 4     # llama-server --parallel 4 と合わせる
+```
+
+- 会話の識別には、Claude Code がヒントヘッダで送る `x-claude-code-session-id` を使います。`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` が必要です（`coderouter vscode-init` が設定します）。ヘッダが無い要求には何も付けません。
+- llama.cpp 専用の設定です。ほかのサーバには付けないでください（無視されるか、未知のパラメータとして拒否されます）。
+- `extra_body` で `id_slot` を明示している場合は、そちらが優先されます。
+- 会話の数がスロット数より多いと、別の会話が同じスロットを共有します（そのたびにキャッシュは入れ替わります）。
