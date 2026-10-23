@@ -32,6 +32,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from coderouter.adapters.base import ChatRequest
+from coderouter.adapters.slot_affinity import affinity_key
 from coderouter.logging import get_logger
 from coderouter.routing import FallbackEngine, NoProvidersAvailableError
 from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify, extract_gateway_hints
@@ -201,7 +202,7 @@ async def chat_completions(
 
     # v2.18.0: gateway hint headers (routing matchers + KV-slot affinity key).
     gateway_hints = extract_gateway_hints(request.headers)
-    chat_req.session_key = gateway_hints.get("session_id")
+    chat_req.session_key = affinity_key(gateway_hints)
 
     # Header-based override (body wins if both are set — see module docstring)
     if chat_req.profile is None and x_coderouter_profile:

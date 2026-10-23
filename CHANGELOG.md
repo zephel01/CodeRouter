@@ -34,7 +34,12 @@ are kept verbatim where the Japanese text itself is the subject).
   turn of a conversation reuses the same slot's prompt cache instead of
   re-prefilling on whichever slot is free. Stable across restarts; an
   explicit `id_slot` in `extra_body` wins; off by default. Works on both the
-  native (`kind: anthropic`) and translated (`kind: openai_compat`) paths.
+  native (`kind: anthropic`) and translated (`kind: openai_compat`) paths,
+  and survives every internal request rebuild (thinking strip for backends
+  without thinking, `tool_choice` emulation, `cache_control` strip,
+  OpenAI→Anthropic translation). The main conversation and its compaction
+  share a key; sub-agents and auxiliary calls get `<session>:<class>:<agent>`
+  so they do not queue on — or evict — the main conversation's slot.
   Docs: `docs/backends/llamacpp-direct.md` / `.en.md`.
 - **`vscode-init` also writes `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`**, and
   `doctor --check-claude-code` reports (as info) when it is missing.

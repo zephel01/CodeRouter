@@ -280,6 +280,7 @@ providers:
     slot_affinity_slots: 4     # match llama-server --parallel 4
 ```
 
+- The main conversation and its compaction share a slot. Sub-agents and auxiliary calls (auto-mode classifier, titles, …) get their own key per kind, so they neither wait on the main slot nor evict its cache.
 - The conversation key is `x-claude-code-session-id`, one of Claude Code's hint headers; it needs `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (set by `coderouter vscode-init`). Requests without it get nothing added.
 - llama.cpp only — do not set it for other servers (they ignore `id_slot` or reject it as unknown).
 - An `id_slot` set explicitly in `extra_body` wins.

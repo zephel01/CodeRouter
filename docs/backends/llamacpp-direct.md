@@ -332,6 +332,7 @@ providers:
     slot_affinity_slots: 4     # llama-server --parallel 4 と合わせる
 ```
 
+- 本会話と、その要約（compaction）は同じスロットを使います。サブエージェントや補助呼び出し（auto mode の判定、タイトル生成など）は、種類ごとに別のキーになり、本会話のスロットを待たず、そのキャッシュも上書きしません。
 - 会話の識別には、Claude Code がヒントヘッダで送る `x-claude-code-session-id` を使います。`CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` が必要です（`coderouter vscode-init` が設定します）。ヘッダが無い要求には何も付けません。
 - llama.cpp 専用の設定です。ほかのサーバには付けないでください（無視されるか、未知のパラメータとして拒否されます）。
 - `extra_body` で `id_slot` を明示している場合は、そちらが優先されます。

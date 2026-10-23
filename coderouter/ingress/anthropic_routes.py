@@ -31,6 +31,7 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from coderouter.adapters.base import StreamTruncatedError
+from coderouter.adapters.slot_affinity import affinity_key
 from coderouter.guards.context_budget import ContextBudgetRejectError
 from coderouter.guards.tool_loop import ToolCountExceededError, ToolLoopBreakError
 from coderouter.ingress.anthropic_errors import (
@@ -229,7 +230,7 @@ async def messages(
     # v2.18.0: Claude Code gateway hint headers — routing matchers below,
     # and the conversation key for llama-server KV-slot affinity.
     gateway_hints = extract_gateway_hints(request.headers)
-    anth_req.session_key = gateway_hints.get("session_id")
+    anth_req.session_key = affinity_key(gateway_hints)
 
     # Profile selection — body field wins over header (same policy as OpenAI route).
     if anth_req.profile is None and x_coderouter_profile:
