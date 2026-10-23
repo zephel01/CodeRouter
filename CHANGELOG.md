@@ -9,6 +9,53 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.17.0] — 2026-10-24 (time-to-first-token cut-off, retry signals)
+
+### Added
+
+- **`ttft_timeout_s` (provider).** A streaming attempt that has not
+  produced its first real output (text / tool_use / thinking delta) within
+  this many seconds is abandoned before any byte reached the client, and
+  the chain moves on — e.g. a local llama-server still loading a model or
+  prefilling a long prompt while a cloud provider could answer now. Never
+  applied to the last provider of a chain (nothing to fall back to), nor to
+  non-streaming requests (`timeout_s` covers those), nor to the
+  `/v1/chat/completions` route. It is also skipped for the tool-turn
+  downgrade (`kind: openai_compat` with tools, which calls the upstream
+  non-streaming so tool calls can be repaired): there the "first output" is
+  the whole answer, and a deadline would discard slow but healthy replies —
+  use `kind: anthropic` (native `/v1/messages`) to get the cut-off for a
+  local server. It always covers the
+  wait for the first event; covering the gap between the opening events and
+  the first real output needs `empty_response_action: fallback`, which is
+  what withholds those events from the client. Abandoned attempts are
+  ordinary retryable failures: new fallback reason `ttft-timeout` (detail
+  `no-first-token`) and the self-healing guards learn from them. A cut that
+  happens after the opening events is handled like a truncated stream: the
+  withheld, unterminated preamble is never flushed to the client if the
+  rest of the chain also fails, and the abandoned upstream stream is closed
+  immediately. Default
+  `None` (off). Docs: `docs/concepts/commit-point.md` / `.en.md`.
+- **`x-should-retry` on `/v1/messages` errors.** Every Anthropic-shaped
+  error CodeRouter produces now says whether retrying can help — the header
+  Claude Code reads, with `retry-after`, to decide whether to spend its
+  retry budget: `false` for 400 / 413 (including tool-search and
+  `context_budget_action: reject` refusals), `true` for 429, and for 502
+  `true` only when at least one upstream failure was retryable (a chain that
+  failed purely on 401/403 fails the same way on every retry).
+- **Docs: the commit point** (`docs/concepts/commit-point.md` / `.en.md`) —
+  which failures before the body ships CodeRouter can still move to another
+  provider, which it cannot, and the error each chain failure becomes.
+  Recommends `empty_response_action: fallback` for Claude Code profiles.
+
+### Known limits
+
+- No keep-alive `ping` is sent while opening events are withheld; keep
+  `ttft_timeout_s` below the client's idle timeout
+  (`CLAUDE_STREAM_IDLE_TIMEOUT_MS` for Claude Code).
+
+---
+
 ## [v2.16.0] — 2026-10-24 (Claude Code 2.1.3xx behind a gateway)
 
 Claude Code 2.1.285–2.1.309 changed several defaults for sessions behind a

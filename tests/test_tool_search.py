@@ -118,6 +118,7 @@ def test_route_rejects_tool_search_for_local_chain(monkeypatch: pytest.MonkeyPat
     assert resp.status_code == 400
     assert resp.json()["error"]["type"] == "invalid_request_error"
     assert "tool search" in resp.json()["error"]["message"]
+    assert resp.headers["x-should-retry"] == "false"
     assert engine.seen == []  # refused before dispatch
 
 

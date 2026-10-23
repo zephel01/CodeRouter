@@ -550,6 +550,28 @@ class ProviderConfig(BaseModel):
         description="If true, only used when ALLOW_PAID=true (plan.md §2.3).",
     )
     timeout_s: float = Field(default=30.0, ge=1.0, le=86400.0)
+    # v2.17.0: time-to-first-token cut-off for streaming requests. When the
+    # provider has not produced its first real output (text / tool_use /
+    # thinking delta) within this many seconds of the attempt starting, the
+    # attempt is abandoned and the chain moves on — before any byte reached
+    # the client. Never applied to the last provider of a chain (nothing to
+    # move on to), nor to non-streaming requests (``timeout_s`` covers
+    # those). Before the first *event* it always applies; between the first
+    # event and the first real output it needs
+    # ``empty_response_action: fallback`` on the profile, which is what
+    # withholds those opening events from the client. ``None`` (default)
+    # disables it. Typical use: a local llama-server still loading a model
+    # or chewing through a long prompt while a cloud fallback could answer.
+    ttft_timeout_s: float | None = Field(
+        default=None,
+        gt=0.0,
+        le=3600.0,
+        description=(
+            "v2.17.0: seconds to wait for the first real streamed output "
+            "before falling back to the next provider (not applied to the "
+            "last provider in a chain). None disables."
+        ),
+    )
 
     # v2.6 language-tax track: path to a LOCAL ``tokenizer.json`` for this
     # provider's model, used to measure the CJK over-count vs the char/4
