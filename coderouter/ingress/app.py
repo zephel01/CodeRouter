@@ -19,6 +19,7 @@ from coderouter.ingress.dashboard_routes import router as dashboard_router
 from coderouter.ingress.launcher_routes import router as launcher_router
 from coderouter.ingress.metrics_routes import router as metrics_router
 from coderouter.ingress.openai_routes import router as openai_router
+from coderouter.ingress.responses_routes import router as responses_router
 from coderouter.logging import configure_logging, get_logger
 from coderouter.metrics import install_collector
 from coderouter.plugins import discover_and_load
@@ -491,6 +492,8 @@ def create_app(config_path: str | None = None) -> FastAPI:
 
     app.include_router(openai_router, prefix="/v1", tags=["openai-compat"])
     app.include_router(anthropic_router, prefix="/v1", tags=["anthropic-compat"])
+    # v2.19.0: OpenAI Responses API (Codex CLI).
+    app.include_router(responses_router, prefix="/v1", tags=["openai-responses"])
     # v1.5-A: /metrics.json sits at the root (no /v1 prefix) — metrics are not
     # part of the OpenAI / Anthropic API surface, and Prometheus-style
     # endpoints conventionally live at the root in v1.5-B.
