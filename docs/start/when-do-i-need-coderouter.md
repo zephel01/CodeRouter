@@ -11,7 +11,7 @@
 | エージェント | wire 形式 | Ollama に直接向けられる？ | CodeRouter 必要？ |
 |---|---|---|---|
 | **Claude Code** | Anthropic `/v1/messages` | ✕ — Ollama は OpenAI しか喋らない | **必須** — 翻訳こそが本題 |
-| **Codex CLI** (`@openai/codex`) | OpenAI | ◯ — `OPENAI_BASE_URL` で | オプション — フィルタ / フォールバックが欲しいときだけ |
+| **Codex CLI** (`@openai/codex`) | OpenAI Responses | ◯ — Responses API を持つサーバ(Ollama / LM Studio / llama.cpp)へ | **現状は使えない** — 現行の Codex は Responses API 専用で、CodeRouter は未対応(対応予定) |
 | **素の OpenAI SDK / `curl`** | OpenAI | ◯ — `base_url` で | オプション — 同上 |
 | **gemini-cli** | Gemini | ✕ — 別 wire | 必要（Gemini アダプタ追加時） |
 | **GitHub Copilot CLI** (`gh copilot`) | GitHub 独自 | **✕ — バックエンド固定** | **無力** — Copilot 側が差し替え不可 |
@@ -70,10 +70,8 @@ CodeRouter の出力フィルタと修復ロジックは、**特定のモデル�
 何かを導入する前に、まず直続きが本当に動くか試すのが早いです:
 
 ```bash
-# Codex CLI（あるいは任意の OpenAI 互換ツール）を Ollama に向ける
-export OPENAI_BASE_URL=http://localhost:11434/v1
-export OPENAI_API_KEY=ollama  # ダミー。Ollama は無視
-codex "write a function that reverses a string in rust"
+# Codex を Ollama に直結する(Codex 組み込みの OSS provider)
+codex --oss "write a function that reverses a string in rust"
 ```
 
 以下 4 症状を観察:

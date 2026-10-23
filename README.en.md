@@ -21,7 +21,7 @@
 ## What it does — in 30 seconds
 
 ```
-Your agent (Claude Code / codex / agy)
+Your agent (Claude Code / agy, etc. *)
         │
         ▼
   ┌─ CodeRouter ──┐
@@ -30,6 +30,8 @@ Your agent (Claude Code / codex / agy)
   │  guard + heal  │──→  ③ Paid (Claude — opt-in only)
   └────────────────┘
 ```
+
+\* Current codex CLI speaks only the Responses API (`/v1/responses`), so it cannot go through CodeRouter yet (planned). Direct-connect workaround → [quickstart Pattern B](./docs/start/quickstart.en.md#pattern-b-use-it-with-the-codex-cli)
 
 **What it does for you:**
 
@@ -55,6 +57,8 @@ uvx --from coderouter-cli coderouter serve --port 8088
 
 For a permanent install: `uv tool install coderouter-cli`
 
+> **Mind the package name**: the PyPI package is **`coderouter-cli`**. The PyPI package named `coderouter` is a different product; don't `pip install coderouter`.
+
 ---
 
 ## Use with Claude Code
@@ -79,7 +83,7 @@ That's it. Claude Code works as usual, but your local Ollama is answering behind
 |---|---|
 | Claude Code + local Ollama, tool calling breaks | **Yes** — wire translation + tool repair |
 | Claude Code + local, dies after long sessions | **Helpful** — 6 guards + self-healing |
-| codex / agy + Ollama works fine | Optional — if you want fallback |
+| codex / agy + Ollama works fine | Optional — if you want fallback (codex: once `/v1/responses` lands) |
 | Using Claude API directly, no issues | Not needed |
 
 Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-coderouter.en.md)
@@ -93,7 +97,7 @@ Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-cod
 | Feature | What it does |
 |---|---|
 | **Wire translation** | Claude Code (Anthropic format) ↔ Ollama (OpenAI format) auto-converted |
-| **Tool-call repair** | JSON that local models emit as plain text → valid tool_use blocks |
+| **Tool-call repair** | JSON that local models emit as plain text → valid tool_use blocks. Measured in the [repair benchmark](./benchmarks/tool-repair/README.md): four models that break tool calls go from 0% to 80–100% success; zero false repairs on the regression corpus, gated in CI |
 | **3-tier fallback** | Local → free cloud → paid, automatic switching |
 | **Output filters** | Strips leaked `<think>` tags, stop markers, XML tool tags |
 
@@ -267,6 +271,14 @@ CodeRouter runs as an independent backend router layer. Point any project's `OPE
 ## Security
 
 Secrets go in env vars, not config files. See [`docs/security.en.md`](./docs/guides/security.en.md) for the full policy and reporting instructions.
+
+Releases are protected in layers. No single one of these is offered as proof of safety (tampered builds have shipped from legitimate pipelines before).
+
+- Published to PyPI via Trusted Publishing (OIDC); no long-lived API token exists
+- PyPI accepts uploads only from `release.yml` running in the `pypi` environment
+- Tags are cut only after a pre-flight script checks version, CHANGELOG and main
+- Five runtime dependencies
+- An SBOM (CycloneDX) is attached to every release
 
 ## License
 

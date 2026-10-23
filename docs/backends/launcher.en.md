@@ -106,7 +106,7 @@ The Launcher screen is made up of a "MODELS panel," a "LAUNCH form," a "PROCESSE
 | Field | Description |
 |---|---|
 | **Name** | Any identifier for management purposes (e.g. `qwen-coder-8080`) |
-| **Port** | The port the server will run on (default `8080`) |
+| **Port** | The port the server will run on (default `8080`). The Launcher always passes `--port`, so llama.cpp's own default-port change (9931 since b11521) does not affect it |
 | **Backend** | Choose from `llama.cpp` / `vllm` / `mlx`. The resolved binary path and availability are shown below |
 | **Model path** | Selected from the MODELS panel or entered directly |
 | **Option profile** | Choose a preset defined in `providers.yaml` |

@@ -78,6 +78,9 @@ hf download unsloth/Qwen3.6-35B-A3B-GGUF \
 ```
 
 - `--port 8080`: where CodeRouter connects.
+
+> **About llama.cpp's default port**: since llama.cpp b11521 (2026-10-09), `llama-server` started without `--port` listens on **9931** (older builds: 8080). The commands on this page pass `--port 8080` explicitly, so they work on either build. If you start it without `--port`, point `base_url` in `providers.yaml` at `:9931`. `coderouter doctor --check-model` calls this out when one port refuses and the other answers.
+
 - `--ctx-size 32768`: leaves headroom for Claude Code's 15-20K-token system prompt.
 - `--n-predict 4096`: per-call generation cap.
 - `--jinja`: use the chat template embedded in GGUF metadata (Unsloth GGUFs ship one).

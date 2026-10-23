@@ -21,7 +21,7 @@
 ## 何ができるか — 30 秒で
 
 ```
-あなたのエージェント (Claude Code / codex / agy)
+あなたのエージェント (Claude Code / agy ほか ※)
         │
         ▼
   ┌─ CodeRouter ─┐
@@ -30,6 +30,8 @@
   │  自動フォールバック │──→  ③ 有料 (Claude — opt-in 時のみ)
   └──────────────┘
 ```
+
+※ 現行の codex CLI は Responses API（`/v1/responses`）専用になったため、CodeRouter 経由ではまだ使えません（対応予定）。直結の代替手順 → [quickstart Pattern B](./docs/start/quickstart.md#pattern-b-codex-cli-で使う)
 
 **やってくれること:**
 
@@ -73,6 +75,8 @@ uvx --from coderouter-cli coderouter serve --port 8088
 
 恒久インストールしたい場合: `uv tool install coderouter-cli`
 
+> **パッケージ名に注意**: PyPI のパッケージ名は **`coderouter-cli`** です。PyPI の `coderouter`（名前だけ同じ）は別の製品なので、`pip install coderouter` と打たないでください。
+
 ---
 
 ## Claude Code で使う
@@ -98,7 +102,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | Claude Code + ローカル Ollama で tool calling が壊れる | **必須** — tool 修復 (+ 必要なら wire 変換) |
 | Claude Code + ローカルで長時間回すと止まる | **必須級** — 6 系統ガード + self-healing |
 | Ollama v0.14+ / LM Studio にネイティブ直結で動いてる | **便利** — 直結に無い fallback / ガード / 診断を追加 (passthrough で翻訳ゼロ) |
-| codex / agy + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら |
+| codex / agy + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら(codex は `/v1/responses` 対応後) |
 | Claude API を直接叩いてて問題ない | 不要 |
 
 詳細は → [要否判定ガイド](./docs/start/when-do-i-need-coderouter.md)
@@ -111,7 +115,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 
 | 機能 | 何をしてくれるか |
 |---|---|
-| **Tool-call 修復** | ローカルモデルがテキストで吐いた JSON を正しい tool_use ブロックに復元 |
+| **Tool-call 修復** | ローカルモデルがテキストで吐いた JSON を正しい tool_use ブロックに復元。実測は [修復ベンチ](./benchmarks/tool-repair/README.md)（壊れた tool call を出す 4 モデルで成功率 0% → 80〜100%、回帰コーパスで誤修復 0 件。CI でゲート） |
 | **3 層フォールバック** | ローカル → 無料クラウド → 有料の順に自動切替 |
 | **出力フィルタ** | `<think>` タグ漏れ、stop marker 漏れ、byte-fallback (`<0xNN>`) を自動除去/修復 |
 | **Wire 翻訳** | Anthropic 形式 ↔ OpenAI 形式を自動変換 (ネイティブ `/v1/messages` 対応 backend は passthrough で翻訳ゼロ) |
@@ -287,6 +291,14 @@ CodeRouter は backend ルーター層として独立して動きます。`OPENA
 ## Security
 
 シークレットは環境変数に置きます。[`docs/security.md`](./docs/guides/security.md) に完全な方針と報告手順があります。
+
+リリースは多層で守っています。どれか 1 つを根拠に「安全」とは言いません(正規のパイプラインでビルドされた汚染版が出た例があります)。
+
+- PyPI へは Trusted Publishing(OIDC)で公開し、長期の API トークンを置かない
+- PyPI 側の公開許可は `release.yml` の `pypi` 環境に限定している
+- タグは事前検査スクリプトを通してから打つ(version・CHANGELOG・main の一致を機械的に確認)
+- 実行時の依存は 5 個に絞っている
+- 各リリースに SBOM(CycloneDX)を添付する
 
 ## License
 

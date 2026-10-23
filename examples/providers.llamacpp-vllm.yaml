@@ -29,7 +29,8 @@
 # ポート番号は /launcher の Launch フォームで指定したものと合わせてください。
 
 providers:
-  # llama.cpp (llama-server) を 8080 で起動した場合
+  # llama.cpp (llama-server) を --port 8080 で起動した場合
+  # (b11521 以降の llama.cpp は --port を省略すると 9931 で待ち受ける)
   - name: llama-cpp-local
     kind: openai_compat
     base_url: http://localhost:8080/v1

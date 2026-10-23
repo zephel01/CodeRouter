@@ -9,6 +9,46 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.15.1] — 2026-10-24 (docs and defaults for the October 2026 ecosystem)
+
+### Added
+
+- **`doctor` names llama.cpp's default-port change.** llama.cpp b11521
+  (2026-10-09, ggml-org/llama.cpp#30159) moved `llama-server`'s default
+  listen port from 8080 to 9931. When the `auth+basic-chat` probe cannot
+  connect to a loopback provider on :8080 or :9931, `doctor` now checks the
+  other port's `/health` (1.5 s, IPv4 literal) and, if it answers, says so
+  in the transport-error detail with the two possible fixes. The config is
+  never rewritten. Other hosts and ports send no extra request.
+- **SBOM on every release.** `release.yml` builds a CycloneDX JSON SBOM
+  (`cyclonedx-bom==7.4.0`) from a clean venv holding only the wheel and its
+  runtime dependencies, and attaches `coderouter-cli-<version>.cdx.json` to
+  the GitHub Release draft. It is written outside `dist/`, so the PyPI
+  upload is unchanged.
+
+### Changed
+
+- **Codex CLI instructions corrected.** The quickstart (Pattern B), README
+  and the "do I need CodeRouter?" guide told users to set
+  `wire_api = "chat"`. Codex removed that option in 2026-02 and now fails
+  while loading such a config; it speaks only the Responses API, which
+  CodeRouter does not serve yet. The docs now say so and give the
+  direct-connect workaround (`codex --oss`, or a `wire_api = "responses"`
+  provider pointing at `llama-server`).
+- **llama.cpp port notes.** Backend guides and examples keep their explicit
+  `--port 8080` (correct on every build) and now explain the 9931 default
+  for servers started without `--port`. The Launcher is unaffected: it
+  always passes `--port`, so its 8080 default stays.
+- **README: package-name warning.** The PyPI project named `coderouter` is
+  a different product; the install section now says to install
+  `coderouter-cli`.
+- **README: repair benchmark and release protections.** The tool-call
+  repair row links the benchmark and its numbers, and the Security section
+  lists the release protections as layers rather than resting on
+  Trusted Publishing alone.
+
+---
+
 ## [v2.15.0] — 2026-08-21 (fallback explainability + stream truncation detection)
 
 ### Added

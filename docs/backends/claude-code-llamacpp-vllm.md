@@ -35,6 +35,8 @@ llama-server -m ~/models/<model>.gguf --host 127.0.0.1 --port 8080 \
 # 起動ログの「n_ctx = 32768」を必ず確認する
 ```
 
+> **llama.cpp の既定ポートについて**: llama.cpp b11521(2026-10-09)以降、`--port` を省略した `llama-server` は **9931** で待ち受けます(それより前は 8080)。このページの手順は `--port 8080` を明示しているので、どちらの版でもそのまま動きます。`--port` を省略して起動した場合は、`providers.yaml` の `base_url` を `:9931` に合わせてください。`coderouter doctor --check-model` は、片方のポートに繋がらずもう片方が応答しているときにそう指摘します。
+
 **vLLM（NVIDIA GPU）**
 
 ```bash

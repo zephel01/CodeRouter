@@ -78,6 +78,8 @@ llama-server -m ./model.gguf --port 8080
 curl http://localhost:8080/v1/models
 ```
 
+> **About llama.cpp's default port**: since llama.cpp b11521 (2026-10-09), `llama-server` started without `--port` listens on **9931** (older builds: 8080). The commands on this page pass `--port 8080` explicitly, so they work on either build. If you start it without `--port`, point `base_url` in `providers.yaml` at `:9931`. `coderouter doctor --check-model` calls this out when one port refuses and the other answers.
+
 ### Common pitfalls
 
 - **CUDA and Metal cannot coexist in one binary.** Build/download for the machine you will run on.
