@@ -36,10 +36,10 @@ profiles:
     providers:
       - ollama-qwen3
     # Context Budget Guard (v2.0.0)
-    context_budget_action: warn          # off | warn | trim
+    context_budget_action: warn          # off | warn | trim | reject
     context_budget_warn_threshold: 0.80  # warning at 80% usage
-    # the three below only apply when action is trim (inert under warn)
-    context_budget_trim_threshold: 0.90  # auto trim at 90% usage
+    # trim_threshold applies to trim and reject; the two after it only to trim (inert under warn)
+    context_budget_trim_threshold: 0.90  # auto trim at 90% usage (reject: answer 400)
     context_budget_trim_target: 0.75     # target usage after trim
     context_budget_preserve_last_n: 4    # always keep the last N messages
 ```
@@ -57,9 +57,9 @@ profiles:
 
 | Parameter | Default | Description |
 |---|---|---|
-| `context_budget_action` | `off` | `off`: disabled / `warn`: warn only / `trim`: warn + auto trim |
+| `context_budget_action` | `off` | `off`: disabled / `warn`: warn only / `trim`: warn + auto trim / `reject` (v2.16.0): warn + answer HTTP 400 `prompt is too long` past the threshold |
 | `context_budget_warn_threshold` | `0.80` | context usage at which a warning is issued |
-| `context_budget_trim_threshold` | `0.90` | context usage at which an auto trim fires |
+| `context_budget_trim_threshold` | `0.90` | context usage at which an auto trim (or, with `reject`, the 400) fires |
 | `context_budget_trim_target` | `0.75` | target usage after trim (removes messages down to here) |
 | `context_budget_preserve_last_n` | `4` | the last N messages are always kept even during a trim |
 
@@ -68,7 +68,8 @@ profiles:
 | Use case | Recommended action |
 |---|---|
 | Want to observe first | `warn` — notifies via log and header, does not touch messages |
-| Want stable long-session operation | `trim` — automatically prevents overflow |
+| Long Claude Code sessions | **`reject`** (v2.16.0) — answers with Anthropic's own "prompt is too long" 400, so **Claude Code compacts (summarizes) the conversation itself** instead of history being cut silently |
+| Long sessions with other clients | `trim` — automatically prevents overflow |
 | Managing tokens yourself | `off` — guard disabled |
 
 ## How it works

@@ -878,3 +878,83 @@ def test_block_rewrite_keeps_the_0600_mode(tmp_path: Path) -> None:
     run_vscode_init(tmp_path, with_envrc=True)
     run_vscode_init(tmp_path, with_envrc=True, port=9999)
     assert _mode_of(tmp_path / ".envrc") == 0o600
+
+
+# ---------------------------------------------------------------------------
+# v2.16.0: Claude Code gateway env vars
+# ---------------------------------------------------------------------------
+
+
+def test_cli_writes_claude_code_env_by_default(tmp_path: Path) -> None:
+    rc = cli.main(["vscode-init", "--target", str(tmp_path)])
+    assert rc == 0
+    env = _read_settings(tmp_path)["terminal.integrated.env.osx"]
+    assert env["ENABLE_TOOL_SEARCH"] == "false"
+    assert env["CLAUDE_CODE_AUTO_MODE_SERVER"] == "0"
+    # Only written when the operator states the window.
+    assert "CLAUDE_CODE_MAX_CONTEXT_TOKENS" not in env
+
+
+def test_cli_max_context_tokens_flows_into_env(tmp_path: Path) -> None:
+    rc = cli.main(["vscode-init", "--target", str(tmp_path), "--max-context-tokens", "32768"])
+    assert rc == 0
+    for os_key in ("osx", "linux", "windows"):
+        env = _read_settings(tmp_path)[f"terminal.integrated.env.{os_key}"]
+        assert env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] == "32768"
+
+
+def test_cli_no_claude_code_env_writes_base_vars_only(tmp_path: Path) -> None:
+    rc = cli.main(["vscode-init", "--target", str(tmp_path), "--no-claude-code-env"])
+    assert rc == 0
+    env = _read_settings(tmp_path)["terminal.integrated.env.osx"]
+    assert set(env) == {"ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN"}
+
+
+def test_cli_rejects_max_context_with_no_claude_code_env(tmp_path: Path) -> None:
+    rc = cli.main(
+        ["vscode-init", "--target", str(tmp_path), "--no-claude-code-env", "--max-context-tokens", "8192"]
+    )
+    assert rc == 2
+    assert not (tmp_path / ".vscode").exists()
+
+
+def test_cli_rejects_non_positive_max_context(tmp_path: Path) -> None:
+    rc = cli.main(["vscode-init", "--target", str(tmp_path), "--max-context-tokens", "0"])
+    assert rc == 2
+
+
+def test_envrc_block_carries_claude_code_env(tmp_path: Path) -> None:
+    rc = cli.main(
+        ["vscode-init", "--target", str(tmp_path), "--with-envrc", "--max-context-tokens", "65536"]
+    )
+    assert rc == 0
+    text = (tmp_path / ".envrc").read_text(encoding="utf-8")
+    assert 'export ENABLE_TOOL_SEARCH="false"' in text
+    assert 'export CLAUDE_CODE_AUTO_MODE_SERVER="0"' in text
+    assert 'export CLAUDE_CODE_MAX_CONTEXT_TOKENS="65536"' in text
+
+
+def test_envrc_outside_export_of_claude_code_var_conflicts_only_when_written(
+    tmp_path: Path,
+) -> None:
+    envrc = tmp_path / ".envrc"
+    # First run creates the fenced block; then the operator adds their own
+    # ENABLE_TOOL_SEARCH outside it.
+    assert cli.main(["vscode-init", "--target", str(tmp_path), "--with-envrc"]) == 0
+    envrc.write_text(envrc.read_text(encoding="utf-8") + 'export ENABLE_TOOL_SEARCH="true"\n', encoding="utf-8")
+    # Writing it again would shadow theirs → conflict (exit 2).
+    assert cli.main(["vscode-init", "--target", str(tmp_path), "--with-envrc"]) == 2
+    # Opting out of the Claude Code vars → their export is theirs to keep.
+    assert (
+        cli.main(["vscode-init", "--target", str(tmp_path), "--with-envrc", "--no-claude-code-env"])
+        == 0
+    )
+
+
+def test_rerun_is_idempotent_with_claude_code_env(tmp_path: Path) -> None:
+    args = ["vscode-init", "--target", str(tmp_path), "--with-envrc", "--max-context-tokens", "32768"]
+    assert cli.main(args) == 0
+    before = (_read_settings(tmp_path), (tmp_path / ".envrc").read_text(encoding="utf-8"))
+    assert cli.main(args) == 0
+    after = (_read_settings(tmp_path), (tmp_path / ".envrc").read_text(encoding="utf-8"))
+    assert before == after

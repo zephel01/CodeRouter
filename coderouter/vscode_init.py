@@ -112,6 +112,37 @@ _MANAGED_ENV_KEYS: tuple[str, ...] = (
     "CODEROUTER_MODE",
 )
 
+# v2.16.0: Claude Code settings for a gateway that is not api.anthropic.com.
+# Written by default (``--no-claude-code-env`` opts out):
+#
+# * ``ENABLE_TOOL_SEARCH=false`` — 2.1.304 turned tool search on behind a
+#   custom ANTHROPIC_BASE_URL. Only api.anthropic.com runs the search; the
+#   gateway would answer 400 on every session's first request and Claude
+#   Code would retry without it. Saying so up front skips that round trip.
+# * ``CLAUDE_CODE_AUTO_MODE_SERVER=0`` — on gateways auto mode defaults to
+#   the server-side permission classifier, which a local backend does not
+#   provide; ``0`` keeps the classifier client-side (its requests then go
+#   through CodeRouter like any other request).
+# * ``CLAUDE_CODE_MAX_CONTEXT_TOKENS`` — only when ``--max-context-tokens``
+#   is given. Since 2.1.285 Claude Code assumes a 1M window behind a
+#   gateway for Opus 4.7+ / Sonnet 5+ / Fable ids, so auto-compaction would
+#   wait far past what a local model holds.
+CLAUDE_CODE_ENV_KEYS: tuple[str, ...] = (
+    "ENABLE_TOOL_SEARCH",
+    "CLAUDE_CODE_AUTO_MODE_SERVER",
+    "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
+)
+
+
+def claude_code_env(*, max_context_tokens: int | None = None) -> dict[str, str]:
+    """v2.16.0: the Claude Code env vars ``vscode-init`` writes by default."""
+    env = {"ENABLE_TOOL_SEARCH": "false", "CLAUDE_CODE_AUTO_MODE_SERVER": "0"}
+    if max_context_tokens is not None:
+        if max_context_tokens <= 0:
+            raise ValueError("max_context_tokens must be positive")
+        env["CLAUDE_CODE_MAX_CONTEXT_TOKENS"] = str(max_context_tokens)
+    return env
+
 
 @dataclass(frozen=True)
 class FileOutcome:
@@ -155,6 +186,7 @@ def run_vscode_init(
     with_envrc: bool = False,
     dry_run: bool = False,
     force: bool = False,
+    extra_env: dict[str, str] | None = None,
 ) -> VSCodeInitResult:
     """Scaffold VSCode workspace settings for CodeRouter.
 
@@ -182,6 +214,9 @@ def run_vscode_init(
         When true, existing conflicting values are overwritten. Without
         this flag, a conflict is reported with a diff and the file is
         left untouched.
+    extra_env:
+        v2.16.0: additional variables to write next to the base ones
+        (the CLI passes :func:`claude_code_env`). Same conflict rules.
 
     Raises
     ------
@@ -205,6 +240,7 @@ def run_vscode_init(
             profile=profile,
             force=force,
             dry_run=dry_run,
+            extra_env=extra_env,
         )
     )
 
@@ -217,6 +253,7 @@ def run_vscode_init(
                 profile=profile,
                 force=force,
                 dry_run=dry_run,
+                extra_env=extra_env,
             )
         )
 
@@ -235,6 +272,7 @@ def _apply_settings_json(
     profile: str | None,
     force: bool,
     dry_run: bool,
+    extra_env: dict[str, str] | None = None,
 ) -> FileOutcome:
     desired_env: dict[str, str] = {
         "ANTHROPIC_BASE_URL": base_url,
@@ -242,6 +280,8 @@ def _apply_settings_json(
     }
     if profile:
         desired_env["CODEROUTER_MODE"] = profile
+    if extra_env:
+        desired_env.update(extra_env)
 
     old_text = ""
     if path.exists():
@@ -401,6 +441,7 @@ def _apply_envrc(
     profile: str | None,
     force: bool,
     dry_run: bool,
+    extra_env: dict[str, str] | None = None,
 ) -> FileOutcome:
     """Write (or refresh) the managed block in ``.envrc``.
 
@@ -413,7 +454,7 @@ def _apply_envrc(
       which now *appends* the block rather than replacing the file. The
       operator's lines survive either way.
     """
-    block = _render_envrc_block(base_url=base_url, profile=profile)
+    block = _render_envrc_block(base_url=base_url, profile=profile, extra_env=extra_env)
 
     old_text = ""
     if path.exists():
@@ -467,7 +508,7 @@ def _apply_envrc(
                 before.rstrip("\n") + ("\n\n" if before.strip() else "")
             ) + block + ("\n\n" + after.lstrip("\n") if after.strip() else "\n")
 
-        conflicts = _unmanaged_conflicts(outside)
+        conflicts = _unmanaged_conflicts(outside, extra_keys=tuple(extra_env or ()))
         if conflicts:
             # direnv applies exports in order, so a duplicate outside the
             # fence would silently win or lose depending on placement.
@@ -568,7 +609,9 @@ def _split_managed_block(text: str) -> tuple[str, str] | None:
     return text[:start], text[end + len(_ENVRC_END) :].lstrip("\n")
 
 
-def _render_envrc_block(*, base_url: str, profile: str | None) -> str:
+def _render_envrc_block(
+    *, base_url: str, profile: str | None, extra_env: dict[str, str] | None = None
+) -> str:
     """The fenced block CodeRouter owns, markers included."""
     lines = [
         _ENVRC_BEGIN,
@@ -579,18 +622,25 @@ def _render_envrc_block(*, base_url: str, profile: str | None) -> str:
     ]
     if profile:
         lines.append(f'export CODEROUTER_MODE="{profile}"')
+    for key, value in (extra_env or {}).items():
+        lines.append(f'export {key}="{value}"')
     lines.append(_ENVRC_END)
     return "\n".join(lines)
 
 
-def _unmanaged_conflicts(outside_text: str) -> list[str]:
-    """Managed variables the operator exports outside our block."""
+def _unmanaged_conflicts(outside_text: str, *, extra_keys: tuple[str, ...] = ()) -> list[str]:
+    """Managed variables the operator exports outside our block.
+
+    v2.16.0: ``extra_keys`` (the Claude Code variables this run writes) are
+    checked too — but only when this run writes them, so an operator who
+    passed ``--no-claude-code-env`` can keep their own exports.
+    """
     found: list[str] = []
     for line in outside_text.splitlines():
         stripped = line.strip()
         if stripped.startswith("#"):
             continue
-        for var in _MANAGED_ENVRC_VARS:
+        for var in (*_MANAGED_ENVRC_VARS, *extra_keys):
             if stripped.startswith((f"export {var}=", f"{var}=")) and var not in found:
                 found.append(var)
     return found

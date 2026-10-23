@@ -46,6 +46,14 @@ coderouter vscode-init
 }
 ```
 
+v2.16.0 からは、上の 2 つに加えて **Claude Code をゲートウェイ越しに使うための設定**も書き込みます（`--no-claude-code-env` で無効化できます）。
+
+| 変数 | 値 | 理由 |
+|---|---|---|
+| `ENABLE_TOOL_SEARCH` | `false` | Claude Code 2.1.304 以降、カスタム `ANTHROPIC_BASE_URL` でも tool search が既定で有効になった。tool search を実行できるのは api.anthropic.com だけで、CodeRouter は 400 で断る（`deferred_tools_action`）。Claude Code はそこで tool search を外して再送するが、その 1 往復を最初から省く |
+| `CLAUDE_CODE_AUTO_MODE_SERVER` | `0` | ゲートウェイ越しの auto mode は、既定でサーバー側の権限判定を使う。ローカルのバックエンドにはそれが無いので、判定をクライアント側で行わせる |
+| `CLAUDE_CODE_MAX_CONTEXT_TOKENS` | `--max-context-tokens N` の値 | 指定したときだけ書く。2.1.285 以降、Opus 4.7+ / Sonnet 5+ / Fable の ID はゲートウェイ越しでも 1M の文脈窓と見なされるため、ローカルモデルの文脈があふれるまで自動 compaction が走らない。チェーン内で**いちばん小さい**ローカルモデルの文脈長を指定する |
+
 以後、そのプロジェクトを VSCode で開き、統合ターミナルで `claude` と打つだけで CodeRouter 経由になります。**そのワークスペースにいる間だけ**環境変数が効くので、他プロジェクトや claude.ai には影響しません。
 
 ### 主なオプション
@@ -55,12 +63,16 @@ coderouter vscode-init [--target PATH]
                        [--port PORT]        # デフォルト 8088
                        [--profile NAME]     # CODEROUTER_MODE を追加
                        [--with-envrc]       # direnv 用 .envrc も生成
+                       [--max-context-tokens N]  # CLAUDE_CODE_MAX_CONTEXT_TOKENS (v2.16.0)
+                       [--no-claude-code-env]    # Claude Code 向けの変数を書かない (v2.16.0)
                        [--dry-run]          # 差分だけ表示、書き込まない
                        [--force]            # 既存値の上書き / 未管理の .envrc の取り込み
 ```
 
 - `--port 4000`: `coderouter serve` を素で起動して 4000 で動かしている場合
 - `--profile local-first`: 常に `local-first` プロファイルへルーティング（`CODEROUTER_MODE=local-first` が terminal env に載る）
+- `--max-context-tokens 32768`: ローカルモデルの文脈長を Claude Code に伝える。あわせて profile に `context_budget_action: reject` を設定すると、あふれる前に Claude Code 自身が会話を要約する（[context-budget](../concepts/context-budget.md)）
+- `--no-claude-code-env`: チェーンが api.anthropic.com だけで、tool search やサーバー側の auto mode を使いたい場合
 - `--dry-run`: 書き込む予定の内容を unified diff で表示するだけ（`.envrc` を生成する場合はそれも含む）。ファイルは `.bak` も含めて一切作りません
 - `--force`: 既定はコンフリクト報告のみで書かない、を解除するフラグ。効き方はファイルごとに違うので次節を参照
 
