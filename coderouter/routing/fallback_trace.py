@@ -111,6 +111,8 @@ REASON_EMPTY_STREAM: Final = "empty-stream"
 # ``connection`` (the transport itself broke). Produced only when the profile
 # sets ``stream_truncation_action: error``.
 REASON_STREAM_TRUNCATED: Final = "stream-truncated"
+# v2.17.0: no first real output within the provider's ``ttft_timeout_s``.
+REASON_TTFT_TIMEOUT: Final = "ttft-timeout"
 
 # -- degrade reasons (pre-existing strings; never produce a hop) -----------
 # Kept here so the whole ``reason`` vocabulary is readable in one place.
@@ -141,6 +143,7 @@ ATTEMPT_FAILURE_REASONS: Final[frozenset[str]] = frozenset(
         REASON_EMPTY_RESPONSE,
         REASON_EMPTY_STREAM,
         REASON_STREAM_TRUNCATED,
+        REASON_TTFT_TIMEOUT,
     }
 )
 
@@ -207,6 +210,8 @@ def describe_adapter_error(exc: AdapterError) -> str:
         # Not a transport fault — the HTTP body ended cleanly; it was the
         # LLM protocol inside it that never closed.
         return "no-terminator"
+    if reason == REASON_TTFT_TIMEOUT:
+        return "no-first-token"
     return f"transport={reason}"
 
 
@@ -227,10 +232,12 @@ def classify_adapter_error(exc: AdapterError) -> str:
     ``adapters.base`` is a TYPE_CHECKING-only import at module scope here
     (the runtime import order would otherwise cycle through the registry).
     """
-    from coderouter.adapters.base import StreamTruncatedError
+    from coderouter.adapters.base import StreamTruncatedError, TTFTTimeoutError
 
     if isinstance(exc, StreamTruncatedError):
         return REASON_STREAM_TRUNCATED
+    if isinstance(exc, TTFTTimeoutError):
+        return REASON_TTFT_TIMEOUT
     status = exc.status_code
     if status is None:
         message = str(exc).lower()

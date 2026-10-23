@@ -200,6 +200,23 @@ class StreamTruncatedError(AdapterError):
         self.tool_call_in_flight = tool_call_in_flight
 
 
+# v2.17.0: the provider did not produce its first real streamed output within
+# ``ProviderConfig.ttft_timeout_s``. Raised by the engine (not the adapter),
+# before any byte reached the client, so the chain falls back normally and the
+# self-healing guards learn from it like any other retryable failure.
+class TTFTTimeoutError(AdapterError):
+    """No first token within ``ttft_timeout_s``."""
+
+    def __init__(self, *, provider: str, ttft_timeout_s: float) -> None:
+        super().__init__(
+            f"timeout: no first token within {ttft_timeout_s:g}s (ttft_timeout_s)",
+            provider=provider,
+            status_code=None,
+            retryable=True,
+        )
+        self.ttft_timeout_s = ttft_timeout_s
+
+
 # v0.6-B: per-call overrides resolved from the active profile. The engine
 # builds one instance per request (since a profile is invariant across its
 # chain) and threads it through every adapter call on that chain. Adapters

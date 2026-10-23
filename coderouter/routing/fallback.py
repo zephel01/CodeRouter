@@ -47,6 +47,7 @@ from coderouter.adapters.base import (
     ProviderCallOverrides,
     StreamChunk,
     StreamTruncatedError,
+    TTFTTimeoutError,
 )
 from coderouter.adapters.registry import build_adapter
 from coderouter.config.schemas import CodeRouterConfig, ProviderConfig
@@ -896,6 +897,38 @@ def _emit_cache_observed_streaming(
         language_tax_usd=cost.language_tax_usd,
         language_tax_multiplier=cost.language_tax_multiplier,
     )
+
+
+async def _await_within_ttft(
+    awaitable: Any,
+    *,
+    deadline: float | None,
+    provider: str,
+    ttft_timeout_s: float | None,
+) -> Any:
+    """v2.17.0: await ``awaitable`` but give up at the TTFT ``deadline``.
+
+    ``deadline`` is a ``time.monotonic()`` instant (``None`` = no limit). On
+    expiry raises :class:`TTFTTimeoutError` — a retryable ``AdapterError``, so
+    every existing pre-content fallback branch handles it unchanged. The
+    cancelled await unwinds the adapter's generator, which releases its
+    upstream connection.
+    """
+    if deadline is None:
+        return await awaitable
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        close = getattr(awaitable, "close", None)
+        if close is not None:
+            close()
+        raise TTFTTimeoutError(provider=provider, ttft_timeout_s=ttft_timeout_s or 0.0)
+    try:
+        async with asyncio.timeout(remaining):
+            return await awaitable
+    except TimeoutError as exc:
+        raise TTFTTimeoutError(
+            provider=provider, ttft_timeout_s=ttft_timeout_s or 0.0
+        ) from exc
 
 
 class NoProvidersAvailableError(CodeRouterError):
@@ -3354,7 +3387,7 @@ class FallbackEngine:
         # keeps the default byte-for-byte identical to v2.14.0.
         last_empty_stream_truncated = False
 
-        for adapter, will_degrade in chain:
+        for chain_idx, (adapter, will_degrade) in enumerate(chain):
             is_native = isinstance(adapter, AnthropicAdapter)
             downgrading = (not is_native) and bool(request.tools)
             effective_request = request
@@ -3414,6 +3447,14 @@ class FallbackEngine:
             # only the non-streaming generate_anthropic recorded, so the
             # busiest path produced no adaptive signal.
             attempt_started = time.monotonic()
+            # v2.17.0: TTFT cut-off. Never on the last provider — there is
+            # nothing left to fall back to, so waiting is the better answer.
+            ttft_s = getattr(adapter.config, "ttft_timeout_s", None)
+            ttft_deadline = (
+                attempt_started + ttft_s
+                if ttft_s is not None and chain_idx < len(chain) - 1
+                else None
+            )
             event_iter: AsyncIterator[AnthropicStreamEvent]
             first: AnthropicStreamEvent
             try:
@@ -3422,12 +3463,22 @@ class FallbackEngine:
                 # mypy narrows for stream_anthropic (not on BaseAdapter).
                 if isinstance(adapter, AnthropicAdapter):
                     event_iter = adapter.stream_anthropic(effective_request, overrides=overrides)
-                    first = await anext(event_iter)
+                    first = await _await_within_ttft(
+                        anext(event_iter),
+                        deadline=ttft_deadline,
+                        provider=adapter.name,
+                        ttft_timeout_s=ttft_s,
+                    )
                 elif downgrading:
                     # v0.3-D downgrade: run non-streaming, repair, replay.
                     chat_req = to_chat_request(effective_request)
                     chat_req.stream = False
-                    chat_resp = await adapter.generate(chat_req, overrides=overrides)
+                    chat_resp = await _await_within_ttft(
+                        adapter.generate(chat_req, overrides=overrides),
+                        deadline=ttft_deadline,
+                        provider=adapter.name,
+                        ttft_timeout_s=ttft_s,
+                    )
                     # H-4: same as the non-streaming branch — keep the
                     # CPU-bound repair scan off the event loop.
                     anth_resp = await asyncio.to_thread(
@@ -3441,7 +3492,12 @@ class FallbackEngine:
                     event_iter = stream_chat_to_anthropic_events(
                         adapter.stream(chat_req, overrides=overrides)
                     )
-                    first = await anext(event_iter)
+                    first = await _await_within_ttft(
+                        anext(event_iter),
+                        deadline=ttft_deadline,
+                        provider=adapter.name,
+                        ttft_timeout_s=ttft_s,
+                    )
             except StopAsyncIteration:
                 # M2: record the empty-stream failure.
                 self._adaptive.record_attempt(
@@ -3557,7 +3613,18 @@ class FallbackEngine:
                                 yield buffered_ev
                             buffer = []
                     try:
-                        pending = await iterator.__anext__()
+                        if content_started:
+                            pending = await iterator.__anext__()
+                        else:
+                            # v2.17.0: the TTFT deadline also covers the
+                            # withheld preamble — first *real* output is
+                            # what counts, not the first event.
+                            pending = await _await_within_ttft(
+                                iterator.__anext__(),
+                                deadline=ttft_deadline,
+                                provider=adapter.name,
+                                ttft_timeout_s=ttft_s,
+                            )
                     except StopAsyncIteration:
                         break
             except AdapterError as exc:
