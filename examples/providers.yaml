@@ -84,6 +84,8 @@ providers:
   # ------------------------------------------------------------
 
   # llama.cpp --api-server — fastest if you have a GGUF loaded
+  # Port: started with `--port 8080` here. llama.cpp b11521+ (2026-10-09)
+  # listens on 9931 when `--port` is omitted (older builds: 8080).
   - name: local-llamacpp
     kind: openai_compat
     base_url: http://localhost:8080/v1
@@ -120,7 +122,7 @@ providers:
   #     --include "*UD-Q4_K_M*" "*tokenizer*" "*chat_template*" \
   #     --local-dir ~/models/qwen3.6-35b-a3b-unsloth
   #
-  #   # 3. llama-server 起動 (port 8080)
+  #   # 3. llama-server 起動 (port 8080 を明示。b11521 以降は省略すると 9931)
   #   ~/llama.cpp/build/bin/llama-server \
   #     --model ~/models/qwen3.6-35b-a3b-unsloth/Qwen3.6-35B-A3B-UD-Q4_K_M.gguf \
   #     --port 8080 --ctx-size 32768 --n-predict 4096 \

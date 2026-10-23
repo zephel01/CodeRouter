@@ -126,11 +126,36 @@ jobs:
           uv pip install --python /tmp/wheel-test/bin/python pytest pytest-asyncio pytest-httpx
           /tmp/wheel-test/bin/python -m pytest -q
 
+      - name: Generate SBOM (CycloneDX)
+        # v2.15.1: attach a software bill of materials to every release.
+        # Built from a clean venv holding only the wheel and its runtime
+        # deps (the /tmp/wheel-test venv above also has pytest and would
+        # pollute the SBOM). Written to sbom/, NOT dist/ — the publish
+        # job uploads everything in dist/ to PyPI and a JSON file there
+        # would fail the upload.
+        run: |
+          uv venv --python 3.12 /tmp/sbom-env
+          uv pip install --python /tmp/sbom-env/bin/python dist/*.whl
+          mkdir -p sbom
+          version="$(grep -m1 '^version = ' pyproject.toml | sed -E 's/^version = "([^"]+)".*/\1/')"
+          uvx --from cyclonedx-bom==7.4.0 cyclonedx-py environment \
+            --output-format JSON \
+            --output-file "sbom/coderouter-cli-${version}.cdx.json" \
+            /tmp/sbom-env/bin/python
+          test -s "sbom/coderouter-cli-${version}.cdx.json" || (echo "::error::SBOM missing" && exit 1)
+          ls -la sbom/
+
       - name: Upload artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: dist
           path: dist/
+
+      - name: Upload SBOM
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: sbom
+          path: sbom/
 
   # ------------------------------------------------------------------
   # 2. Publish to PyPI (only on `v*` tags, not `v*-rcN` or local refs)
@@ -186,6 +211,12 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Download SBOM
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: sbom
+          path: sbom/
+
       - name: Extract release notes from CHANGELOG
         id: notes
         run: |
@@ -220,3 +251,4 @@ jobs:
           files: |
             dist/*.tar.gz
             dist/*.whl
+            sbom/*.cdx.json

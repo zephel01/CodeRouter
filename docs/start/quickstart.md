@@ -199,46 +199,33 @@ profile は自動で `claude-code` (ローカル 2 段 + 無料クラウド) が
 
 ## Pattern B: codex CLI で使う
 
-> **バージョン注意**: Codex 0.88 以降はデフォルトで `wire_api = "responses"` を使い、
-> `/v1/responses` エンドポイントに接続します。CodeRouter は現時点で Chat Completions
-> 経路 (`/v1/chat/completions`) のみ対応しているため、**`wire_api = "chat"` を明示**
-> する必要があります。
+> **現状（2026-10 時点）: 現行の Codex CLI は CodeRouter 経由では使えません。**
+> Codex は 2026-02 に `wire_api = "chat"` を廃止し、Responses API（`/v1/responses`）でしか
+> 通信しなくなりました。古い手順の `wire_api = "chat"` を書くと、現行の Codex は設定の
+> 読み込み時にエラーで止まります。CodeRouter はまだ `/v1/responses` を持っていません
+> （対応予定。それまでの代替は下記）。
 
-### B-1. codex をインストール
+### B-1. 代替: Codex をローカル推論サーバへ直結する
 
-```bash
-npm install -g @openai/codex
-```
+主要なローカル推論サーバは `/v1/responses` を持っているので、CodeRouter を挟まずに
+Codex を直結できます。この場合 CodeRouter のフォールバックと tool 修復は効きません。
 
-### B-2. `~/.codex/config.toml` を作成
+- **Ollama / LM Studio**: `codex --oss`（Codex 組み込みの OSS provider）
+- **llama.cpp（`llama-server`）**: `~/.codex/config.toml` に provider を書く
 
 ```toml
-model = "gpt-4o"          # CodeRouter 側で実際のモデルに差し替えられます
-model_provider = "coderouter"
+model = "local"
+model_provider = "llamacpp"
 
-[model_providers.coderouter]
-name = "CodeRouter"
-base_url = "http://localhost:8088/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "chat"          # ← 必須: responses エンドポイントは未対応
+[model_providers.llamacpp]
+name = "llama.cpp"
+base_url = "http://127.0.0.1:9931/v1"   # b11521 以降の既定ポート。--port を付けたならその値
+wire_api = "responses"
 ```
-
-```bash
-export OPENAI_API_KEY="dummy"   # ダミーで OK (CodeRouter がバックエンドを管理します)
-```
-
-### B-3. 実行
-
-```bash
-codex "write a python function that reverses a string"
-```
-
-同じバックエンドチェーンに対して OpenAI 形式で話しかけているだけです。profile は `default` (ローカル 7b + 無料クラウド) が選ばれます。
 
 > **tool call 非対応モデルについて**: Codex はファイル操作・シェル実行をすべて
-> tool call で行います。Ollama のモデルが tool call に対応していない場合、接続は
-> できてもツールが動きません。`coderouter doctor --check-model <モデル名>` で
-> `tool_calls: OK` を確認してから使ってください。
+> tool call で行います。モデルが tool call に対応していないと、接続はできてもツールが
+> 動きません。
 
 ---
 

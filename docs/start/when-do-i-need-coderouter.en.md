@@ -18,7 +18,7 @@ knob, and what wire format it speaks.
 | Agent | Wire format | Can point at Ollama directly? | Need CodeRouter? |
 |---|---|---|---|
 | **Claude Code** | Anthropic `/v1/messages` | No — Ollama speaks OpenAI | **Yes** — wire translation is the whole point |
-| **Codex CLI** (`@openai/codex`) | OpenAI | Yes, via `OPENAI_BASE_URL` | Optional — only if you need filters / fallback |
+| **Codex CLI** (`@openai/codex`) | OpenAI Responses | Yes, to servers with the Responses API (Ollama / LM Studio / llama.cpp) | **Not usable yet** — current Codex speaks only the Responses API, which CodeRouter does not serve yet (planned) |
 | **Plain OpenAI SDK / `curl`** | OpenAI | Yes, via `base_url` | Optional — same as above |
 | **gemini-cli** | Gemini | No — different wire | Yes, once a Gemini adapter is added |
 | **GitHub Copilot CLI** (`gh copilot`) | GitHub-proprietary | **No — backend is locked** | **N/A** — Copilot cannot be redirected at all |
@@ -91,10 +91,8 @@ Miss any one, and CodeRouter does real work.
 Before adopting anything, prove your direct path actually works:
 
 ```bash
-# Point Codex CLI (or any OpenAI-compatible tool) at Ollama
-export OPENAI_BASE_URL=http://localhost:11434/v1
-export OPENAI_API_KEY=ollama  # dummy, Ollama ignores it
-codex "write a function that reverses a string in rust"
+# Connect Codex straight to Ollama (Codex's built-in OSS provider)
+codex --oss "write a function that reverses a string in rust"
 ```
 
 Watch for these four symptoms:

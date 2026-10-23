@@ -83,6 +83,7 @@ providers:
       env: ANTHROPIC_API_KEY
 
   # ── ローカル (認証なし) ──────────────────────────────────────────────
+  # llama-server を --port 8080 で起動した前提 (b11521+ は省略時 9931)
   - name: local-llama
     kind: openai_compat
     base_url: http://localhost:8080/v1

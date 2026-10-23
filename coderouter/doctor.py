@@ -635,6 +635,49 @@ _PROBE_TOOL_SPEC_ANTHROPIC = {
 }
 
 
+# v2.15.1: llama.cpp changed ``llama-server``'s default listen port from
+# 8080 to 9931 (ggml-org/llama.cpp#30159, build b11521, 2026-10-09). A server
+# started without ``--port`` on a new build is invisible to a provider that
+# still points at :8080, and the reverse holds for configs written against
+# the new default. When the basic probe cannot connect to one of those two
+# ports on a loopback host, check the other one so the transport error can
+# name the likely cause instead of looking like "server not running".
+_LLAMACPP_PORT_PAIR: dict[int, int] = {8080: 9931, 9931: 8080}
+_LOOPBACK_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+async def _llamacpp_port_hint(base_url: object) -> str | None:
+    """Return a hint when the other llama.cpp default port answers.
+
+    Only fires for loopback hosts on port 8080 or 9931. The alternate
+    port is probed at ``GET /health`` (llama-server's readiness route)
+    with a short timeout on the IPv4 literal — ``localhost`` can resolve
+    to ``::1`` first on macOS, where llama-server is not listening. The
+    config is never rewritten; the operator decides.
+    """
+    try:
+        parsed = httpx.URL(str(base_url))
+    except (httpx.InvalidURL, TypeError):
+        return None
+    if parsed.host not in _LOOPBACK_HOSTS or parsed.port not in _LLAMACPP_PORT_PAIR:
+        return None
+    other = _LLAMACPP_PORT_PAIR[parsed.port]
+    try:
+        async with httpx.AsyncClient(timeout=1.5) as client:
+            resp = await client.get(f"http://127.0.0.1:{other}/health")
+    except httpx.HTTPError:
+        return None
+    if resp.status_code >= 500:
+        return None
+    return (
+        f"Something is answering on port {other} instead. llama.cpp "
+        f"builds b11521+ listen on 9931 when started without --port "
+        f"(older builds: 8080). Either start llama-server with "
+        f"--port {parsed.port}, or change this provider's base_url to "
+        f"port {other}"
+    )
+
+
 async def _probe_auth_and_basic_chat(
     provider: ProviderConfig,
 ) -> ProbeResult:
@@ -670,10 +713,14 @@ async def _probe_auth_and_basic_chat(
     )
 
     if status is None:
+        detail = f"could not reach {url}: {raw}"
+        hint = await _llamacpp_port_hint(provider.base_url)
+        if hint:
+            detail = f"{detail}. {hint}"
         return ProbeResult(
             name="auth+basic-chat",
             verdict=ProbeVerdict.TRANSPORT_ERROR,
-            detail=f"could not reach {url}: {raw}",
+            detail=detail,
         )
 
     if status in (401, 403):

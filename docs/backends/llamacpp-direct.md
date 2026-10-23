@@ -91,6 +91,8 @@ ls -lah ~/models/qwen3.6-35b-a3b-unsloth/
 - `-ngl 999`: 全 layer を GPU にオフロード (Metal)
 - `--host 127.0.0.1`: localhost からのみ受け付け (security)
 
+> **llama.cpp の既定ポートについて**: llama.cpp b11521(2026-10-09)以降、`--port` を省略した `llama-server` は **9931** で待ち受けます(それより前は 8080)。このページの手順は `--port 8080` を明示しているので、どちらの版でもそのまま動きます。`--port` を省略して起動した場合は、`providers.yaml` の `base_url` を `:9931` に合わせてください。`coderouter doctor --check-model` は、片方のポートに繋がらずもう片方が応答しているときにそう指摘します。
+
 起動 log で以下が出れば OK：
 
 ```

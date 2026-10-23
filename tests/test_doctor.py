@@ -2626,3 +2626,76 @@ async def test_tool_calls_detail_reports_scanned_chars(
 
     assert tool.verdict == ProbeVerdict.NEEDS_TUNING
     assert f"Scanned {len(content)} chars" in tool.detail
+
+
+# ---------------------------------------------------------------------------
+# v2.15.1: llama.cpp default-port hint (8080 → 9931, llama.cpp b11521)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transport_error_names_llamacpp_port_change(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """:8080 refused but :9931 answers → the detail says why."""
+    provider = _oa_provider(base_url="http://localhost:8080/v1", timeout_s=1.0)
+    httpx_mock.add_exception(
+        httpx.ConnectError("refused"),
+        url="http://localhost:8080/v1/chat/completions",
+    )
+    httpx_mock.add_response(url="http://127.0.0.1:9931/health", status_code=200, json={"status": "ok"})
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
+    auth = _probes_by_name(report.results)["auth+basic-chat"]
+    assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
+    assert "port 9931" in auth.detail
+    assert "--port 8080" in auth.detail
+
+
+@pytest.mark.asyncio
+async def test_transport_error_port_hint_reverse_direction(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """A config written for 9931 hints at 8080 (older llama.cpp builds)."""
+    provider = _oa_provider(base_url="http://127.0.0.1:9931/v1", timeout_s=1.0)
+    httpx_mock.add_exception(
+        httpx.ConnectError("refused"),
+        url="http://127.0.0.1:9931/v1/chat/completions",
+    )
+    httpx_mock.add_response(url="http://127.0.0.1:8080/health", status_code=200)
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
+    auth = _probes_by_name(report.results)["auth+basic-chat"]
+    assert "port 8080" in auth.detail
+
+
+@pytest.mark.asyncio
+async def test_transport_error_no_hint_when_other_port_silent(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Neither port answers → plain transport error, no speculative hint."""
+    provider = _oa_provider(base_url="http://localhost:8080/v1", timeout_s=1.0)
+    httpx_mock.add_exception(
+        httpx.ConnectError("refused"),
+        url="http://localhost:8080/v1/chat/completions",
+    )
+    httpx_mock.add_exception(httpx.ConnectError("refused"), url="http://127.0.0.1:9931/health")
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
+    auth = _probes_by_name(report.results)["auth+basic-chat"]
+    assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
+    assert "9931" not in auth.detail
+
+
+@pytest.mark.asyncio
+async def test_transport_error_no_port_probe_for_other_hosts(
+    httpx_mock: HTTPXMock,
+) -> None:
+    """Non-loopback hosts and other ports never trigger the extra probe."""
+    provider = _oa_provider(base_url="http://localhost:11434/v1", timeout_s=1.0)
+    httpx_mock.add_exception(
+        httpx.ConnectError("refused"),
+        url="http://localhost:11434/v1/chat/completions",
+    )
+    report = await check_model(_config_for([provider]), provider.name, registry=_empty_registry())
+    auth = _probes_by_name(report.results)["auth+basic-chat"]
+    assert auth.verdict == ProbeVerdict.TRANSPORT_ERROR
+    # pytest-httpx fails the test on any unexpected request, so reaching
+    # here also proves no /health probe was sent.

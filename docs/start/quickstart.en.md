@@ -202,45 +202,32 @@ The `claude-code` profile (local 2-tier + free cloud) is selected automatically.
 
 ## Pattern B: use it with the codex CLI
 
-> **Version note**: Codex 0.88+ defaults to `wire_api = "responses"`, which posts to
-> `/v1/responses`. CodeRouter currently only handles the Chat Completions path
-> (`/v1/chat/completions`), so you must **explicitly set `wire_api = "chat"`**.
+> **Status (as of 2026-10): current Codex CLI cannot go through CodeRouter.**
+> Codex removed `wire_api = "chat"` in 2026-02 and now speaks only the Responses API
+> (`/v1/responses`). The old instruction to set `wire_api = "chat"` makes current Codex
+> fail while loading its config. CodeRouter does not serve `/v1/responses` yet
+> (planned; until then, use the workaround below).
 
-### B-1. Install codex
+### B-1. Workaround: connect Codex directly to a local inference server
 
-```bash
-npm install -g @openai/codex
-```
+The major local servers already serve `/v1/responses`, so Codex can talk to them without
+CodeRouter in between. CodeRouter's fallback and tool-call repair do not apply in this setup.
 
-### B-2. Create `~/.codex/config.toml`
+- **Ollama / LM Studio**: `codex --oss` (Codex's built-in OSS provider)
+- **llama.cpp (`llama-server`)**: add a provider to `~/.codex/config.toml`
 
 ```toml
-model = "gpt-4o"          # CodeRouter will substitute the real model
-model_provider = "coderouter"
+model = "local"
+model_provider = "llamacpp"
 
-[model_providers.coderouter]
-name = "CodeRouter"
-base_url = "http://localhost:8088/v1"
-env_key = "OPENAI_API_KEY"
-wire_api = "chat"          # required: the responses endpoint is not yet supported
+[model_providers.llamacpp]
+name = "llama.cpp"
+base_url = "http://127.0.0.1:9931/v1"   # default port since b11521; use your --port if you set one
+wire_api = "responses"
 ```
 
-```bash
-export OPENAI_API_KEY="dummy"   # placeholder is fine (CodeRouter manages the backends)
-```
-
-### B-3. Run it
-
-```bash
-codex "write a python function that reverses a string"
-```
-
-Same backend chain, just spoken to in OpenAI shape. The `default` profile (local 7b + free cloud) is selected.
-
-> **Models without tool-call support**: Codex drives all file and shell operations
-> through tool calls. If the Ollama model does not support tool calling, Codex will
-> connect but tools will silently do nothing. Run
-> `coderouter doctor --check-model <model>` and confirm `tool_calls: OK` before use.
+> **Models without tool calling**: Codex does all file and shell work through tool
+> calls. A model without tool-call support will connect, but no tool will work.
 
 ---
 

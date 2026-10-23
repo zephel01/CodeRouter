@@ -35,6 +35,8 @@ llama-server -m ~/models/<model>.gguf --host 127.0.0.1 --port 8080 \
 # Always check "n_ctx = 32768" in the startup log
 ```
 
+> **About llama.cpp's default port**: since llama.cpp b11521 (2026-10-09), `llama-server` started without `--port` listens on **9931** (older builds: 8080). The commands on this page pass `--port 8080` explicitly, so they work on either build. If you start it without `--port`, point `base_url` in `providers.yaml` at `:9931`. `coderouter doctor --check-model` calls this out when one port refuses and the other answers.
+
 **vLLM (NVIDIA GPU)**
 
 ```bash
