@@ -288,6 +288,7 @@ def test_reject_raised_inside_engine_is_400_not_500(monkeypatch: pytest.MonkeyPa
     resp = TestClient(app).post("/v1/messages", json={**_BODY, "stream": stream})
     assert resp.status_code == 400, resp.text
     assert resp.json()["error"]["message"].startswith("prompt is too long")
+    assert resp.headers["x-should-retry"] == "false"
 
 
 @pytest.mark.asyncio

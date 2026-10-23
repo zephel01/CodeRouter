@@ -276,7 +276,9 @@ async def messages(
         )
         if ts_action == "reject":
             return _anthropic_error_response(
-                AnthropicErrorResponse(400, "invalid_request_error", REJECT_MESSAGE)
+                AnthropicErrorResponse(
+                    400, "invalid_request_error", REJECT_MESSAGE, {"x-should-retry": "false"}
+                )
             )
         if ts_action == "expand":
             anth_req = expand_tool_search(anth_req)
@@ -290,7 +292,9 @@ async def messages(
         # v2.16.0: ``context_budget_action: reject`` — Anthropic's own
         # overflow answer, so Claude Code compacts the conversation.
         return _anthropic_error_response(
-            AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+            AnthropicErrorResponse(
+                400, "invalid_request_error", str(exc), {"x-should-retry": "false"}
+            )
         )
 
     if anth_req.stream:
@@ -362,7 +366,9 @@ async def messages(
             # swap) — same answer as the pre-dispatch check above.
             await _aclose_quietly(source)
             return _anthropic_error_response(
-                AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+                AnthropicErrorResponse(
+                400, "invalid_request_error", str(exc), {"x-should-retry": "false"}
+            )
             )
         except (ToolLoopBreakError, ToolCountExceededError, MidStreamError) as exc:
             # Policy errors and mid-stream failures keep their existing
@@ -415,7 +421,9 @@ async def messages(
     except ContextBudgetRejectError as exc:
         # See the streaming branch: the engine can re-run the guard.
         return _anthropic_error_response(
-            AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+            AnthropicErrorResponse(
+                400, "invalid_request_error", str(exc), {"x-should-retry": "false"}
+            )
         )
     except NoProvidersAvailableError as exc:
         # v2.16.0: Anthropic-shaped error with the upstream's own wording
