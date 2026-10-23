@@ -194,12 +194,13 @@ def strip_thinking(request: AnthropicRequest) -> AnthropicRequest:
 
     # model_dump() serializes extras; roundtripping via validate rebuilds a
     # clean instance without the dropped key. exclude=True fields (profile,
-    # anthropic_beta) are omitted by model_dump, so we reassign them.
+    # anthropic_beta, session_key) are omitted by model_dump, so we reassign them.
     dumped = request.model_dump()
     dumped.pop("thinking", None)
     stripped = AnthropicRequest.model_validate(dumped)
     stripped.profile = request.profile
     stripped.anthropic_beta = request.anthropic_beta
+    stripped.session_key = request.session_key
     return stripped
 
 
@@ -450,6 +451,7 @@ def emulate_tool_choice(request: AnthropicRequest) -> AnthropicRequest:
     emulated = AnthropicRequest.model_validate(dumped)
     emulated.profile = request.profile
     emulated.anthropic_beta = request.anthropic_beta
+    emulated.session_key = request.session_key
     return emulated
 
 
@@ -522,6 +524,7 @@ def strip_cache_control(request: AnthropicRequest) -> tuple[AnthropicRequest, in
     stripped = AnthropicRequest.model_validate(dumped)
     stripped.profile = request.profile
     stripped.anthropic_beta = request.anthropic_beta
+    stripped.session_key = request.session_key
     return stripped, removed
 
 

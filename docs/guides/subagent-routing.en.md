@@ -124,7 +124,7 @@ auto_router:
 - `model_pattern` uses **`re.fullmatch`**, not `re.search`. Your regex must match the *entire* string of whatever model name Claude Code actually sends (whether it stays `opus` or expands to `claude-opus-4-8` is environment-dependent). Forgetting the trailing `.*` is a common way for a rule to silently miss.
 - The exact model-name string that arrives is environment- and version-dependent, and cannot be assumed. **Before relying on a rule in production, confirm the real value from the auto-router log** (the `signals.model` field of the `auto-router-resolved` event). See [§6](#6-verifying-it-works) for the procedure.
 
-### The full list of auto_router matchers (8 total)
+### The full list of auto_router matchers (11 total)
 
 A `RuleMatcher` allows **exactly one matcher per rule** — a load-time validator enforces this, so AND-composing multiple conditions is not possible (see gap G1 in [§7](#7-limitations-and-known-gaps)). Rules are evaluated top-to-bottom, first match wins.
 
@@ -139,7 +139,24 @@ A `RuleMatcher` allows **exactly one matcher per rule** — a load-time validato
 | `content_token_count_min` | `int` (≥1) | Matches if the estimated token count (char/4 heuristic) over system + all messages is ≥ threshold | Entire request |
 | `has_tools` | `bool` (only `true` is valid) | Matches if the body declares 1+ entries in `tools[]` (OpenAI/Anthropic common) or legacy OpenAI `functions[]` | Entire body |
 
-`model_pattern`, `content_token_count_min`, and `has_tools` can fire even without a user message (e.g. a system-only request, or a body carrying just `model` + `tools`). Every other matcher requires a user message to be present. Boolean matchers (`has_image` / `has_tools`) reject an explicit `false` at load time (dead-rule prevention — omit the field instead if unused).
+**The hint-header matchers (v2.18.0)** — `request_class` (`x-claude-code-request-class`: `main` / `subagent` / `workflow` / `compaction` / `auxiliary`), `agent_type` (`x-claude-code-agent-type`, e.g. `Explore`) and `compaction: true` (`x-claude-code-compaction`) — work only when Claude Code 2.1.273+ runs with `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (set by `coderouter vscode-init`). Unlike the body heuristics, Claude Code itself declares what the request is, so there is nothing to guess. Matching is case-insensitive.
+
+```yaml
+auto_router:
+  default_rule_profile: main
+  rules:
+    - id: aux-to-tiny            # auto-mode classifier, titles → smallest model
+      match: { request_class: auxiliary }
+      profile: tiny-local
+    - id: compaction-long-ctx    # conversation summaries → long-context model
+      match: { compaction: true }
+      profile: long-context
+    - id: explore-fast           # Explore sub-agents → fast model
+      match: { agent_type: Explore }
+      profile: fast-local
+```
+
+`model_pattern`, `content_token_count_min`, and `has_tools` can fire even without a user message (e.g. a system-only request, or a body carrying just `model` + `tools`). Every other matcher requires a user message to be present. Boolean matchers (`has_image` / `has_tools` / `compaction`) reject an explicit `false` at load time (dead-rule prevention — omit the field instead if unused).
 
 > **`content_token_count_min` means something very different as of v2.12.0.** The estimator now counts `tool_result`, `tool_use` and `thinking` blocks, which v2.11.x treated as zero characters, so the same conversation estimates an order of magnitude higher. Measured on a tool-driven session: v2.11.x reported 1,083 tokens after 200 turns; v2.12.0 reports 93,183. **An existing threshold will fire far earlier than you tuned it for** — including the `32000` used in the examples below. Retune it, or set `token_estimation_include_tool_content: false` to restore the v2.11.x estimate. See [context-budget.md](../concepts/context-budget.en.md).
 

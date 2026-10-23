@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import logging
 import re
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any
 
 from coderouter.config.schemas import AutoRouterConfig, AutoRouteRule, RuleMatcher
@@ -169,6 +170,32 @@ def _has_tools_in_body(body: dict[str, Any]) -> bool:
     return isinstance(functions, list) and len(functions) > 0
 
 
+# v2.18.0: Claude Code gateway hint headers → hint keys.
+_HINT_HEADERS: dict[str, str] = {
+    "x-claude-code-request-class": "request_class",
+    "x-claude-code-agent-type": "agent_type",
+    "x-claude-code-compaction": "compaction",
+    "x-claude-code-session-id": "session_id",
+    "x-claude-code-prompt-id": "prompt_id",
+}
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def extract_gateway_hints(headers: Mapping[str, str]) -> dict[str, str]:
+    """Pull Claude Code's gateway hint headers out of a request.
+
+    Returns only the hints that are present (lower-cased keys from
+    :data:`_HINT_HEADERS`). Header lookup is case-insensitive whenever the
+    mapping is (Starlette's ``Headers`` is).
+    """
+    out: dict[str, str] = {}
+    for header, key in _HINT_HEADERS.items():
+        value = headers.get(header)
+        if value:
+            out[key] = value.strip()
+    return out
+
+
 def _match_rule(
     rule: AutoRouteRule,
     message: dict[str, Any] | None,
@@ -176,8 +203,17 @@ def _match_rule(
     model: str | None,
     estimated_tokens: int,
     has_tools: bool,
+    hints: Mapping[str, str] | None = None,
 ) -> bool:
     m = rule.match
+    if m.request_class is not None:
+        value = (hints or {}).get("request_class")
+        return value is not None and value.lower() == m.request_class.lower()
+    if m.agent_type is not None:
+        value = (hints or {}).get("agent_type")
+        return value is not None and value.lower() == m.agent_type.lower()
+    if m.compaction is True:
+        return (hints or {}).get("compaction", "").lower() in _TRUTHY
     if m.has_image is True:
         return message is not None and _has_image(message)
     if m.code_fence_ratio_min is not None:
@@ -237,7 +273,11 @@ def _extract_model(body: dict[str, Any]) -> str | None:
     return None
 
 
-def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
+def classify(
+    body: dict[str, Any],
+    config: CodeRouterConfig,
+    hints: Mapping[str, str] | None = None,
+) -> str:
     """Resolve an incoming request body to a profile name.
 
     Rule order (first match wins) is determined by:
@@ -252,6 +292,10 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
 
     Emits one of two log events: ``auto-router-resolved`` on match, or
     ``auto-router-fallthrough`` on default-rule fall.
+
+    v2.18.0: ``hints`` carries Claude Code's gateway hint headers (see
+    :func:`extract_gateway_hints`) for the ``request_class`` /
+    ``agent_type`` / ``compaction`` matchers.
     """
     user_msg = _latest_user_message(body)
     text = _extract_text(user_msg) if user_msg is not None else ""
@@ -294,7 +338,7 @@ def classify(body: dict[str, Any], config: CodeRouterConfig) -> str:
     # present — they short out via ``_match_rule``'s message-None
     # handling.
     for rule in rules:
-        if _match_rule(rule, user_msg, text, model, estimated_tokens, has_tools):
+        if _match_rule(rule, user_msg, text, model, estimated_tokens, has_tools, hints):
             _emit_resolved(rule, user_msg, text, model, estimated_tokens, has_tools)
             return rule.profile
 

@@ -127,16 +127,25 @@ _MANAGED_ENV_KEYS: tuple[str, ...] = (
 #   is given. Since 2.1.285 Claude Code assumes a 1M window behind a
 #   gateway for Opus 4.7+ / Sonnet 5+ / Fable ids, so auto-compaction would
 #   wait far past what a local model holds.
+# * ``CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`` (v2.18.0) — makes Claude Code send
+#   ``x-claude-code-request-class`` / ``-agent-type`` / ``-compaction`` …, which
+#   the auto router's ``request_class`` / ``agent_type`` / ``compaction``
+#   matchers read. Harmless when no rule uses them.
 CLAUDE_CODE_ENV_KEYS: tuple[str, ...] = (
     "ENABLE_TOOL_SEARCH",
     "CLAUDE_CODE_AUTO_MODE_SERVER",
+    "CLAUDE_CODE_GATEWAY_HINT_HEADERS",
     "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
 )
 
 
 def claude_code_env(*, max_context_tokens: int | None = None) -> dict[str, str]:
     """v2.16.0: the Claude Code env vars ``vscode-init`` writes by default."""
-    env = {"ENABLE_TOOL_SEARCH": "false", "CLAUDE_CODE_AUTO_MODE_SERVER": "0"}
+    env = {
+        "ENABLE_TOOL_SEARCH": "false",
+        "CLAUDE_CODE_AUTO_MODE_SERVER": "0",
+        "CLAUDE_CODE_GATEWAY_HINT_HEADERS": "1",
+    }
     if max_context_tokens is not None:
         if max_context_tokens <= 0:
             raise ValueError("max_context_tokens must be positive")

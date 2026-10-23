@@ -124,7 +124,7 @@ auto_router:
 - `model_pattern` は `re.search` ではなく **`re.fullmatch`** である。Claude Code が実際に送るモデル名文字列(`opus` のままか `claude-opus-4-8` に展開されるかは環境依存)の**全体**にマッチする正規表現を書く必要がある。末尾の `.*` を忘れると一致しない。
 - 実際に届くモデル名は環境・バージョン依存で断定できない。**運用前に必ず auto-router のログ(`auto-router-resolved` イベントの `signals.model`)で実値を確認する**こと。確認手順は [§6 動作確認](#6-動作確認) を参照。
 
-### auto_router matcher 一覧(全 8 種)
+### auto_router matcher 一覧(全 11 種)
 
 `RuleMatcher` は **1 ルール = ちょうど 1 matcher**。読み込み時のバリデータが強制するため、複数条件の AND 合成はできない(→ [§7](#7-制限と既知の課題) の G1)。ルール順は「先着一致」で、上から順に評価される。
 
@@ -138,8 +138,28 @@ auto_router:
 | `model_pattern` | `str` | body の `model` に対する `re.fullmatch`(読み込み時にコンパイル検証) | body の `model` |
 | `content_token_count_min` | `int`(≥1) | 全メッセージ(system + messages)の推定トークン数(char/4)が閾値以上 | リクエスト全体 |
 | `has_tools` | `bool`(`true` のみ有効) | `tools[]`(OpenAI/Anthropic 共通)または legacy `functions[]` を1個以上宣言 | body 全体 |
+| `request_class`(v2.18.0) | `str` | Claude Code のヒントヘッダ `x-claude-code-request-class`(`main` / `subagent` / `workflow` / `compaction` / `auxiliary`)と一致(大小区別なし) | ヘッダ |
+| `agent_type`(v2.18.0) | `str` | `x-claude-code-agent-type`(例: `Explore`)と一致(大小区別なし) | ヘッダ |
+| `compaction`(v2.18.0) | `bool`(`true` のみ有効) | `x-claude-code-compaction` が真 | ヘッダ |
 
-`model_pattern` / `content_token_count_min` / `has_tools` は user メッセージが無くても発火できる(system-only なリクエストや model+tools のみの body)。それ以外の matcher は user メッセージが必須。ブール matcher(`has_image` / `has_tools`)に `false` を明示すると読み込みエラーになる(死にルール防止のため、未使用は省略する)。
+**ヒントヘッダの matcher(v2.18.0)** は、Claude Code 2.1.273 以降に `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` を設定したときだけ働きます(`coderouter vscode-init` が設定します)。本文から推測する他の matcher と違い、リクエストが何であるか(本会話か、サブエージェントか、要約か、権限判定などの補助呼び出しか)を Claude Code 自身が申告するので、取り違えがありません。たとえば次のように使います。
+
+```yaml
+auto_router:
+  default_rule_profile: main
+  rules:
+    - id: aux-to-tiny            # auto mode の判定やタイトル生成は最小モデルへ
+      match: { request_class: auxiliary }
+      profile: tiny-local
+    - id: compaction-long-ctx    # 会話の要約は文脈の長いモデルへ
+      match: { compaction: true }
+      profile: long-context
+    - id: explore-fast           # Explore サブエージェントは速いモデルへ
+      match: { agent_type: Explore }
+      profile: fast-local
+```
+
+`model_pattern` / `content_token_count_min` / `has_tools` は user メッセージが無くても発火できる(system-only なリクエストや model+tools のみの body)。それ以外の matcher は user メッセージが必須。ブール matcher(`has_image` / `has_tools` / `compaction`)に `false` を明示すると読み込みエラーになる(死にルール防止のため、未使用は省略する)。
 
 > **v2.12.0 で `content_token_count_min` の実効値が大きく変わりました。** 推定器が `tool_result` / `tool_use` / `thinking` を数えるようになったため(v2.11.x は 0 文字扱い)、同じ会話でも推定値が桁で増えます。実測では tool 主体のセッションで、v2.11.x なら 200 ターンでも 1,083 tokens だったものが v2.12.0 では 93,183 tokens です。**既存の閾値を書いている場合、想定よりずっと早くルールが発火します。** 本ページ以下の例で使っている `32000` も同様です。閾値を見直すか、`token_estimation_include_tool_content: false` で v2.11.x の推定に戻してください。詳細は [context-budget.md](../concepts/context-budget.md) を参照。
 

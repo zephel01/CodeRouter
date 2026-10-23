@@ -277,6 +277,9 @@ class AnthropicRequest(BaseModel):
     # beta-gated body fields like `context_management`, `cache_control`,
     # `thinking` beyond what the default minor version accepts.
     anthropic_beta: str | None = Field(default=None, exclude=True)
+    # v2.18.0: conversation key for KV-slot affinity (Claude Code's
+    # ``x-claude-code-session-id``). Never serialized.
+    session_key: str | None = Field(default=None, exclude=True)
 
     @model_validator(mode="before")
     @classmethod

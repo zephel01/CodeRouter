@@ -264,3 +264,24 @@ Naming the provider `llamacpp-<model>` keeps things consistent with the conventi
 Known issue: combining a nextn-embedded model (or active speculative decoding) with `--split-mode tensor` can crash llama.cpp ([issue #24309](https://github.com/ggml-org/llama.cpp/issues/24309)). Use `--split-mode layer` if this applies to you.
 
 **The [CodeRouter Launcher](./launcher.en.md#mtp--speculative-decoding-llamacpp) automates this whole dance** — if the main gguf embeds nextn, or a companion draft/MTP gguf sits in the same folder, the Launcher auto-detects it and adds `--spec-type` / `--model-draft` to the launch command for you (set the **MTP** field to `off` to disable).
+
+## Reusing the KV cache per conversation across slots (v2.18.0)
+
+`llama-server --parallel N` serves N slots, each with its own prompt cache. Without a hint the server picks a free slot, so the next turn of the same conversation can land on a different slot and prefill the whole prompt again.
+
+Set `slot_affinity_slots: N` (the same N as `--parallel`) on the provider and CodeRouter sends `id_slot = hash(session) % N`, so a conversation always lands on the same slot.
+
+```yaml
+providers:
+  - name: local-llamacpp
+    kind: openai_compat
+    base_url: http://127.0.0.1:8080/v1
+    model: ""
+    slot_affinity_slots: 4     # match llama-server --parallel 4
+```
+
+- The main conversation and its compaction share a slot. Sub-agents and auxiliary calls (auto-mode classifier, titles, …) get their own key per kind, so they neither wait on the main slot nor evict its cache.
+- The conversation key is `x-claude-code-session-id`, one of Claude Code's hint headers; it needs `CLAUDE_CODE_GATEWAY_HINT_HEADERS=1` (set by `coderouter vscode-init`). Requests without it get nothing added.
+- llama.cpp only — do not set it for other servers (they ignore `id_slot` or reject it as unknown).
+- An `id_slot` set explicitly in `extra_body` wins.
+- With more conversations than slots, conversations share slots (and evict each other's cache).

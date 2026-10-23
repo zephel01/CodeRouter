@@ -65,6 +65,9 @@ class ChatRequest(BaseModel):
 
     # CodeRouter-specific extension (not sent upstream)
     profile: str | None = Field(default=None, exclude=True)
+    # v2.18.0: conversation key for KV-slot affinity (see
+    # ``ProviderConfig.slot_affinity_slots``). Never serialized.
+    session_key: str | None = Field(default=None, exclude=True)
 
 
 class ChatResponse(BaseModel):

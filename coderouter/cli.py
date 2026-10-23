@@ -483,7 +483,8 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "v2.16.0: do not write the Claude Code gateway settings "
             "(ENABLE_TOOL_SEARCH=false, CLAUDE_CODE_AUTO_MODE_SERVER=0, "
-            "and --max-context-tokens). Use when the chain is "
+            "CLAUDE_CODE_GATEWAY_HINT_HEADERS=1 and --max-context-tokens). "
+            "Use when the chain is "
             "api.anthropic.com only."
         ),
     )

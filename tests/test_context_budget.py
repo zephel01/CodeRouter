@@ -413,6 +413,7 @@ class TestEngineApplyContextBudget:
 # dead code for exactly its target workload.
 # ---------------------------------------------------------------------------
 
+import gc  # noqa: E402
 import time  # noqa: E402
 
 from coderouter.token_estimation import (  # noqa: E402
@@ -607,14 +608,22 @@ class TestTrimPerformance:
         request path. The incremental version does it in ~4ms.
         """
         request = _tool_heavy_request(400)  # 801 messages
-        start = time.perf_counter()
-        trimmed, result = trim_to_budget(
-            request,
-            max_context_tokens=8000,
-            trim_target=0.75,
-            preserve_last_n=4,
-        )
-        elapsed = time.perf_counter() - start
+        # Measure the algorithm, not a gen-2 GC pass that happens to land in
+        # the window: earlier tests leave enough live objects that a full
+        # collection here took ~100 ms on CI (v2.18.0 PR) and flaked the bound.
+        gc.collect()
+        gc.disable()
+        try:
+            start = time.perf_counter()
+            trimmed, result = trim_to_budget(
+                request,
+                max_context_tokens=8000,
+                trim_target=0.75,
+                preserve_last_n=4,
+            )
+            elapsed = time.perf_counter() - start
+        finally:
+            gc.enable()
         assert result.messages_removed > 700, "fixture did not exercise the loop"
         assert len(trimmed.messages) >= 1
         assert elapsed < 0.05, f"trim of 801 messages took {elapsed * 1000:.1f}ms"
@@ -622,14 +631,19 @@ class TestTrimPerformance:
     def test_trim_is_linear_for_plain_text_history_too(self):
         """Same cost bound for a plain (non-tool) 800-message history."""
         request = _make_long_request(800, chars_per_msg=400)
-        start = time.perf_counter()
-        _trimmed, result = trim_to_budget(
-            request,
-            max_context_tokens=1000,
-            trim_target=0.75,
-            preserve_last_n=4,
-        )
-        elapsed = time.perf_counter() - start
+        gc.collect()
+        gc.disable()  # see test_trim_is_linear_in_message_count
+        try:
+            start = time.perf_counter()
+            _trimmed, result = trim_to_budget(
+                request,
+                max_context_tokens=1000,
+                trim_target=0.75,
+                preserve_last_n=4,
+            )
+            elapsed = time.perf_counter() - start
+        finally:
+            gc.enable()
         assert result.messages_removed > 700
         assert elapsed < 0.05, f"trim of 800 messages took {elapsed * 1000:.1f}ms"
 

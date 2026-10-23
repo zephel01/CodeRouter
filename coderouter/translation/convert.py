@@ -285,6 +285,8 @@ def to_chat_request(req: AnthropicRequest) -> ChatRequest:
     )
     # Propagate CodeRouter routing hint.
     chat_req.profile = req.profile
+    # v2.18.0: carry the KV-slot affinity key across the translation.
+    chat_req.session_key = req.session_key
     return chat_req
 
 
@@ -1114,6 +1116,8 @@ def to_anthropic_request(chat_req: ChatRequest) -> AnthropicRequest:
     )
     # Propagate CodeRouter routing hint.
     req.profile = chat_req.profile
+    # v2.18.0: KV-slot affinity key (exclude=True, so set by hand).
+    req.session_key = chat_req.session_key
     return req
 
 

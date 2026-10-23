@@ -46,6 +46,7 @@ from coderouter.adapters.base import (
     StreamChunk,
     StreamTruncatedError,
 )
+from coderouter.adapters.slot_affinity import apply_slot_affinity
 from coderouter.credentials import resolve_provider_credential
 from coderouter.logging import (
     get_logger,
@@ -243,6 +244,9 @@ class AnthropicAdapter(BaseAdapter):
         body.update(dumped)
         body["model"] = self.config.model
         body["stream"] = stream
+        apply_slot_affinity(
+            body, slots=self.config.slot_affinity_slots, key=req.session_key
+        )
         return body
 
     # ------------------------------------------------------------------
