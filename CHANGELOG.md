@@ -47,6 +47,14 @@ are kept verbatim where the Japanese text itself is the subject).
   lists the release protections as layers rather than resting on
   Trusted Publishing alone.
 
+### Security
+
+- **Lockfile bumps for newly published advisories.** `anyio` 4.13.0 →
+  4.14.2 (PYSEC-2026-4024, PYSEC-2026-4025), `certifi` 2026.2.25 →
+  2026.10.23 (PYSEC-2026-4320), `fsspec` 2026.4.0 → 2026.9.0
+  (PYSEC-2026-4217; reached only through the optional `[accuracy]` extra
+  via `huggingface-hub`). Found by the CI dependency audit.
+
 ---
 
 ## [v2.15.0] — 2026-08-21 (fallback explainability + stream truncation detection)
