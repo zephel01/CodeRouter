@@ -95,6 +95,7 @@ CodeRouter の仕組みと信頼性機構。 / How CodeRouter works and its reli
 - **partial-stitch** — ストリーム途中の部分ステッチ (v2.0-H) / Mid-stream partial stitching · [日本語](concepts/partial-stitch.md) · [English](concepts/partial-stitch.en.md)
 - **continuous-probing** — 継続プロービング (v2.0-I) / Continuous probing · [日本語](concepts/continuous-probing.md) · [English](concepts/continuous-probing.en.md)
 - **stream-truncation** — ストリーム断絶検知 (v2.15.0) / Stream truncation detection · [日本語](concepts/stream-truncation.md) · [English](concepts/stream-truncation.en.md)
+- **commit-point** — 本文送出前の失敗の扱い・TTFT カットオフ・全滅時のエラー (v2.16.0/v2.17.0) / Pre-content failures, TTFT cut-off, chain-failure errors · [日本語](concepts/commit-point.md) · [English](concepts/commit-point.en.md)
 - **low-memory-integration** — 低メモリ機(8–16GB)向けメモリ予算ガードの統合ガイド。VRAM/RAM 検出・GGUFヘッダ解析・KVキャッシュ試算による事前フィット判定(`off`/`warn`/`fit`)。**実装済み (v2.5.3)** / Integration guide for the proactive memory-budget guard on low-memory (8–16GB) hosts — VRAM/RAM detection, GGUF header introspection, and KV-cache-aware pre-dispatch fit decisions (`off`/`warn`/`fit`). **Implemented (v2.5.3)** · [日本語](low-memory-integration.md) · [English](low-memory-integration.en.md)
 
 ## 5. 設計資料・記録 / Design docs & records

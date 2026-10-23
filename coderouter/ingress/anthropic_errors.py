@@ -33,6 +33,13 @@ terminal error 429                    429     ``rate_limit_error``
 anything else                         502     ``api_error``
 ====================================  ======  ========================
 
+v2.17.0: every mapped response also carries ``x-should-retry`` — the header
+Claude Code reads (with ``retry-after``) to decide whether to spend its retry
+budget. ``false`` for the 4xx rows (resending the same request cannot
+help), ``true`` for 429, and for 502 ``true`` only when at least one
+upstream failure was retryable — a chain that failed purely on, say, 401s
+will fail the same way on every retry.
+
 Upstream 401 / 403 deliberately fall into the last row: they describe
 CodeRouter's *own* upstream credentials, not the client's, and handing a
 401 to Claude Code would send the user to ``/login`` for nothing.
@@ -164,17 +171,26 @@ def map_no_providers_error(exc: NoProvidersAvailableError) -> AnthropicErrorResp
             msg = upstream_message(err)
             if not msg.lower().startswith(PROMPT_TOO_LONG_PREFIX):
                 msg = f"{PROMPT_TOO_LONG_PREFIX}: {msg}"
-            return AnthropicErrorResponse(400, "invalid_request_error", msg)
+            return AnthropicErrorResponse(
+                400, "invalid_request_error", msg, {"x-should-retry": "false"}
+            )
 
     terminal = errors[-1] if errors else None
     if terminal is not None and terminal.status_code is not None:
         status = terminal.status_code
         if status in (400, 422) and not terminal.retryable:
-            return AnthropicErrorResponse(400, "invalid_request_error", upstream_message(terminal))
+            return AnthropicErrorResponse(
+                400,
+                "invalid_request_error",
+                upstream_message(terminal),
+                {"x-should-retry": "false"},
+            )
         if status == 413:
-            return AnthropicErrorResponse(413, "request_too_large", upstream_message(terminal))
+            return AnthropicErrorResponse(
+                413, "request_too_large", upstream_message(terminal), {"x-should-retry": "false"}
+            )
         if status == 429:
-            headers: dict[str, str] = {}
+            headers: dict[str, str] = {"x-should-retry": "true"}
             retry_after = getattr(terminal, "retry_after", None)
             if retry_after:
                 headers["retry-after"] = retry_after
@@ -182,4 +198,7 @@ def map_no_providers_error(exc: NoProvidersAvailableError) -> AnthropicErrorResp
                 429, "rate_limit_error", upstream_message(terminal), headers
             )
 
-    return AnthropicErrorResponse(502, "api_error", redact(str(exc)))
+    retry = any(e.retryable for e in errors)
+    return AnthropicErrorResponse(
+        502, "api_error", redact(str(exc)), {"x-should-retry": "true" if retry else "false"}
+    )

@@ -131,7 +131,7 @@ def test_429_maps_to_rate_limit_with_retry_after() -> None:
         NoProvidersAvailableError("default", [_err(429, '{"error":{"message":"slow down"}}', retry_after="7")])
     )
     assert (mapped.status_code, mapped.error_type) == (429, "rate_limit_error")
-    assert mapped.headers == {"retry-after": "7"}
+    assert mapped.headers == {"retry-after": "7", "x-should-retry": "true"}
     assert mapped.message == "slow down"
 
 
@@ -350,3 +350,31 @@ async def test_disconnect_watcher_quiet_when_client_stays() -> None:
     await asyncio.sleep(0.05)
     assert not watcher.fired
     await watcher.stop()
+# v2.17.0: x-should-retry
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("errors", "expected"),
+    [
+        ([_err(400, _LLAMACPP_OVERFLOW, retryable=False)], "false"),
+        ([_err(400, _ANTHROPIC_400, retryable=False)], "false"),
+        ([_err(413, "big", retryable=False)], "false"),
+        ([_err(429, "slow")], "true"),
+        ([_err(503, "busy")], "true"),
+        ([_err(401, "bad key", retryable=False), _err(403, "nope", retryable=False)], "false"),
+        ([_err(401, "bad key", retryable=False), _err(503, "busy")], "true"),
+        ([], "false"),
+    ],
+)
+def test_x_should_retry(errors: list[AdapterError], expected: str) -> None:
+    mapped = map_no_providers_error(NoProvidersAvailableError("default", errors))
+    assert mapped.headers["x-should-retry"] == expected
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_x_should_retry_reaches_client(make_client, stream: bool) -> None:  # type: ignore[no-untyped-def]
+    client = make_client([_err(401, "bad key", retryable=False)])
+    resp = client.post("/v1/messages", json={**_BODY, "stream": stream})
+    assert resp.status_code == 502
+    assert resp.headers["x-should-retry"] == "false"
