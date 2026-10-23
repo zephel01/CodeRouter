@@ -87,6 +87,25 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
+class ContextBudgetRejectError(Exception):
+    """v2.16.0: ``context_budget_action: reject`` refused an oversized request.
+
+    The ingress answers with Anthropic's overflow error (HTTP 400,
+    ``prompt is too long: ...``) so the client compacts the conversation
+    itself. Carries the numbers for the message and the log line.
+    """
+
+    def __init__(self, *, estimated_tokens: int, max_context_tokens: int, profile: str) -> None:
+        self.estimated_tokens = estimated_tokens
+        self.max_context_tokens = max_context_tokens
+        self.profile = profile
+        super().__init__(
+            f"prompt is too long: ~{estimated_tokens} tokens > "
+            f"{max_context_tokens} maximum (CodeRouter profile {profile!r}, "
+            "estimated)"
+        )
+
+
 @dataclass(frozen=True, slots=True)
 class ContextBudgetEstimate:
     """Result of a context-budget estimation check."""

@@ -659,6 +659,10 @@ def test_no_providers_available_is_502(
     assert resp.status_code == 502, resp.text
     # NoProvidersAvailableError message embeds the profile name.
     assert "all providers failed" in resp.text
+    # v2.16.0: Anthropic error envelope, not FastAPI's ``{"detail": ...}``.
+    payload = resp.json()
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "api_error"
 
 
 # ----------------------------------------------------------------------
@@ -724,28 +728,22 @@ def test_streaming_emits_anthropic_event_sequence(
     assert engine.seen_profiles == [None]
 
 
-def test_streaming_error_emits_error_event(
+def test_streaming_error_before_first_event_is_http_error(
     client_and_failing_engine: tuple[TestClient, _FailingEngine],
 ) -> None:
-    """When the engine raises NoProvidersAvailableError before any event
-    ships, the SSE channel should emit a single `error` event (not a 5xx
-    HTTP status, since headers have already flushed).
+    """v2.16.0: when the engine raises NoProvidersAvailableError before any
+    event exists, the response has not been committed yet, so the client
+    gets a real HTTP status and an Anthropic error body (as
+    api.anthropic.com does), not ``200`` + an in-stream ``error`` event.
     """
     client, _ = client_and_failing_engine
     body = {**_MINIMAL_BODY, "stream": True}
-    with client.stream("POST", "/v1/messages", json=body) as resp:
-        assert resp.status_code == 200
-        raw = b"".join(resp.iter_bytes()).decode("utf-8")
-
-    events = _parse_sse(raw)
-    assert any(t == "error" for t, _ in events), raw
-
-    import json as _json
-
-    err = next(d for t, d in events if t == "error")
-    err_payload = _json.loads(err)
-    assert err_payload["type"] == "error"
-    assert err_payload["error"]["type"] == "overloaded_error"
+    resp = client.post("/v1/messages", json=body)
+    assert resp.status_code == 502, resp.text
+    payload = resp.json()
+    assert payload["type"] == "error"
+    assert payload["error"]["type"] == "api_error"
+    assert "all providers failed" in payload["error"]["message"]
 
 
 # ----------------------------------------------------------------------

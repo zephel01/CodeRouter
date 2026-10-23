@@ -31,7 +31,18 @@ from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from coderouter.adapters.base import StreamTruncatedError
+from coderouter.guards.context_budget import ContextBudgetRejectError
 from coderouter.guards.tool_loop import ToolCountExceededError, ToolLoopBreakError
+from coderouter.ingress.anthropic_errors import (
+    AnthropicErrorResponse,
+    map_no_providers_error,
+)
+from coderouter.ingress.tool_search import (
+    REJECT_MESSAGE,
+    expand_tool_search,
+    resolve_action,
+    uses_tool_search,
+)
 from coderouter.logging import get_logger
 from coderouter.routing import (
     FallbackEngine,
@@ -177,7 +188,7 @@ async def messages(
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
     anthropic_version: str | None = Header(default=None, alias=_ANTHROPIC_VERSION_HEADER),
     anthropic_beta: str | None = Header(default=None, alias=_ANTHROPIC_BETA_HEADER),
-) -> StreamingResponse | dict[str, Any]:
+) -> StreamingResponse | JSONResponse | dict[str, Any]:
     """Anthropic Messages API endpoint.
 
     Validates the body into :class:`AnthropicRequest`, resolves the
@@ -250,10 +261,33 @@ async def messages(
                 detail=(f"unknown profile {anth_req.profile!r}. available: {available}"),
             ) from exc
 
+    # v2.16.0: Claude Code tool search (``defer_loading`` tools plus a
+    # server-side ``tool_search_tool_*``) only works on api.anthropic.com.
+    # See ``coderouter.ingress.tool_search``.
+    if uses_tool_search(anth_req):
+        ts_action = resolve_action(config, anth_req.profile)
+        logger.info(
+            "tool-search-request",
+            extra={"action": ts_action, "profile": anth_req.profile or config.default_profile},
+        )
+        if ts_action == "reject":
+            return _anthropic_error_response(
+                AnthropicErrorResponse(400, "invalid_request_error", REJECT_MESSAGE)
+            )
+        if ts_action == "expand":
+            anth_req = expand_tool_search(anth_req)
+
     # v2.0-F (L1): run context budget guard before dispatch so the
     # response header can be set for both streaming and non-streaming.
     # The engine's internal guard re-check is a cheap no-op.
-    anth_req, ctx_budget_status = engine.apply_context_budget(anth_req)
+    try:
+        anth_req, ctx_budget_status = engine.apply_context_budget(anth_req)
+    except ContextBudgetRejectError as exc:
+        # v2.16.0: ``context_budget_action: reject`` — Anthropic's own
+        # overflow answer, so Claude Code compacts the conversation.
+        return _anthropic_error_response(
+            AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+        )
 
     if anth_req.stream:
         stream_headers: dict[str, str] = {
@@ -286,8 +320,49 @@ async def messages(
         # disconnect cleanup so a wedged upstream cannot pin the client
         # (or the upstream socket) open forever.
         timeout_s = _resolve_stream_timeout_s(engine, anth_req.profile)
+
+        # v2.16.0: pull the engine's first event *before* committing the
+        # HTTP response. A chain that fails before producing anything (every
+        # provider refused, an upstream said the prompt is too long, a 429)
+        # then gets a real HTTP status and an Anthropic error body — the
+        # same thing api.anthropic.com does — instead of ``200`` plus an
+        # in-stream ``error`` event. Clients key retries and reactive
+        # compaction off that status. Once the first event exists, nothing
+        # changes: the stream is committed exactly as before.
+        source = engine.stream_anthropic(anth_req)
+        first_event: AnthropicStreamEvent | None = None
+        pending_exc: BaseException | None = None
+        try:
+            async with asyncio.timeout(timeout_s):
+                first_event = await anext(source)
+        except StopAsyncIteration:
+            first_event = None
+        except NoProvidersAvailableError as exc:
+            await _aclose_quietly(source)
+            return _anthropic_error_response(map_no_providers_error(exc))
+        except (ToolLoopBreakError, ToolCountExceededError, MidStreamError) as exc:
+            # Policy errors and mid-stream failures keep their existing
+            # in-stream framing; the iterator below re-raises them.
+            pending_exc = exc
+        except TimeoutError:
+            await _aclose_quietly(source)
+            return _anthropic_error_response(
+                AnthropicErrorResponse(
+                    504, "timeout_error", f"no upstream event within {timeout_s:.0f}s"
+                )
+            )
+        except BaseException:
+            await _aclose_quietly(source)
+            raise
+
         guarded = _guard_stream(
-            _anthropic_sse_iterator(engine, anth_req),
+            _anthropic_sse_iterator(
+                engine,
+                anth_req,
+                source=source,
+                first_event=first_event,
+                pending_exc=pending_exc,
+            ),
             timeout_s=timeout_s,
             label="anthropic",
         )
@@ -300,7 +375,10 @@ async def messages(
     try:
         anth_resp = await engine.generate_anthropic(anth_req)
     except NoProvidersAvailableError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        # v2.16.0: Anthropic-shaped error with the upstream's own wording
+        # and a status that reflects it (400 / 413 / 429 / 502). See
+        # ``coderouter.ingress.anthropic_errors``.
+        return _anthropic_error_response(map_no_providers_error(exc))
     except ToolLoopBreakError as exc:
         # v1.9-E (L3): the ``break`` action short-circuits the request
         # before any provider is called. Surface as a structured 400 so
@@ -457,8 +535,35 @@ async def count_tokens_route(
     return {"input_tokens": input_tokens}
 
 
+def _anthropic_error_response(mapped: AnthropicErrorResponse) -> JSONResponse:
+    """Render a mapped failure, carrying the v2.15.0 fallback headers."""
+    headers = dict(mapped.headers)
+    trace = current_fallback_trace()
+    if trace is not None:
+        headers.update(trace.header_values())
+    logger.info(
+        "anthropic-error-response",
+        extra={"status": mapped.status_code, "error_type": mapped.error_type},
+    )
+    return JSONResponse(
+        content=mapped.body(), status_code=mapped.status_code, headers=headers or None
+    )
+
+
+async def _aclose_quietly(source: AsyncIterator[Any]) -> None:
+    aclose = getattr(source, "aclose", None)
+    if aclose is not None:
+        with contextlib.suppress(Exception):
+            await aclose()
+
+
 async def _anthropic_sse_iterator(
-    engine: FallbackEngine, anth_req: AnthropicRequest
+    engine: FallbackEngine,
+    anth_req: AnthropicRequest,
+    *,
+    source: AsyncIterator[AnthropicStreamEvent] | None = None,
+    first_event: AnthropicStreamEvent | None = None,
+    pending_exc: BaseException | None = None,
 ) -> AsyncIterator[str]:
     """Serialize engine.stream_anthropic() onto the Anthropic SSE wire.
 
@@ -466,9 +571,20 @@ async def _anthropic_sse_iterator(
     Anthropic spec (distinct from OpenAI's `data:`-only format).
     Errors map to in-stream `event: error` events — we never switch an
     in-flight HTTP response to a 5xx once headers have shipped.
+
+    v2.16.0: the route may have already pulled the first event (to answer
+    pre-content failures with a real HTTP status). It then passes the
+    started ``source``, that ``first_event``, and any exception the pull
+    raised (``pending_exc``), which is re-raised here so its existing
+    in-stream framing below applies unchanged.
     """
+    events = source if source is not None else engine.stream_anthropic(anth_req)
     try:
-        async for ev in engine.stream_anthropic(anth_req):
+        if pending_exc is not None:
+            raise pending_exc
+        if first_event is not None:
+            yield _format_anthropic_sse(first_event)
+        async for ev in events:
             yield _format_anthropic_sse(ev)
     except NoProvidersAvailableError as exc:
         # No provider produced even the first event — surface as overloaded.

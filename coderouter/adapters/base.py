@@ -101,6 +101,12 @@ class StreamChunk(BaseModel):
     usage: dict[str, Any] | None = None
 
 
+#: v2.16.0: max chars of an upstream error body an :class:`AdapterError`
+#: keeps. Error bodies are small; the cap only bounds a misbehaving upstream
+#: that answers an error status with a large HTML page.
+UPSTREAM_BODY_CAP = 4096
+
+
 class AdapterError(CodeRouterError):
     """Raised when a provider call fails in a way the fallback engine should retry on."""
 
@@ -111,6 +117,8 @@ class AdapterError(CodeRouterError):
         provider: str,
         status_code: int | None = None,
         retryable: bool = True,
+        upstream_body: str | None = None,
+        retry_after: str | None = None,
     ) -> None:
         """Construct an AdapterError.
 
@@ -125,11 +133,23 @@ class AdapterError(CodeRouterError):
             retryable: When True, the fallback engine may try the next
                 provider in the chain. When False, the engine stops
                 and surfaces the error as a terminal failure.
+            upstream_body: v2.16.0 — the upstream's error body (capped at
+                :data:`UPSTREAM_BODY_CAP` chars), kept so the ingress can
+                hand the upstream's own wording back to the client.
+                Claude Code recovers from several 400s (rejected beta
+                headers, tool search, context overflow) only when it can
+                read the upstream message. Never logged by this class.
+            retry_after: v2.16.0 — the upstream's ``Retry-After`` header
+                value, verbatim, when it sent one.
         """
         super().__init__(message)
         self.provider = provider
         self.status_code = status_code
         self.retryable = retryable
+        self.upstream_body = (
+            upstream_body[:UPSTREAM_BODY_CAP] if upstream_body is not None else None
+        )
+        self.retry_after = retry_after
 
     def __str__(self) -> str:
         """Render as ``[provider status=NNN] message`` for log trails."""

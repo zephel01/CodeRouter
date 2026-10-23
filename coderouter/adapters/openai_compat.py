@@ -244,6 +244,8 @@ class OpenAICompatAdapter(BaseAdapter):
                 provider=self.name,
                 status_code=resp.status_code,
                 retryable=resp.status_code in _RETRYABLE_STATUSES,
+                upstream_body=resp.text,
+                retry_after=resp.headers.get("retry-after"),
             )
 
         try:
@@ -381,6 +383,8 @@ class OpenAICompatAdapter(BaseAdapter):
                         provider=self.name,
                         status_code=resp.status_code,
                         retryable=resp.status_code in _RETRYABLE_STATUSES,
+                        upstream_body=body.decode("utf-8", errors="replace"),
+                        retry_after=resp.headers.get("retry-after"),
                     )
                 async for line in resp.aiter_lines():
                     if not line:
