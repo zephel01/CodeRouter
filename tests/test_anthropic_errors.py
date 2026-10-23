@@ -228,3 +228,125 @@ def test_rate_limit_reaches_client_with_retry_after(make_client, stream: bool) -
     assert resp.status_code == 429
     assert resp.headers["retry-after"] == "12"
     assert resp.json()["error"]["type"] == "rate_limit_error"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (v2.16.0)
+# ---------------------------------------------------------------------------
+
+
+def test_completion_budget_overflow_is_not_prompt_too_long() -> None:
+    """max_tokens too large for the window: compaction cannot help."""
+    body = json.dumps(
+        {
+            "object": "error",
+            "message": (
+                "This model's maximum context length is 32768 tokens. However, you "
+                "requested 33000 tokens (1000 in the messages, 32000 in the completion)."
+            ),
+            "code": 400,
+        }
+    )
+    err = _err(400, body, retryable=False)
+    assert not is_context_overflow(err)
+    mapped = map_no_providers_error(NoProvidersAvailableError("default", [err]))
+    assert mapped.status_code == 400
+    assert not mapped.message.startswith("prompt is too long")
+    assert "in the completion" in mapped.message
+
+
+class _RejectInsideEngine(_ChainFailEngine):
+    """The engine re-runs the budget guard (input-filter plugin, model swap)."""
+
+    def __init__(self) -> None:
+        super().__init__([])
+
+    async def generate_anthropic(self, request: AnthropicRequest) -> AnthropicResponse:
+        from coderouter.guards.context_budget import ContextBudgetRejectError
+
+        raise ContextBudgetRejectError(estimated_tokens=500, max_context_tokens=100, profile="default")
+
+    async def stream_anthropic(self, request: AnthropicRequest) -> AsyncIterator[AnthropicStreamEvent]:
+        from coderouter.guards.context_budget import ContextBudgetRejectError
+
+        raise ContextBudgetRejectError(estimated_tokens=500, max_context_tokens=100, profile="default")
+        yield  # pragma: no cover
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_reject_raised_inside_engine_is_400_not_500(monkeypatch: pytest.MonkeyPatch, stream: bool) -> None:
+    config = CodeRouterConfig(
+        allow_paid=False,
+        default_profile="default",
+        providers=[ProviderConfig(name="local", base_url="http://127.0.0.1:8080/v1", model="m")],
+        profiles=[FallbackChain(name="default", providers=["local"])],
+    )
+    monkeypatch.setattr("coderouter.ingress.app.load_config", lambda path=None: config)
+    app = create_app()
+    app.state.engine = _RejectInsideEngine()
+    app.state.config = config
+    resp = TestClient(app).post("/v1/messages", json={**_BODY, "stream": stream})
+    assert resp.status_code == 400, resp.text
+    assert resp.json()["error"]["message"].startswith("prompt is too long")
+
+
+@pytest.mark.asyncio
+async def test_guard_stream_honours_shared_deadline() -> None:
+    """The prefetch and the stream share one overall ceiling."""
+    import asyncio
+
+    from coderouter.ingress.anthropic_routes import _guard_stream
+
+    async def slow() -> AsyncIterator[str]:
+        await asyncio.sleep(5)
+        yield "never"
+
+    loop = asyncio.get_running_loop()
+    frames = [
+        f
+        async for f in _guard_stream(
+            slow(), timeout_s=60.0, label="t", deadline=loop.time() + 0.05
+        )
+    ]
+    assert len(frames) == 1
+    assert "timeout_error" in frames[0]
+
+
+@pytest.mark.asyncio
+async def test_disconnect_watcher_cancels_owner() -> None:
+    import asyncio
+
+    from coderouter.ingress.anthropic_routes import _DisconnectWatcher
+
+    class _Req:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        async def is_disconnected(self) -> bool:
+            self.calls += 1
+            return self.calls >= 2
+
+    watcher = _DisconnectWatcher(_Req(), interval=0.01)  # type: ignore[arg-type]
+    watcher.start()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.sleep(5)
+    assert watcher.fired
+    watcher.uncancel()
+    await watcher.stop()
+
+
+@pytest.mark.asyncio
+async def test_disconnect_watcher_quiet_when_client_stays() -> None:
+    import asyncio
+
+    from coderouter.ingress.anthropic_routes import _DisconnectWatcher
+
+    class _Req:
+        async def is_disconnected(self) -> bool:
+            return False
+
+    watcher = _DisconnectWatcher(_Req(), interval=0.01)  # type: ignore[arg-type]
+    watcher.start()
+    await asyncio.sleep(0.05)
+    assert not watcher.fired
+    await watcher.stop()

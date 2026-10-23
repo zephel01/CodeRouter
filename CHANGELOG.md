@@ -29,7 +29,9 @@ release makes CodeRouter answer in the shape those recoveries expect.
     `exceed_context_size_error`, vLLM / OpenAI "maximum context length",
     Ollama "prompt too long", …) → **400 `invalid_request_error`, message
     starting `prompt is too long`**, which is what triggers Claude Code's
-    reactive compaction;
+    reactive compaction. An overflow caused by the *completion* budget
+    ("… 32000 in the completion", `max_tokens`) is not reported this way —
+    compacting the prompt cannot fix it — and goes out as a plain 400;
   - a non-retryable upstream 400 / 422 → 400 with the upstream's own
     message (Claude Code drops a rejected beta header / feature only when it
     can read why);
@@ -44,6 +46,8 @@ release makes CodeRouter answer in the shape those recoveries expect.
   response, so a chain that fails before producing anything is answered
   with the status above instead of `200` plus an in-stream `error` event —
   as api.anthropic.com does. Once the first event exists, nothing changes.
+  The wait shares the stream's overall M14 ceiling (one deadline, not two),
+  and a client that disconnects during it cancels the upstream attempt.
 - **`deferred_tools_action` (profile; `auto` | `reject` | `expand` |
   `passthrough`, default `auto`).** Claude Code 2.1.304+ sends a server-side
   `tool_search_tool_*` and tools marked `defer_loading: true`; only

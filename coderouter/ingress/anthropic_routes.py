@@ -28,7 +28,7 @@ from collections.abc import AsyncIterator
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from coderouter.adapters.base import StreamTruncatedError
 from coderouter.guards.context_budget import ContextBudgetRejectError
@@ -126,6 +126,7 @@ async def _guard_stream(
     *,
     timeout_s: float,
     label: str,
+    deadline: float | None = None,
 ) -> AsyncIterator[str]:
     """M14: enforce an overall timeout + clean cancellation on an SSE stream.
 
@@ -146,7 +147,10 @@ async def _guard_stream(
     wrapper only has to deal with timeout / cancellation / normal completion.
     """
     try:
-        async with asyncio.timeout(timeout_s):
+        # v2.16.0: ``deadline`` (loop time) lets the caller share one overall
+        # ceiling with work it did before the stream started.
+        when = deadline if deadline is not None else asyncio.get_running_loop().time() + timeout_s
+        async with asyncio.timeout_at(when):
             async for frame in source:
                 yield frame
     except TimeoutError:
@@ -188,7 +192,7 @@ async def messages(
     x_coderouter_mode: str | None = Header(default=None, alias=_MODE_HEADER),
     anthropic_version: str | None = Header(default=None, alias=_ANTHROPIC_VERSION_HEADER),
     anthropic_beta: str | None = Header(default=None, alias=_ANTHROPIC_BETA_HEADER),
-) -> StreamingResponse | JSONResponse | dict[str, Any]:
+) -> Response | dict[str, Any]:
     """Anthropic Messages API endpoint.
 
     Validates the body into :class:`AnthropicRequest`, resolves the
@@ -332,28 +336,61 @@ async def messages(
         source = engine.stream_anthropic(anth_req)
         first_event: AnthropicStreamEvent | None = None
         pending_exc: BaseException | None = None
+        # One deadline for the whole stream, prefetch included, so the M14
+        # ceiling stays an *overall* ceiling (review fix: two independent
+        # ``timeout_s`` windows allowed ~2x).
+        deadline = asyncio.get_running_loop().time() + timeout_s
+        # Starlette cancels a StreamingResponse body when the client leaves,
+        # but not an endpoint that is still awaiting. The prefetch runs in
+        # the endpoint, so watch for the disconnect ourselves and cancel the
+        # wait — otherwise a user pressing Esc during a long local prefill
+        # would leave the upstream (and its llama.cpp slot) busy until the
+        # first token arrived.
+        watcher = _DisconnectWatcher(request)
+        watcher.start()
         try:
-            async with asyncio.timeout(timeout_s):
+            async with asyncio.timeout_at(deadline) as prefetch_scope:
                 first_event = await anext(source)
         except StopAsyncIteration:
             first_event = None
         except NoProvidersAvailableError as exc:
             await _aclose_quietly(source)
             return _anthropic_error_response(map_no_providers_error(exc))
+        except ContextBudgetRejectError as exc:
+            # The engine re-runs the budget guard when the prepared dispatch
+            # is not reused (input-filter plugins, tool-loop inject, model
+            # swap) — same answer as the pre-dispatch check above.
+            await _aclose_quietly(source)
+            return _anthropic_error_response(
+                AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+            )
         except (ToolLoopBreakError, ToolCountExceededError, MidStreamError) as exc:
             # Policy errors and mid-stream failures keep their existing
             # in-stream framing; the iterator below re-raises them.
             pending_exc = exc
         except TimeoutError:
             await _aclose_quietly(source)
+            if not prefetch_scope.expired():
+                # A TimeoutError raised *inside* the engine is not our
+                # ceiling — do not dress it up as one.
+                raise
             return _anthropic_error_response(
                 AnthropicErrorResponse(
                     504, "timeout_error", f"no upstream event within {timeout_s:.0f}s"
                 )
             )
+        except asyncio.CancelledError:
+            await _aclose_quietly(source)
+            if watcher.fired:
+                logger.info("sse-client-disconnect", extra={"label": "anthropic-prefetch"})
+                watcher.uncancel()
+                return Response(status_code=499)
+            raise
         except BaseException:
             await _aclose_quietly(source)
             raise
+        finally:
+            await watcher.stop()
 
         guarded = _guard_stream(
             _anthropic_sse_iterator(
@@ -364,6 +401,7 @@ async def messages(
                 pending_exc=pending_exc,
             ),
             timeout_s=timeout_s,
+            deadline=deadline,
             label="anthropic",
         )
         return StreamingResponse(
@@ -374,6 +412,11 @@ async def messages(
 
     try:
         anth_resp = await engine.generate_anthropic(anth_req)
+    except ContextBudgetRejectError as exc:
+        # See the streaming branch: the engine can re-run the guard.
+        return _anthropic_error_response(
+            AnthropicErrorResponse(400, "invalid_request_error", str(exc))
+        )
     except NoProvidersAvailableError as exc:
         # v2.16.0: Anthropic-shaped error with the upstream's own wording
         # and a status that reflects it (400 / 413 / 429 / 502). See
@@ -533,6 +576,52 @@ async def count_tokens_route(
         extra={"method": method, "input_tokens": input_tokens},
     )
     return {"input_tokens": input_tokens}
+
+
+class _DisconnectWatcher:
+    """Cancel the current task when the HTTP client disconnects.
+
+    Used only around the streaming prefetch (see ``messages``). Polls
+    ``request.is_disconnected()`` — a non-blocking check — every
+    ``interval`` seconds from a side task and, on disconnect, cancels the
+    task that created the watcher. ``fired`` tells the caller that a
+    ``CancelledError`` came from here (and ``uncancel`` clears it), as
+    opposed to a real cancellation from the server.
+    """
+
+    def __init__(self, request: Request, interval: float = 0.25) -> None:
+        self._request = request
+        self._interval = interval
+        self._owner = asyncio.current_task()
+        self._task: asyncio.Task[None] | None = None
+        self.fired = False
+
+    def start(self) -> None:
+        if self._owner is not None:
+            self._task = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        while True:
+            await asyncio.sleep(self._interval)
+            try:
+                gone = await self._request.is_disconnected()
+            except Exception:
+                return
+            if gone:
+                self.fired = True
+                if self._owner is not None:
+                    self._owner.cancel()
+                return
+
+    def uncancel(self) -> None:
+        if self._owner is not None:
+            self._owner.uncancel()
+
+    async def stop(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await self._task
 
 
 def _anthropic_error_response(mapped: AnthropicErrorResponse) -> JSONResponse:

@@ -133,14 +133,26 @@ def _message_from_body(body: str) -> str | None:
     return body.strip() or None
 
 
+# "prompt + max_tokens > window": the *completion* budget is what is too big.
+# vLLM / OpenAI: "... However, you requested 33000 tokens (1000 in the
+# messages, 32000 in the completion)". Compacting the prompt cannot fix that,
+# so it must not be reported as "prompt is too long".
+_COMPLETION_BUDGET_RE = re.compile(
+    r"in the completion|max_tokens|max_completion_tokens|n_predict",
+    re.IGNORECASE,
+)
+
+
 def is_context_overflow(err: AdapterError) -> bool:
-    """True when the upstream said the prompt does not fit its context."""
+    """True when the upstream said the *prompt* does not fit its context."""
     if err.status_code is not None and err.status_code not in (400, 413, 422):
         return False
     haystack = " ".join(
         part for part in (getattr(err, "upstream_body", None), Exception.__str__(err)) if part
     )
-    return bool(_CONTEXT_OVERFLOW_RE.search(haystack))
+    if not _CONTEXT_OVERFLOW_RE.search(haystack):
+        return False
+    return not _COMPLETION_BUDGET_RE.search(haystack)
 
 
 def map_no_providers_error(exc: NoProvidersAvailableError) -> AnthropicErrorResponse:
