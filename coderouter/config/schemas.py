@@ -562,6 +562,23 @@ class ProviderConfig(BaseModel):
     # withholds those opening events from the client. ``None`` (default)
     # disables it. Typical use: a local llama-server still loading a model
     # or chewing through a long prompt while a cloud fallback could answer.
+    # v2.18.0: KV-slot affinity for llama-server started with
+    # ``--parallel N``. When set to N and the request carries a conversation
+    # key (Claude Code's ``x-claude-code-session-id`` hint header), the body
+    # gets ``id_slot = stable_hash(key) % N`` so every turn of a conversation
+    # lands on the same slot and reuses its prompt cache instead of
+    # re-prefilling on whichever slot is free. llama.cpp only (other servers
+    # ignore or reject ``id_slot``); ``None`` (default) sends nothing.
+    slot_affinity_slots: int | None = Field(
+        default=None,
+        ge=1,
+        le=256,
+        description=(
+            "v2.18.0: llama-server --parallel N. Pins each conversation to "
+            "slot hash(session) % N via id_slot so its KV cache is reused. "
+            "llama.cpp only. None disables."
+        ),
+    )
     ttft_timeout_s: float | None = Field(
         default=None,
         gt=0.0,
@@ -1639,6 +1656,21 @@ class RuleMatcher(BaseModel):
     # declares any tools); ``False`` is rejected by ``_exactly_one``
     # since a "no-tools" rule would shadow the default fall-through.
     has_tools: bool | None = None
+    # v2.18.0: Claude Code gateway hint headers. Claude Code 2.1.273+ sends
+    # these to a custom ANTHROPIC_BASE_URL when
+    # ``CLAUDE_CODE_GATEWAY_HINT_HEADERS=1`` is set (``coderouter
+    # vscode-init`` sets it). They say what a request *is* — something the
+    # body heuristics above can only guess:
+    #   * ``request_class`` — ``x-claude-code-request-class``: ``main`` /
+    #     ``subagent`` / ``workflow`` / ``compaction`` / ``auxiliary``
+    #     (auto-mode classifier, titles, …). Case-insensitive exact match.
+    #   * ``agent_type`` — ``x-claude-code-agent-type`` (e.g. ``Explore``),
+    #     case-insensitive exact match.
+    #   * ``compaction: True`` — ``x-claude-code-compaction`` is truthy.
+    # Without the headers these matchers simply never match.
+    request_class: str | None = None
+    agent_type: str | None = None
+    compaction: bool | None = None
 
     _MATCHER_FIELDS: tuple[str, ...] = (
         "has_image",
@@ -1649,12 +1681,15 @@ class RuleMatcher(BaseModel):
         "content_token_count_min",
         "has_tools",
         "cjk_ratio_min",
+        "request_class",
+        "agent_type",
+        "compaction",
     )
 
     # Boolean matcher fields carry meaning only at ``True`` — the runtime
     # evaluator uses ``is True`` — so a ``False`` value is a dead rule that
     # never matches. ``_exactly_one`` rejects it explicitly (see below).
-    _BOOL_MATCHER_FIELDS: tuple[str, ...] = ("has_image", "has_tools")
+    _BOOL_MATCHER_FIELDS: tuple[str, ...] = ("has_image", "has_tools", "compaction")
 
     @model_validator(mode="after")
     def _exactly_one(self) -> Self:

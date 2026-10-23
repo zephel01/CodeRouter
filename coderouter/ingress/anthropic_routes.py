@@ -49,7 +49,7 @@ from coderouter.routing import (
     MidStreamError,
     NoProvidersAvailableError,
 )
-from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
+from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify, extract_gateway_hints
 from coderouter.routing.fallback_trace import (
     SSE_FALLBACK_EVENT,
     current_fallback_trace,
@@ -226,6 +226,11 @@ async def messages(
     if anthropic_beta:
         anth_req.anthropic_beta = anthropic_beta
 
+    # v2.18.0: Claude Code gateway hint headers — routing matchers below,
+    # and the conversation key for llama-server KV-slot affinity.
+    gateway_hints = extract_gateway_hints(request.headers)
+    anth_req.session_key = gateway_hints.get("session_id")
+
     # Profile selection — body field wins over header (same policy as OpenAI route).
     if anth_req.profile is None and x_coderouter_profile:
         anth_req.profile = x_coderouter_profile
@@ -253,7 +258,7 @@ async def messages(
     # AnthropicRequest), so both OpenAI and Anthropic ingress use the same
     # classifier without a shared request shim.
     if anth_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME:
-        anth_req.profile = classify(payload, config)
+        anth_req.profile = classify(payload, config, gateway_hints)
 
     if anth_req.profile is not None:
         try:

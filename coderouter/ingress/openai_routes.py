@@ -34,7 +34,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from coderouter.adapters.base import ChatRequest
 from coderouter.logging import get_logger
 from coderouter.routing import FallbackEngine, NoProvidersAvailableError
-from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify
+from coderouter.routing.auto_router import RESERVED_PROFILE_NAME, classify, extract_gateway_hints
 from coderouter.routing.fallback_trace import current_fallback_trace
 
 router = APIRouter()
@@ -199,6 +199,10 @@ async def chat_completions(
     except Exception as exc:  # pydantic.ValidationError, etc.
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    # v2.18.0: gateway hint headers (routing matchers + KV-slot affinity key).
+    gateway_hints = extract_gateway_hints(request.headers)
+    chat_req.session_key = gateway_hints.get("session_id")
+
     # Header-based override (body wins if both are set — see module docstring)
     if chat_req.profile is None and x_coderouter_profile:
         chat_req.profile = x_coderouter_profile
@@ -226,7 +230,7 @@ async def chat_completions(
     # When inactive, the engine still falls through to
     # ``config.default_profile`` on its own — same semantics as pre-v1.6.
     if chat_req.profile is None and config.default_profile == RESERVED_PROFILE_NAME:
-        chat_req.profile = classify(payload, config)
+        chat_req.profile = classify(payload, config, gateway_hints)
 
     # Validate profile exists before we kick off any upstream call
     if chat_req.profile is not None:

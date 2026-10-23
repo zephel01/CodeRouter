@@ -30,6 +30,7 @@ from coderouter.adapters.base import (
     StreamChunk,
     StreamTruncatedError,
 )
+from coderouter.adapters.slot_affinity import apply_slot_affinity
 from coderouter.credentials import resolve_provider_credential
 from coderouter.logging import (
     get_logger,
@@ -182,6 +183,11 @@ class OpenAICompatAdapter(BaseAdapter):
             value = getattr(request, field, None)
             if value is not None:
                 body[field] = value
+        apply_slot_affinity(
+            body,
+            slots=self.config.slot_affinity_slots,
+            key=getattr(request, "session_key", None),
+        )
         if stream:
             # Request a terminal usage chunk. Providers that honor this
             # (OpenAI, OpenRouter, Ollama >=0.x) will send one extra chunk

@@ -125,6 +125,18 @@ def check(version: Version | None, env: Mapping[str, str]) -> list[ClaudeCodeFin
             )
         )
 
+    if env.get("CLAUDE_CODE_GATEWAY_HINT_HEADERS", "").lower() in ("1", "true"):
+        out.append(ClaudeCodeFinding("ok", "CLAUDE_CODE_GATEWAY_HINT_HEADERS=1"))
+    else:
+        out.append(
+            ClaudeCodeFinding(
+                "info",
+                "CLAUDE_CODE_GATEWAY_HINT_HEADERS is not set: auto_router rules "
+                "on request_class / agent_type / compaction (v2.18.0) never "
+                "match without it.",
+            )
+        )
+
     if env.get("CLAUDE_CODE_AUTO_MODE_SERVER") == "0":
         out.append(ClaudeCodeFinding("ok", "CLAUDE_CODE_AUTO_MODE_SERVER=0"))
     else:
