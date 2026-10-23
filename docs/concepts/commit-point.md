@@ -45,7 +45,7 @@ providers:
 - **チェーンの最後の provider には適用しません**。次が無いので、待つ方がましだからです。
 - 非ストリーミングの要求には適用しません（そちらは `timeout_s` が上限）。
 - **`/v1/messages`（Anthropic 形式）のストリーミングだけが対象**です。`/v1/chat/completions` には効きません。
-- **`kind: openai_compat` で tools 付きの要求（Claude Code はほぼ毎回 tools を送ります）には効きません。** この組み合わせは、tool call を修復するために上流を非ストリーミングで呼ぶ経路（tool-turn downgrade）を通るので、「最初の出力」が応答全体になってしまうからです。ここに期限をかけると、ゆっくりだが正常なローカルの応答を途中で捨てることになります。ローカルの llama.cpp / Ollama で TTFT カットオフを使うなら、上の例のように `kind: anthropic`（ネイティブの `/v1/messages`）で接続してください。
+- **`kind: openai_compat` で tools 付きの要求（Claude Code はほぼ毎回 tools を送ります）には効きません。** この組み合わせは、tool call を修復するために上流を非ストリーミングで呼ぶ経路（tool-turn downgrade）を通るので、「最初の出力」が応答全体になってしまうからです。ここに期限をかけると、ゆっくりだが正常なローカルの応答を途中で捨てることになります。ローカルの llama.cpp / Ollama で TTFT カットオフを使うなら、上の例のように `kind: anthropic`（ネイティブの `/v1/messages`）で接続してください。ただしこの接続では、CodeRouter の tool call 修復は働きません（修復は OpenAI 形式から翻訳する経路でだけ動きます）。ネイティブで tool call を正しく出せるモデル向けの選択肢です。
 - 打ち切った試行は通常の失敗として扱われます。理由は `X-CodeRouter-Fallback-Reason: ttft-timeout`、self-healing のガードもこれを学習します。
 
 典型的な使い方: ローカルの llama-server がモデルを読み込み中、または長いプロンプトを処理中で、クラウドなら今すぐ答えられる、という場面です。値は「ふだんのローカルの TTFT の 2〜3 倍」程度から始めてください。短すぎると、毎回クラウドに逃げることになります。
