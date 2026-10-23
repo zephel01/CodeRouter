@@ -21,7 +21,7 @@
 ## 何ができるか — 30 秒で
 
 ```
-あなたのエージェント (Claude Code / agy ほか ※)
+あなたのエージェント (Claude Code / codex / agy)
         │
         ▼
   ┌─ CodeRouter ─┐
@@ -30,8 +30,6 @@
   │  自動フォールバック │──→  ③ 有料 (Claude — opt-in 時のみ)
   └──────────────┘
 ```
-
-※ 現行の codex CLI は Responses API（`/v1/responses`）専用になったため、CodeRouter 経由ではまだ使えません（対応予定）。直結の代替手順 → [quickstart Pattern B](./docs/start/quickstart.md#pattern-b-codex-cli-で使う)
 
 **やってくれること:**
 
@@ -102,7 +100,7 @@ ANTHROPIC_BASE_URL=http://localhost:8088 ANTHROPIC_AUTH_TOKEN=dummy claude
 | Claude Code + ローカル Ollama で tool calling が壊れる | **必須** — tool 修復 (+ 必要なら wire 変換) |
 | Claude Code + ローカルで長時間回すと止まる | **必須級** — 6 系統ガード + self-healing |
 | Ollama v0.14+ / LM Studio にネイティブ直結で動いてる | **便利** — 直結に無い fallback / ガード / 診断を追加 (passthrough で翻訳ゼロ) |
-| codex / agy + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら(codex は `/v1/responses` 対応後) |
+| codex / agy + Ollama 直繋ぎで動いてる | オプション — フォールバックが欲しいなら(codex は v2.19.0 の `/v1/responses` 経由) |
 | Claude API を直接叩いてて問題ない | 不要 |
 
 詳細は → [要否判定ガイド](./docs/start/when-do-i-need-coderouter.md)

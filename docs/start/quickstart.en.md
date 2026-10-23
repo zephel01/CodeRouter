@@ -212,32 +212,43 @@ The `claude-code` profile (local 2-tier + free cloud) is selected automatically.
 
 ## Pattern B: use it with the codex CLI
 
-> **Status (as of 2026-10): current Codex CLI cannot go through CodeRouter.**
-> Codex removed `wire_api = "chat"` in 2026-02 and now speaks only the Responses API
-> (`/v1/responses`). The old instruction to set `wire_api = "chat"` makes current Codex
-> fail while loading its config. CodeRouter does not serve `/v1/responses` yet
-> (planned; until then, use the workaround below).
+> Current Codex CLI speaks only the Responses API (`/v1/responses`). CodeRouter serves
+> `/v1/responses` since v2.19.0, so Codex can go through it directly. The old
+> `wire_api = "chat"` instruction no longer works (current Codex fails while loading it).
 
-### B-1. Workaround: connect Codex directly to a local inference server
+### B-1. Install codex
 
-The major local servers already serve `/v1/responses`, so Codex can talk to them without
-CodeRouter in between. CodeRouter's fallback and tool-call repair do not apply in this setup.
+```bash
+npm install -g @openai/codex
+```
 
-- **Ollama / LM Studio**: `codex --oss` (Codex's built-in OSS provider)
-- **llama.cpp (`llama-server`)**: add a provider to `~/.codex/config.toml`
+### B-2. Create `~/.codex/config.toml`
 
 ```toml
-model = "local"
-model_provider = "llamacpp"
+model = "gpt-5.5"                 # see the note below
+model_provider = "coderouter"
+web_search = "disabled"           # hosted web search only runs on OpenAI
 
-[model_providers.llamacpp]
-name = "llama.cpp"
-base_url = "http://127.0.0.1:9931/v1"   # default port since b11521; use your --port if you set one
+[model_providers.coderouter]
+name = "CodeRouter"               # not "OpenAI" / "azure" (that turns on OpenAI-only features)
+base_url = "http://127.0.0.1:8088/v1"
 wire_api = "responses"
 ```
 
+- **The `model` name changes which tools Codex sends.** For a name Codex knows (e.g. `gpt-5.5`) it edits files with `apply_patch`; for an unknown name it sends no `apply_patch` and edits through shell commands. CodeRouter handles both, but local models usually do better with the former. Which model actually answers is decided by the CodeRouter profile — `model` only selects Codex's own behaviour.
+- To pick a profile, add `X-CodeRouter-Profile = "<name>"` under `[model_providers.coderouter.http_headers]`.
+
+### B-3. Run
+
+```bash
+codex "write a python function that reverses a string"
+```
+
+Requests go through the same engine as `/v1/messages`, so fallback, tool-call repair, the guards and the chain-failure error mapping all apply. When the context fills up, Codex compacts locally on its own.
+
 > **Models without tool calling**: Codex does all file and shell work through tool
-> calls. A model without tool-call support will connect, but no tool will work.
+> calls. A model without tool-call support will connect, but no tool will work. Check
+> `tool_calls: OK` with `coderouter doctor --check-model <model>` first.
 
 ---
 

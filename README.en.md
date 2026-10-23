@@ -21,7 +21,7 @@
 ## What it does — in 30 seconds
 
 ```
-Your agent (Claude Code / agy, etc. *)
+Your agent (Claude Code / codex / agy)
         │
         ▼
   ┌─ CodeRouter ──┐
@@ -31,7 +31,6 @@ Your agent (Claude Code / agy, etc. *)
   └────────────────┘
 ```
 
-\* Current codex CLI speaks only the Responses API (`/v1/responses`), so it cannot go through CodeRouter yet (planned). Direct-connect workaround → [quickstart Pattern B](./docs/start/quickstart.en.md#pattern-b-use-it-with-the-codex-cli)
 
 **What it does for you:**
 
@@ -83,7 +82,7 @@ That's it. Claude Code works as usual, but your local Ollama is answering behind
 |---|---|
 | Claude Code + local Ollama, tool calling breaks | **Yes** — wire translation + tool repair |
 | Claude Code + local, dies after long sessions | **Helpful** — 6 guards + self-healing |
-| codex / agy + Ollama works fine | Optional — if you want fallback (codex: once `/v1/responses` lands) |
+| codex / agy + Ollama works fine | Optional — if you want fallback (codex: via `/v1/responses`, v2.19.0+) |
 | Using Claude API directly, no issues | Not needed |
 
 Full decision matrix → [Do I need CodeRouter?](./docs/start/when-do-i-need-coderouter.en.md)

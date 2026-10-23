@@ -206,33 +206,44 @@ profile は自動で `claude-code` (ローカル 2 段 + 無料クラウド) が
 
 ## Pattern B: codex CLI で使う
 
-> **現状（2026-10 時点）: 現行の Codex CLI は CodeRouter 経由では使えません。**
-> Codex は 2026-02 に `wire_api = "chat"` を廃止し、Responses API（`/v1/responses`）でしか
-> 通信しなくなりました。古い手順の `wire_api = "chat"` を書くと、現行の Codex は設定の
-> 読み込み時にエラーで止まります。CodeRouter はまだ `/v1/responses` を持っていません
-> （対応予定。それまでの代替は下記）。
+> 現行の Codex CLI は Responses API（`/v1/responses`）だけで通信します。CodeRouter は
+> v2.19.0 から `/v1/responses` を持っているので、そのまま CodeRouter 経由で使えます。
+> 古い手順の `wire_api = "chat"` は現行の Codex では使えません（設定の読み込み時にエラー）。
 
-### B-1. 代替: Codex をローカル推論サーバへ直結する
+### B-1. codex をインストール
 
-主要なローカル推論サーバは `/v1/responses` を持っているので、CodeRouter を挟まずに
-Codex を直結できます。この場合 CodeRouter のフォールバックと tool 修復は効きません。
+```bash
+npm install -g @openai/codex
+```
 
-- **Ollama / LM Studio**: `codex --oss`（Codex 組み込みの OSS provider）
-- **llama.cpp（`llama-server`）**: `~/.codex/config.toml` に provider を書く
+### B-2. `~/.codex/config.toml` を作成
 
 ```toml
-model = "local"
-model_provider = "llamacpp"
+model = "gpt-5.5"                 # 下の注意を参照
+model_provider = "coderouter"
+web_search = "disabled"           # ホスト型の Web 検索は OpenAI でしか動かない
 
-[model_providers.llamacpp]
-name = "llama.cpp"
-base_url = "http://127.0.0.1:9931/v1"   # b11521 以降の既定ポート。--port を付けたならその値
+[model_providers.coderouter]
+name = "CodeRouter"               # "OpenAI" / "azure" にしない（OpenAI 専用の機能が有効になる）
+base_url = "http://127.0.0.1:8088/v1"
 wire_api = "responses"
 ```
 
+- **`model` の名前で Codex が送る tool が変わります。** Codex が知っている名前（`gpt-5.5` など）なら、ファイル編集に `apply_patch` を使います。知らない名前だと `apply_patch` を送らず、シェルのコマンドで編集します。どちらでも CodeRouter は通しますが、ローカルモデルには前者の方が扱いやすいことが多いです。実際にどのモデルが答えるかは CodeRouter の profile が決めます（`model` は Codex 側の振る舞いを選ぶためだけの名前です）。
+- profile を指定したいときは `[model_providers.coderouter.http_headers]` に `X-CodeRouter-Profile = "<名前>"` を書きます。
+
+### B-3. 実行
+
+```bash
+codex "write a python function that reverses a string"
+```
+
+CodeRouter 側では `/v1/messages` と同じエンジンを通るので、フォールバック、tool call の修復、ガード、全滅時のエラー変換がそのまま効きます。文脈があふれたときは Codex が自分で要約（ローカル compaction）します。
+
 > **tool call 非対応モデルについて**: Codex はファイル操作・シェル実行をすべて
 > tool call で行います。モデルが tool call に対応していないと、接続はできてもツールが
-> 動きません。
+> 動きません。`coderouter doctor --check-model <モデル名>` で `tool_calls: OK` を
+> 確認してから使ってください。
 
 ---
 

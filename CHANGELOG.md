@@ -9,6 +9,73 @@ are kept verbatim where the Japanese text itself is the subject).
 
 ---
 
+## [v2.19.0] — 2026-10-24 (OpenAI Responses API for the Codex CLI)
+
+### Added
+
+- **`POST /v1/responses`** — the OpenAI Responses API, so the current Codex
+  CLI (Responses-only since 2026-02) can use CodeRouter as a custom
+  provider (`wire_api = "responses"`, `base_url = http://127.0.0.1:8088/v1`;
+  see `docs/start/quickstart.md` Pattern B). The request is translated to an
+  Anthropic Messages request and runs through the same fallback engine as
+  `/v1/messages`, so fallback, tool-call repair, the guards, the TTFT
+  cut-off and the chain-failure error mapping all apply; the result is
+  translated back (`coderouter/translation/responses.py`). Built against
+  the wire contract in openai/codex `970111f` (2026-10-23):
+  - `developer` / `system` messages (Codex sends its system prompt as the
+    first `developer` input item, not `instructions`) become Anthropic
+    `system` text; `instructions` is honoured for other clients.
+  - Tools: `function` → `function_call` with a JSON-string `arguments`;
+    `custom` grammar tools such as `apply_patch` → `custom_tool_call` with
+    the raw `input` string (Codex rejects a `function_call` for those; the
+    grammar is passed to the model in the tool description); `namespace`
+    (MCP) tools are flattened per request and answered with `namespace` +
+    the inner `name`. Hosted tools (`web_search`, …) are dropped.
+  - History: `function_call` / `custom_tool_call` and their outputs become
+    `tool_use` / `tool_result`; orphan outputs are dropped and calls with no
+    output get a synthetic `"aborted"` result so the Anthropic pairing rules
+    hold. `reasoning` and hosted-tool items are dropped.
+  - Stream: `response.created` → per item `output_item.added` (text deltas
+    only inside an open item) → `output_item.done` → `response.completed`
+    with `response.id` and complete usage details (`cached_tokens`,
+    `reasoning_tokens`). `max_tokens` stops become `response.incomplete`
+    (`max_output_tokens`).
+  - Errors: pre-content failures get an OpenAI-style error body with a real
+    status (400 / 429 with `Retry-After`, which Codex needs to retry a 429 /
+    502). A context overflow on a streaming request — upstream overflow or
+    `context_budget_action: reject` — becomes `response.failed` with code
+    `context_length_exceeded`, the only overflow signal Codex recognizes. A
+    failure after the stream started is `response.failed` (`server_error`),
+    which Codex retries.
+  - Profile selection as on the other routes (body `profile` >
+    `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > auto router > default);
+    Codex's `session-id` header feeds llama-server slot affinity.
+  - Non-streaming JSON responses are supported for other clients.
+  - Tool outputs that carry images (Codex `view_image`, MCP image results)
+    become image blocks, not base64 text. Usage reports OpenAI semantics —
+    `input_tokens` includes cache reads and writes — so Codex's
+    context-window accounting (and its auto-compaction) sees the real
+    prompt size. A stream that ends without `message_stop`, or with a block
+    still open, is reported as `response.failed` (retryable) rather than a
+    `response.completed` that would silently drop the partial item.
+    Flattened tool names are capped at 64 characters (hash suffix) for
+    strict OpenAI-compatible backends, and a custom-tool call whose
+    arguments hold a single string under another key still reaches
+    `apply_patch` as raw text.
+
+### Changed
+
+- Docs: quickstart Pattern B (ja/en) now configures Codex through
+  CodeRouter; README and the "do I need CodeRouter?" guide updated.
+
+### Known limits
+
+- Reasoning items are not produced or round-tripped; hosted tools are not
+  emulated; `previous_response_id` (server-side conversation state) is not
+  supported — Codex does not use it on HTTP.
+
+---
+
 ## [v2.18.0] — 2026-10-24 (route on Claude Code's own request hints)
 
 ### Added
