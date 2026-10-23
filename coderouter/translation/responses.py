@@ -30,6 +30,7 @@ config. Key points:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -47,6 +48,17 @@ _HOSTED_TOOL_TYPES = frozenset(
     {"web_search", "web_search_preview", "file_search", "image_generation", "code_interpreter",
      "computer_use_preview", "local_shell", "mcp", "tool_search"}
 )
+
+
+_MAX_TOOL_NAME = 64
+
+
+def _safe_name(raw: str) -> str:
+    name = _NAME_SAFE.sub("_", raw) or "tool"
+    if len(name) <= _MAX_TOOL_NAME:
+        return name
+    digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()[:8]
+    return f"{name[: _MAX_TOOL_NAME - 9]}_{digest}"
 
 
 def _new_id(prefix: str) -> str:
@@ -75,15 +87,19 @@ class ToolMap:
     by_flat: dict[str, ToolRef] = field(default_factory=dict)
 
     def flat_name(self, name: str, namespace: str | None) -> str:
-        """Anthropic-safe name for ``(namespace, name)``; unique per request."""
-        raw = f"{namespace}__{name}" if namespace else name
-        base = _NAME_SAFE.sub("_", raw)[:128] or "tool"
+        """Provider-safe name for ``(namespace, name)``; unique per request.
+
+        Capped at 64 chars (OpenAI-compatible servers reject longer function
+        names) with a short hash suffix so long ``mcp__server__tool`` names
+        stay distinct.
+        """
+        base = _safe_name(f"{namespace}__{name}" if namespace else name)
         flat, i = base, 2
         while flat in self.by_flat and (
             self.by_flat[flat].name,
             self.by_flat[flat].namespace,
         ) != (name, namespace):
-            flat = f"{base[:120]}_{i}"
+            flat = f"{base[:56]}_{i}"
             i += 1
         return flat
 
@@ -99,7 +115,7 @@ class ToolMap:
         for flat, ref in self.by_flat.items():
             if ref.name == name and ref.namespace == namespace:
                 return flat
-        return _NAME_SAFE.sub("_", f"{namespace}__{name}" if namespace else name)[:128]
+        return _safe_name(f"{namespace}__{name}" if namespace else name)
 
 
 def _custom_tool_schema(tool: dict[str, Any]) -> dict[str, Any]:
@@ -208,10 +224,30 @@ def _user_blocks(content: Any) -> list[dict[str, Any]]:
     return blocks
 
 
-def _output_as_text(output: Any) -> str:
+def _tool_output_content(output: Any) -> str | list[dict[str, Any]]:
+    """``*_call_output.output`` → Anthropic ``tool_result`` content.
+
+    Strings pass through. Arrays keep their text parts as text blocks and
+    their images as image blocks (Codex's ``view_image`` and MCP image
+    results), instead of dumping base64 into the prompt as text. Backends
+    that cannot take images get a placeholder from the translation layer.
+    """
     if isinstance(output, str):
         return output
-    return _text_of(output) or json.dumps(output, ensure_ascii=False)
+    if not isinstance(output, list):
+        return json.dumps(output, ensure_ascii=False)
+    blocks: list[dict[str, Any]] = []
+    for part in output:
+        if not isinstance(part, dict):
+            continue
+        ptype = part.get("type")
+        if ptype in ("input_text", "output_text", "text") and isinstance(part.get("text"), str):
+            blocks.append({"type": "text", "text": part["text"]})
+        elif ptype == "input_image":
+            img = _image_block(part)
+            if img is not None:
+                blocks.append(img)
+    return blocks or ""
 
 
 def _append(messages: list[dict[str, Any]], role: str, blocks: list[dict[str, Any]]) -> None:
@@ -332,7 +368,7 @@ def responses_to_anthropic(body: dict[str, Any]) -> tuple[AnthropicRequest, Tool
             _append(
                 messages,
                 "user",
-                [{"type": "tool_result", "tool_use_id": call_id, "content": _output_as_text(item.get("output"))}],
+                [{"type": "tool_result", "tool_use_id": call_id, "content": _tool_output_content(item.get("output"))}],
             )
         # reasoning / hosted-tool / compaction items: not representable for a
         # non-OpenAI backend — dropped.
@@ -367,7 +403,18 @@ def responses_to_anthropic(body: dict[str, Any]) -> tuple[AnthropicRequest, Tool
 def _tool_item(block_id: str, flat_name: str, args: Any, tool_map: ToolMap) -> dict[str, Any]:
     ref = tool_map.lookup(flat_name)
     if ref.kind == "custom":
-        raw = args.get("input") if isinstance(args, dict) and isinstance(args.get("input"), str) else None
+        raw: str | None = None
+        if isinstance(args, dict):
+            if isinstance(args.get("input"), str):
+                raw = args["input"]
+            else:
+                # A repaired / local call may name the field differently
+                # ({"patch": "..."}); a lone string value is the input.
+                strings = [v for v in args.values() if isinstance(v, str)]
+                if len(args) == 1 and len(strings) == 1:
+                    raw = strings[0]
+        elif isinstance(args, str):
+            raw = args
         item: dict[str, Any] = {
             "type": "custom_tool_call",
             "id": _new_id("ctc"),
@@ -390,10 +437,22 @@ def _tool_item(block_id: str, flat_name: str, args: Any, tool_map: ToolMap) -> d
     return item
 
 
-def _usage(input_tokens: int, output_tokens: int, cached: int) -> dict[str, Any]:
+def _usage(
+    input_tokens: int, output_tokens: int, cached: int, cache_write: int = 0
+) -> dict[str, Any]:
+    """OpenAI-style usage from Anthropic counts.
+
+    Anthropic's ``input_tokens`` excludes cache reads and writes; OpenAI's
+    includes them, and Codex uses ``total_tokens`` as context-window usage
+    to decide when to compact. So the cache counts are added back in.
+    """
+    input_tokens = input_tokens + cached + cache_write
+    details: dict[str, Any] = {"cached_tokens": cached}
+    if cache_write:
+        details["cache_write_tokens"] = cache_write
     return {
         "input_tokens": input_tokens,
-        "input_tokens_details": {"cached_tokens": cached},
+        "input_tokens_details": details,
         "output_tokens": output_tokens,
         "output_tokens_details": {"reasoning_tokens": 0},
         "total_tokens": input_tokens + output_tokens,
@@ -446,6 +505,7 @@ def anthropic_response_to_responses(
             int(usage.get("input_tokens") or 0),
             int(usage.get("output_tokens") or 0),
             int(usage.get("cache_read_input_tokens") or 0),
+            int(usage.get("cache_creation_input_tokens") or 0),
         ),
     )
     if status == "incomplete":
@@ -466,7 +526,9 @@ class ResponsesStreamTranslator:
         self._input_tokens = 0
         self._output_tokens = 0
         self._cached = 0
+        self._cache_write = 0
         self._stop_reason: str | None = None
+        self._stopped = False
         self.started = False
 
     def _ev(self, etype: str, **data: Any) -> dict[str, Any]:
@@ -490,6 +552,7 @@ class ResponsesStreamTranslator:
             usage = (data.get("message") or {}).get("usage") or {}
             self._input_tokens = int(usage.get("input_tokens") or 0)
             self._cached = int(usage.get("cache_read_input_tokens") or 0)
+            self._cache_write = int(usage.get("cache_creation_input_tokens") or 0)
         elif etype == "content_block_start":
             idx = int(data.get("index", 0))
             cb = data.get("content_block") or {}
@@ -577,6 +640,8 @@ class ResponsesStreamTranslator:
             stop = (data.get("delta") or {}).get("stop_reason")
             if stop:
                 self._stop_reason = stop
+        elif etype == "message_stop":
+            self._stopped = True
         return out
 
     def _text_delta(self, idx: int, text: str) -> list[dict[str, Any]]:
@@ -595,7 +660,15 @@ class ResponsesStreamTranslator:
         ]
 
     def finish(self) -> list[dict[str, Any]]:
-        usage = _usage(self._input_tokens, self._output_tokens, self._cached)
+        # A stream that ended without ``message_stop``, or with a block
+        # still open, was cut off. Reporting it as completed would make
+        # Codex drop the partial item and end the turn as a success; a
+        # ``response.failed`` (retryable ``server_error``) makes it retry.
+        if not self._stopped or self._blocks:
+            return self.failed(
+                "server_error", "upstream stream ended before the message was complete"
+            )
+        usage = _usage(self._input_tokens, self._output_tokens, self._cached, self._cache_write)
         if self._stop_reason == "max_tokens":
             obj = _response_obj(self.resp_id, self.model, "incomplete", self.output, usage)
             obj["incomplete_details"] = {"reason": "max_output_tokens"}

@@ -185,12 +185,14 @@ def test_stream_sequence_for_text_and_custom_tool() -> None:
     assert completed["type"] == "response.completed"
     resp = completed["response"]
     assert resp["id"].startswith("resp_")
+    # Anthropic's input_tokens (12) excludes the 4 cached ones; OpenAI's
+    # includes them (Codex reads total_tokens as context usage).
     assert resp["usage"] == {
-        "input_tokens": 12,
+        "input_tokens": 16,
         "input_tokens_details": {"cached_tokens": 4},
         "output_tokens": 7,
         "output_tokens_details": {"reasoning_tokens": 0},
-        "total_tokens": 19,
+        "total_tokens": 23,
     }
 
 
@@ -209,6 +211,7 @@ def test_max_tokens_stop_is_incomplete() -> None:
     t = ResponsesStreamTranslator(tool_map, model="m")
     t.start()
     t.feed(AnthropicStreamEvent(type="message_delta", data={"delta": {"stop_reason": "max_tokens"}, "usage": {}}))
+    t.feed(AnthropicStreamEvent(type="message_stop", data={"type": "message_stop"}))
     out = t.finish()
     assert out[0]["type"] == "response.incomplete"
     assert out[0]["response"]["incomplete_details"] == {"reason": "max_output_tokens"}
@@ -316,3 +319,80 @@ def test_route_non_streaming_json(make_client) -> None:  # type: ignore[no-untyp
 def test_route_rejects_non_json(make_client) -> None:  # type: ignore[no-untyped-def]
     resp = make_client(_Engine()).post("/v1/responses", content=b"nope", headers={"content-type": "application/json"})
     assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (v2.19.0)
+# ---------------------------------------------------------------------------
+
+
+def test_tool_output_images_become_image_blocks_not_base64_text() -> None:
+    """Codex view_image returns input_image parts in function_call_output."""
+    items = [
+        _user("look"),
+        {"type": "function_call", "call_id": "c1", "name": "exec_command", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "c1",
+            "output": [
+                {"type": "input_text", "text": "screenshot:"},
+                {"type": "input_image", "image_url": "data:image/png;base64,QUJD"},
+            ],
+        },
+    ]
+    req, _ = responses_to_anthropic(_body(items))
+    result = req.messages[2].model_dump()["content"][0]
+    assert result["type"] == "tool_result"
+    assert result["content"][0] == {"type": "text", "text": "screenshot:"}
+    assert result["content"][1]["source"]["data"] == "QUJD"
+    assert "QUJD" not in json.dumps(result["content"][0])
+
+
+def test_truncated_stream_is_failed_not_completed() -> None:
+    """No message_stop / open block → retryable failure, never 'completed'."""
+    _, tool_map = responses_to_anthropic(_body([_user("x")]))
+    events = _anth_events("exec_command", {"cmd": "ls"})[:3]  # text block left open
+    out = _translate(tool_map, events)
+    assert out[-1]["type"] == "response.failed"
+    assert out[-1]["response"]["error"]["code"] == "server_error"
+    # Closed blocks but no message_stop is also a cut stream.
+    out = _translate(tool_map, _anth_events("exec_command", {"cmd": "ls"})[:-1])
+    assert out[-1]["type"] == "response.failed"
+
+
+def test_cache_writes_count_as_input() -> None:
+    from coderouter.translation.responses import _usage
+
+    u = _usage(10, 5, cached=100, cache_write=50)
+    assert u["input_tokens"] == 160
+    assert u["total_tokens"] == 165
+    assert u["input_tokens_details"] == {"cached_tokens": 100, "cache_write_tokens": 50}
+
+
+def test_long_namespaced_names_are_capped_and_reversible() -> None:
+    tools = [
+        {
+            "type": "namespace",
+            "name": "mcp__a_very_long_server_name_for_documentation_search",
+            "tools": [
+                {"type": "function", "name": "search_documents_by_keyword_and_date", "parameters": {"type": "object"}},
+                {"type": "function", "name": "search_documents_by_keyword_and_tags", "parameters": {"type": "object"}},
+            ],
+        }
+    ]
+    req, tool_map = responses_to_anthropic({"model": "m", "input": "hi", "tools": tools})
+    names = [t.name for t in req.tools or []]
+    assert all(len(n) <= 64 for n in names)
+    assert len(set(names)) == 2
+    assert {tool_map.lookup(n).name for n in names} == {
+        "search_documents_by_keyword_and_date",
+        "search_documents_by_keyword_and_tags",
+    }
+
+
+def test_custom_tool_single_string_field_is_used_as_input() -> None:
+    _, tool_map = responses_to_anthropic(_body([_user("x")]))
+    out = _translate(tool_map, _anth_events("apply_patch", {"patch": "*** Begin Patch"}))
+    item = [e["item"] for e in out if e["type"] == "response.output_item.done"][1]
+    assert item["type"] == "custom_tool_call"
+    assert item["input"] == "*** Begin Patch"

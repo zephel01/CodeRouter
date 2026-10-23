@@ -51,6 +51,17 @@ are kept verbatim where the Japanese text itself is the subject).
     `X-CodeRouter-Profile` > `X-CodeRouter-Mode` > auto router > default);
     Codex's `session-id` header feeds llama-server slot affinity.
   - Non-streaming JSON responses are supported for other clients.
+  - Tool outputs that carry images (Codex `view_image`, MCP image results)
+    become image blocks, not base64 text. Usage reports OpenAI semantics —
+    `input_tokens` includes cache reads and writes — so Codex's
+    context-window accounting (and its auto-compaction) sees the real
+    prompt size. A stream that ends without `message_stop`, or with a block
+    still open, is reported as `response.failed` (retryable) rather than a
+    `response.completed` that would silently drop the partial item.
+    Flattened tool names are capped at 64 characters (hash suffix) for
+    strict OpenAI-compatible backends, and a custom-tool call whose
+    arguments hold a single string under another key still reaches
+    `apply_patch` as raw text.
 
 ### Changed
 
