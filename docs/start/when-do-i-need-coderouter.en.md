@@ -18,7 +18,7 @@ knob, and what wire format it speaks.
 | Agent | Wire format | Can point at Ollama directly? | Need CodeRouter? |
 |---|---|---|---|
 | **Claude Code** | Anthropic `/v1/messages` | No — Ollama speaks OpenAI | **Yes** — wire translation is the whole point |
-| **Codex CLI** (`@openai/codex`) | OpenAI Responses | Yes, to servers with the Responses API (Ollama / LM Studio / llama.cpp) | **Not usable yet** — current Codex speaks only the Responses API, which CodeRouter does not serve yet (planned) |
+| **Codex CLI** (`@openai/codex`) | OpenAI Responses | Yes, to servers with the Responses API (Ollama / LM Studio / llama.cpp) | Optional — when you want fallback / tool repair (via `/v1/responses`, v2.19.0+) |
 | **Plain OpenAI SDK / `curl`** | OpenAI | Yes, via `base_url` | Optional — same as above |
 | **gemini-cli** | Gemini | No — different wire | Yes, once a Gemini adapter is added |
 | **GitHub Copilot CLI** (`gh copilot`) | GitHub-proprietary | **No — backend is locked** | **N/A** — Copilot cannot be redirected at all |

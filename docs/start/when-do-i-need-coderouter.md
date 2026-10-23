@@ -11,7 +11,7 @@
 | エージェント | wire 形式 | Ollama に直接向けられる？ | CodeRouter 必要？ |
 |---|---|---|---|
 | **Claude Code** | Anthropic `/v1/messages` | ✕ — Ollama は OpenAI しか喋らない | **必須** — 翻訳こそが本題 |
-| **Codex CLI** (`@openai/codex`) | OpenAI Responses | ◯ — Responses API を持つサーバ(Ollama / LM Studio / llama.cpp)へ | **現状は使えない** — 現行の Codex は Responses API 専用で、CodeRouter は未対応(対応予定) |
+| **Codex CLI** (`@openai/codex`) | OpenAI Responses | ◯ — Responses API を持つサーバ(Ollama / LM Studio / llama.cpp)へ | オプション — フォールバック / tool 修復が欲しいとき(v2.19.0 の `/v1/responses` 経由) |
 | **素の OpenAI SDK / `curl`** | OpenAI | ◯ — `base_url` で | オプション — 同上 |
 | **gemini-cli** | Gemini | ✕ — 別 wire | 必要（Gemini アダプタ追加時） |
 | **GitHub Copilot CLI** (`gh copilot`) | GitHub 独自 | **✕ — バックエンド固定** | **無力** — Copilot 側が差し替え不可 |
